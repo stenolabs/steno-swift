@@ -1,0 +1,14 @@
+Session: Ohne Diarisierung
+File: import.wav
+Date: 2026-08-05 12:34:56
+Language setting: Auto
+Detected language: German
+Summary output language: German
+
+============================================================
+
+Erster Absatz mit zwei
+Zeilen.
+
+Zweiter Absatz.
+

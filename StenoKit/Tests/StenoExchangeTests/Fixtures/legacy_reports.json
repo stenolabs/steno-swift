@@ -1,0 +1,21 @@
+{
+  "reports": [
+    {
+      "id": "rep_new",
+      "template_id": "detailed",
+      "template_name": "",
+      "model": "legacy-model",
+      "content": "# Neu",
+      "created_at": "2026-08-05T12:34:56"
+    },
+    {
+      "id": "rep_old",
+      "template_id": "standard-backup",
+      "template_name": "Previous version",
+      "model": "legacy-model",
+      "content": "# Alt",
+      "created_at": "2026-08-04T12:34:56"
+    }
+  ],
+  "active_report": "rep_new"
+}

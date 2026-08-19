@@ -1,0 +1,12 @@
+{
+  "fields": {
+    "summary": {
+      "value": "Vom Nutzer geändert",
+      "edited_at": "2026-08-05T12:34:56Z"
+    },
+    "participants": {
+      "value": ["Alex", "Ada"],
+      "edited_at": "2026-08-05T12:35:56Z"
+    }
+  }
+}

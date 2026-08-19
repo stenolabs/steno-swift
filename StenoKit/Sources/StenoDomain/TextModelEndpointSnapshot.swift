@@ -1,0 +1,28 @@
+import Foundation
+
+/// Secret-free identity of the external text-model configuration that was
+/// visible when a report job was created.
+public struct TextModelEndpointSnapshot: Codable, Equatable, Sendable {
+    public let id: UUID
+    public let name: String
+    public let baseURL: URL
+    public let modelID: String
+    public let requiresAPIKey: Bool
+    public let configurationRevision: UUID?
+
+    public init(
+        id: UUID,
+        name: String,
+        baseURL: URL,
+        modelID: String,
+        requiresAPIKey: Bool,
+        configurationRevision: UUID? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.baseURL = baseURL
+        self.modelID = modelID
+        self.requiresAPIKey = requiresAPIKey
+        self.configurationRevision = configurationRevision
+    }
+}

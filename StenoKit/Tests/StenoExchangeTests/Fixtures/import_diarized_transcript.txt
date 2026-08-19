@@ -1,0 +1,13 @@
+Session: Import Planung
+File: sysaudio-1785933296000-Planung.m4a
+Date: 2026-08-05 14:00:00
+Language setting: German
+Detected language: German
+Summary output language: German
+
+============================================================
+
+[00:05] [You] Erste Zeile.
+
+[01:05] [Speaker 2] Zweite Zeile.
+

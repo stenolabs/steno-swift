@@ -1,0 +1,21 @@
+{
+  "session_info": {
+    "name": "Altbesprechung",
+    "audio_file": "/synthetic/Altbesprechung.wav",
+    "processed_at": "2026-08-05T12:34:56",
+    "duration_seconds": 42,
+    "language": "German",
+    "reprocessable": true,
+    "updated_at": "2026-08-05T12:35:56"
+  },
+  "summary": "Zusammenfassung",
+  "participants": ["Alex", "Ada"],
+  "discussion_areas": [{"title": "Thema", "analysis": "Analyse"}],
+  "key_points": ["Punkt"],
+  "action_items": ["Aufgabe"],
+  "transcript": "Text",
+  "is_diarised": true,
+  "diarised_text": "[00:00] [You] Text",
+  "user_notes": "Notiz",
+  "folders": ["folder-a"]
+}

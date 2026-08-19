@@ -1,0 +1,11 @@
+{
+  "meeting_id": "Ohne Manifest",
+  "created_at": 1785862866.9,
+  "channels": {
+    "mic": {
+      "recording_type": "unknown",
+      "clusters": {}
+    }
+  }
+}
+

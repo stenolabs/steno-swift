@@ -1,0 +1,38 @@
+# Handoffs sind Sessionartefakte, nie versionieren
+HANDOFF.md
+HANDOFF-*.md
+
+# Swift / SwiftPM (Package.resolved wird bewusst versioniert, um Abhängigkeiten zu pinnen)
+.build/
+.swiftpm/
+# Ausnahme: StenoiOSKit haengt nur ueber den Pfad an StenoKit und leitet
+# seinen einzigen externen Pin von dort ab. Zwei Dateien fuer denselben Pin
+# koennen auseinanderlaufen; StenoKit/Package.resolved ist die Quelle.
+iOS/StenoiOSKit/Package.resolved
+
+# Xcode
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.xcresult
+
+# macOS
+.DS_Store
+
+# Lokale Artefakte
+*.log
+# Beide Xcode-Projekte werden aus ihrer project.yml erzeugt, nie von Hand
+# gepflegt; ein eingechecktes Projekt waere sofort veraltet.
+Steno.xcodeproj/
+iOS/StenoiOS.xcodeproj/
+iOS/build/
+# Dasselbe gilt fuer die Info.plists: xcodegen schreibt sie vollstaendig aus
+# dem info-Block der project.yml. Eingecheckt widersprachen sie ihrem eigenen
+# Erzeuger - App/Info.plist stand auf "Steno", project.yml auf "steno-macos" -
+# und jeder Build erzeugte dieselbe Aenderung erneut, die dann jedesmal von
+# Hand zurueckgesetzt wurde. Der Wortlaut steht in der project.yml.
+App/Info.plist
+iOS/App/Info.plist
+
+# Isolierte Arbeitsbaeume fuer parallele Aufgaben
+.worktrees/

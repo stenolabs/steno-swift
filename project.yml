@@ -1,0 +1,102 @@
+name: Steno
+options:
+  bundleIdPrefix: org.steno
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+packages:
+  StenoKit:
+    path: StenoKit
+targets:
+  Steno:
+    type: application
+    platform: macOS
+    sources:
+      - App/Sources
+      - App/Resources
+    dependencies:
+      - package: StenoKit
+        product: StenoDomain
+      - package: StenoKit
+        product: StenoLibrary
+      - package: StenoKit
+        product: StenoAudioCore
+      - package: StenoKit
+        product: StenoMacAudio
+      - package: StenoKit
+        product: StenoTranscription
+      - package: StenoKit
+        product: StenoPipeline
+      - package: StenoKit
+        product: StenoExchange
+    info:
+      path: App/Info.plist
+      properties:
+        # Eigener Name, damit die native App neben der alten Electron-Steno in
+        # /Applications stehen kann. Die Bundle-ID bleibt org.steno.Steno:
+        # An ihr haengen die Einstellungen (Sprache, Endpunkte), und sie
+        # kollidiert ohnehin nicht mit der alten App (com.stenoai.recorder).
+        CFBundleDisplayName: steno-macos
+        NSMicrophoneUsageDescription: Steno records your microphone so it can transcribe conversations locally on this Mac.
+        NSAudioCaptureUsageDescription: Steno records system audio so it can transcribe the people you talk to in calls, locally on this Mac.
+        LSApplicationCategoryType: public.app-category.productivity
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: org.steno.sidebar-item
+            UTTypeDescription: Steno Sidebar Item
+            UTTypeConformsTo:
+              - public.data
+          - UTTypeIdentifier: org.steno.meeting-transfer
+            UTTypeDescription: Steno Meeting
+            UTTypeConformsTo:
+              - public.archive
+              - public.data
+              - public.content
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - stenomeeting
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Steno Meeting
+            LSItemContentTypes:
+              - org.steno.meeting-transfer
+            CFBundleTypeRole: Editor
+    settings:
+      base:
+        PRODUCT_NAME: steno-macos
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        ENABLE_HARDENED_RUNTIME: false
+        # TCC keys microphone and system-audio consent to the app's
+        # designated requirement. "Sign to Run Locally" changes that identity
+        # after every build and makes macOS prompt again or reject stale grants.
+        CODE_SIGN_STYLE: Automatic
+        # Set DEVELOPMENT_TEAM locally when signing for a physical device.
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        GENERATE_INFOPLIST_FILE: false
+  StenoTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - App/Tests
+    dependencies:
+      - target: Steno
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.steno.StenoTests
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        CODE_SIGN_IDENTITY: "-"
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/steno-macos.app/Contents/MacOS/steno-macos"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        GENERATE_INFOPLIST_FILE: true
+
+schemes:
+  Steno:
+    build:
+      targets:
+        Steno: all
+    test:
+      targets:
+        - StenoTests
+      environmentVariables:
+        STENO_TEST_ISOLATE_TEXT_MODEL_REGISTRY: "1"

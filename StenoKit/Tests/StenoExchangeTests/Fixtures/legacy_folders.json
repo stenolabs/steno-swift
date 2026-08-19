@@ -1,0 +1,20 @@
+{
+  "folders": [
+    {
+      "id": "a1b2c3d4",
+      "name": "Arbeit",
+      "color": "#336699",
+      "created_at": "2026-08-05T12:34:56",
+      "order": 0,
+      "icon": "briefcase"
+    },
+    {
+      "id": "e5f6a7b8",
+      "name": "Privat",
+      "color": "#993366",
+      "created_at": "2026-08-05T13:34:56",
+      "order": 1
+    }
+  ]
+}
+

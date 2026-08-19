@@ -1,0 +1,13 @@
+Session: Planung ÄÖÜ
+File: sysaudio-1785933296000-Planung.webm
+Date: 2026-08-05 12:34:56
+Language setting: German
+Detected language: German
+Summary output language: German
+
+============================================================
+
+[00:05] [You] Guten Morgen.
+
+[1:01:05] [Speaker 2] Hallo zusammen.
+

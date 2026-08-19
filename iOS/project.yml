@@ -1,0 +1,129 @@
+name: StenoiOS
+options:
+  bundleIdPrefix: org.steno
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+packages:
+  # Same repository since the iOS app moved in, so a change to the shared core
+  # and its two callers is one commit instead of two coordinated ones across
+  # repositories. That was the concrete reason for the move: extracting
+  # StenoAudioCore needed exactly such a pair, and its intermediate state was
+  # visible nowhere. Approval F3 (StenoKit as its own repository) is therefore
+  # off the table for now.
+  #
+  # Only the nine portable products are linked below, including the shared
+  # recording core (approval F2). StenoMacAudio stays out and is never built
+  # for iOS: its CoreAudio process tap has no iOS counterpart, and neither do
+  # its permission check or its sleep prevention.
+  StenoKit:
+    path: ../StenoKit
+  StenoiOSKit:
+    path: StenoiOSKit
+targets:
+  Steno:
+    type: application
+    platform: iOS
+    supportedDestinations: [iOS, iPadOS]
+    sources:
+      - App/Sources
+      - App/Resources
+    dependencies:
+      - package: StenoKit
+        product: StenoDomain
+      - package: StenoKit
+        product: StenoLibrary
+      - package: StenoKit
+        product: StenoAudioCore
+      - package: StenoKit
+        product: StenoTranscription
+      - package: StenoKit
+        product: StenoDiarization
+      - package: StenoKit
+        product: StenoIdentity
+      - package: StenoKit
+        product: StenoIntelligence
+      - package: StenoKit
+        product: StenoExchange
+      - package: StenoKit
+        product: StenoPipeline
+      - package: StenoiOSKit
+        product: StenoiOSAudio
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Steno
+        # Wording follows the Mac app, adjusted to the device it runs on.
+        NSMicrophoneUsageDescription: Steno records your microphone so it can transcribe conversations locally on this device.
+        NSLocalNetworkUsageDescription: Steno connects to a language model server only when you test it or explicitly generate minutes with it.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        # Recording continues while the screen is locked or the app is not in
+        # the foreground. Post-processing does not use a background mode: it
+        # runs as a user-started BGContinuedProcessingTask instead.
+        UIBackgroundModes:
+          - audio
+        # The library lives in Documents and stays reachable from the Files
+        # app, so originals can be retrieved without Steno.
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: true
+        LSApplicationCategoryType: public.app-category.productivity
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: org.steno.meeting-transfer
+            UTTypeDescription: Steno Meeting
+            UTTypeConformsTo:
+              - public.archive
+              - public.data
+              - public.content
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - stenomeeting
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Steno Meeting
+            LSItemContentTypes:
+              - org.steno.meeting-transfer
+            CFBundleTypeRole: Editor
+    settings:
+      base:
+        PRODUCT_NAME: Steno
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        TARGETED_DEVICE_FAMILY: "1,2"
+        IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+        GENERATE_INFOPLIST_FILE: false
+        # Signing lives here rather than in Xcode: xcodegen rewrites the
+        # project on every run, so anything set in the Signing tab is gone the
+        # next time. Automatic signing covers both the simulator and a real
+        # device; the team is filled in below once it is known.
+        CODE_SIGN_STYLE: Automatic
+        # Set DEVELOPMENT_TEAM locally when signing for a physical device.
+        PRODUCT_BUNDLE_IDENTIFIER: org.steno.Steno
+  StenoTests:
+    type: bundle.unit-test
+    platform: iOS
+    supportedDestinations: [iOS, iPadOS]
+    sources:
+      - App/Tests
+    dependencies:
+      - target: Steno
+    settings:
+      base:
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        TARGETED_DEVICE_FAMILY: "1,2"
+        IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+        GENERATE_INFOPLIST_FILE: true
+
+schemes:
+  Steno:
+    build:
+      targets:
+        Steno: all
+    test:
+      targets:
+        - StenoTests
+      environmentVariables:
+        STENO_TEST_ISOLATE_TEXT_MODEL_REGISTRY: "1"
