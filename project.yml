@@ -5,6 +5,7 @@ options:
   knownRegions:
     - en
     - de
+    - zh-Hant
   deploymentTarget:
     macOS: "26.0"
   createIntermediateGroups: true
