@@ -8,12 +8,24 @@ import SwiftUI
 @MainActor
 @Observable
 final class LegacyImportModel {
+    typealias ImportOperation = @Sendable (
+        LegacyImporter,
+        @escaping @Sendable (LegacyImportProgress) -> Void
+    ) async throws -> LegacyImportOutcome
+
     enum Phase: Equatable {
         case idle
         case scanning
         case scanned(LegacyStoreSnapshot)
         case importing(completed: Int, total: Int, stem: String)
+        case cancelling(completed: Int, total: Int, stem: String)
+        case cancelled(ImportReport)
         case finished(ImportReport)
+        case failed(String)
+    }
+
+    private enum ImportCompletion: Sendable {
+        case outcome(LegacyImportOutcome)
         case failed(String)
     }
 
@@ -30,15 +42,27 @@ final class LegacyImportModel {
     }
 
     private(set) var phase: Phase = .idle
+    private let importOperation: ImportOperation
+    private var importTask: Task<ImportCompletion, Never>?
+    private var importID: UUID?
+
+    init(
+        importOperation: @escaping ImportOperation = { importer, progress in
+            try await importer.performImport(progress: progress)
+        }
+    ) {
+        self.importOperation = importOperation
+    }
 
     var isBusy: Bool {
         switch phase {
-        case .scanning, .importing: true
+        case .scanning, .importing, .cancelling: true
         default: false
         }
     }
 
     func scan() async {
+        guard !isBusy else { return }
         phase = .scanning
         let url = sourceURL
         do {
@@ -57,28 +81,62 @@ final class LegacyImportModel {
         guard !isBusy else { return }
         phase = .importing(completed: 0, total: 0, stem: "")
         let url = sourceURL
-        do {
-            let report = try await LegacyImporter(
-                sourceRoot: url,
-                library: library,
-                folders: folders
-            ).performImport { [weak self] progress in
-                Task { @MainActor in
-                    // Verspätete Fortschrittsmeldungen dürfen ein bereits
-                    // erreichtes Ergebnis - besonders einen Fehler - nicht
-                    // wieder überschreiben.
-                    guard let self, case .importing = self.phase else { return }
-                    self.phase = .importing(
-                        completed: progress.completed,
-                        total: progress.total,
-                        stem: progress.stem
-                    )
-                }
+        let id = UUID()
+        let importer = LegacyImporter(
+            sourceRoot: url,
+            library: library,
+            folders: folders
+        )
+        let importOperation = self.importOperation
+        let progressHandler: @Sendable (LegacyImportProgress) -> Void = {
+            [weak self, id] progress in
+            Task { @MainActor [weak self, id] in
+                guard let self,
+                      self.importID == id,
+                      case .importing = self.phase else { return }
+                self.phase = .importing(
+                    completed: progress.completed,
+                    total: progress.total,
+                    stem: progress.stem
+                )
             }
-            phase = .finished(report)
-        } catch {
-            phase = .failed("The import failed: \(error.localizedDescription)")
         }
+        let task = Task<ImportCompletion, Never> {
+            do {
+                return ImportCompletion.outcome(
+                    try await importOperation(importer, progressHandler)
+                )
+            } catch {
+                return ImportCompletion.failed(
+                    "The import failed: \(error.localizedDescription)"
+                )
+            }
+        }
+        importID = id
+        importTask = task
+        let completion = await task.value
+        guard importID == id else { return }
+        importID = nil
+        importTask = nil
+        switch completion {
+        case .outcome(.finished(let report)):
+            phase = .finished(report)
+        case .outcome(.cancelled(let report)):
+            phase = .cancelled(report)
+        case .failed(let message):
+            phase = .failed(message)
+        }
+    }
+
+    @discardableResult
+    func cancelImport() -> Bool {
+        guard let importTask,
+              case .importing(let completed, let total, let stem) = phase else {
+            return false
+        }
+        phase = .cancelling(completed: completed, total: total, stem: stem)
+        importTask.cancel()
+        return true
     }
 }
 
@@ -106,6 +164,8 @@ struct LegacyImportView: View {
                 importModel.sourceURL = url
             }
         }
+        .interactiveDismissDisabled(importModel.isBusy)
+        .windowDismissBehavior(importModel.isBusy ? .disabled : .automatic)
         .task { await importModel.scan() }
     }
 
@@ -161,6 +221,21 @@ struct LegacyImportView: View {
                     ProgressView()
                 }
             }
+        case .cancelling(let completed, let total, let stem):
+            VStack(alignment: .leading, spacing: 8) {
+                ProgressView()
+                Text("Cancelling after the current safe import step…")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                if total > 0 {
+                    Text("\(completed) of \(total): \(stem)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        case .cancelled(let report):
+            cancelledSummary(report)
         case .finished(let report):
             reportSummary(report)
         case .failed(let message):
@@ -203,9 +278,38 @@ struct LegacyImportView: View {
     }
 
     private func reportSummary(_ report: ImportReport) -> some View {
+        reportSummary(
+            report,
+            title: "Import complete",
+            systemImage: "checkmark.circle",
+            explanation: nil
+        )
+    }
+
+    private func cancelledSummary(_ report: ImportReport) -> some View {
+        reportSummary(
+            report,
+            title: "Import cancelled",
+            systemImage: "xmark.circle",
+            explanation: "Meetings and files listed below were already imported and were not rolled back. Run the import again to add the remaining meetings."
+        )
+    }
+
+    private func reportSummary(
+        _ report: ImportReport,
+        title: LocalizedStringKey,
+        systemImage: String,
+        explanation: LocalizedStringKey?
+    ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("Import complete", systemImage: "checkmark.circle")
+            Label(title, systemImage: systemImage)
                 .font(.headline)
+            if let explanation {
+                Text(explanation)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             row("New meetings", "\(report.meetingsCreated)")
             row("Audio files copied", "\(report.audioCopied)")
             if report.audioRepaired > 0 {
@@ -274,7 +378,14 @@ struct LegacyImportView: View {
                         || model.runtime == nil
                         || model.folderStore == nil
                 )
-            case .finished:
+            case .importing:
+                Button("Cancel") {
+                    importModel.cancelImport()
+                }
+            case .cancelling:
+                Button("Cancelling…") {}
+                    .disabled(true)
+            case .finished, .cancelled:
                 Button("Scan again") {
                     Task { await importModel.scan() }
                 }

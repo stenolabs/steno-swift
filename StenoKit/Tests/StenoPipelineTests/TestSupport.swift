@@ -1,9 +1,224 @@
 @preconcurrency import AVFAudio
+import Dispatch
 import Foundation
 import StenoDiarization
 import StenoDomain
 import StenoLibrary
+@testable import StenoPipeline
 import StenoTranscription
+import Synchronization
+import Testing
+
+private let blockingExecutorKey = DispatchSpecificKey<Bool>()
+private let fallbackBlockingTestExecutor: DispatchQueue = {
+    let queue = DispatchQueue(
+        label: "org.steno.pipeline-tests.blocking-executor",
+        attributes: .concurrent
+    )
+    queue.setSpecific(key: blockingExecutorKey, value: true)
+    return queue
+}()
+
+private enum BlockingTestExecutorContext {
+    @TaskLocal static var current: (any TaskExecutor)?
+}
+
+private func makeBlockingTestExecutor() -> DispatchQueue {
+    let queue = DispatchQueue(
+        label: "org.steno.pipeline-tests.blocking-executor.\(UUID().uuidString)",
+        attributes: .concurrent
+    )
+    queue.setSpecific(key: blockingExecutorKey, value: true)
+    return queue
+}
+
+/// Runs checkpoint-driven test paths on Dispatch workers so their synchronous
+/// waits cannot exhaust Swift Concurrency's cooperative thread pool.
+///
+/// The preference is inherited by structured child tasks, but not by
+/// unstructured `Task {}` or `Task.detached`; use `blockingTestTask` for those.
+/// It applies to default actors and nonisolated async code, not to actors with
+/// custom executors or `MainActor`; none of the paths using this helper contain
+/// either. The preference changes thread scheduling, which is immaterial here
+/// because the tests force their interleavings through explicit checkpoints
+/// instead of relying on scheduling accidents.
+func withBlockingTestExecutor<Result: Sendable>(
+    _ operation: @escaping @Sendable () async throws -> Result
+) async throws -> Result {
+    let executor = makeBlockingTestExecutor()
+    let task = Task(executorPreference: executor) {
+        try await BlockingTestExecutorContext.$current.withValue(executor) {
+            try await withTaskExecutorPreference(executor, operation: operation)
+        }
+    }
+    return try await task.value
+}
+
+var blockingTestExecutorPreference: any TaskExecutor {
+    BlockingTestExecutorContext.current ?? fallbackBlockingTestExecutor
+}
+
+func blockingTestTask<Result: Sendable>(
+    _ operation: @escaping @Sendable () async throws -> Result
+) -> Task<Result, Error> {
+    let executor = BlockingTestExecutorContext.current
+        ?? fallbackBlockingTestExecutor
+    return Task(executorPreference: executor, operation: operation)
+}
+
+func withBlockingTemporaryDirectory<Result: Sendable>(
+    _ body: @escaping @Sendable (URL) async throws -> Result
+) async throws -> Result {
+    try await withBlockingTestExecutor {
+        try await withTemporaryDirectory(body)
+    }
+}
+
+func isRunningOnBlockingTestExecutor() -> Bool {
+    DispatchQueue.getSpecific(key: blockingExecutorKey) == true
+}
+
+func probeBlockingTestExecutor() async -> Bool {
+    isRunningOnBlockingTestExecutor()
+}
+
+final class BlockingTestPause: @unchecked Sendable {
+    private let name: String
+    private let timeout: DispatchTimeInterval
+    private let issueRecorder: @Sendable (String) -> Void
+    private let arrived = Mutex(false)
+    private let resume = DispatchSemaphore(value: 0)
+
+    init(
+        name: String,
+        timeout: DispatchTimeInterval = .seconds(10),
+        issueRecorder: @escaping @Sendable (String) -> Void = {
+            Issue.record("\($0)")
+        }
+    ) {
+        self.name = name
+        self.timeout = timeout
+        self.issueRecorder = issueRecorder
+    }
+
+    var hasArrived: Bool { arrived.withLock { $0 } }
+
+    func arriveAndWait() {
+        arrived.withLock { $0 = true }
+        guard resume.wait(timeout: .now() + timeout) == .success else {
+            issueRecorder("Timed out waiting to release test pause '\(name)'.")
+            return
+        }
+    }
+
+    func release() {
+        resume.signal()
+    }
+}
+
+final class BlockingTestBarrier: @unchecked Sendable {
+    private let name: String
+    private let expectedArrivals: Int
+    private let timeout: TimeInterval
+    private let condition = NSCondition()
+    private var arrivals = 0
+
+    init(
+        name: String,
+        expectedArrivals: Int,
+        timeout: TimeInterval = 10
+    ) {
+        self.name = name
+        self.expectedArrivals = expectedArrivals
+        self.timeout = timeout
+    }
+
+    func arriveAndWait() {
+        condition.lock()
+        arrivals += 1
+        condition.broadcast()
+        let deadline = Date().addingTimeInterval(timeout)
+        while arrivals < expectedArrivals {
+            guard condition.wait(until: deadline) else {
+                let actualArrivals = arrivals
+                condition.unlock()
+                let message = "Timed out waiting for \(expectedArrivals) arrivals "
+                    + "at test barrier '\(name)'; received \(actualArrivals)."
+                Issue.record("\(message)")
+                return
+            }
+        }
+        condition.unlock()
+    }
+}
+
+final class BlockingTestGroupPause: @unchecked Sendable {
+    private let name: String
+    private let expectedArrivals: Int
+    private let timeout: TimeInterval
+    private let condition = NSCondition()
+    private var arrivals = 0
+    private var isReleased = false
+
+    init(
+        name: String,
+        expectedArrivals: Int,
+        timeout: TimeInterval = 10
+    ) {
+        self.name = name
+        self.expectedArrivals = expectedArrivals
+        self.timeout = timeout
+    }
+
+    var allArrived: Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        return arrivals >= expectedArrivals
+    }
+
+    func arriveAndWait() {
+        condition.lock()
+        arrivals += 1
+        condition.broadcast()
+        let deadline = Date().addingTimeInterval(timeout)
+        while !isReleased {
+            guard condition.wait(until: deadline) else {
+                condition.unlock()
+                Issue.record("Timed out waiting to release test group pause '\(name)'.")
+                return
+            }
+        }
+        condition.unlock()
+    }
+
+    func release() {
+        condition.lock()
+        isReleased = true
+        condition.broadcast()
+        condition.unlock()
+    }
+}
+
+func replacePersonsForTest(
+    _ persons: [Person],
+    in store: IdentityStore
+) async throws {
+    let snapshot = try await store.snapshot()
+    _ = try await store.replacePersons(
+        persons,
+        expectedRevision: snapshot.revision
+    )
+}
+
+func replacePersonsForTest(
+    _ persons: [Person],
+    layout: LibraryLayout
+) async throws {
+    try await replacePersonsForTest(
+        persons,
+        in: IdentityStore(layout: layout)
+    )
+}
 
 enum FakeTranscriptionError: Error {
     case failed
@@ -232,6 +447,7 @@ func withTemporaryDirectory<Result>(
 func makePipelineFixture(
     at root: URL,
     jobLocaleIdentifier: String? = nil,
+    transcriptionProviderID: TranscriptionProviderID? = nil,
     durations: [MediaAsset.Kind: TimeInterval] = [
         .micTrack: 2,
         .systemTrack: 2,
@@ -254,7 +470,8 @@ func makePipelineFixture(
     let job = Job(
         kind: .finalASR,
         meetingID: meeting.id,
-        localeIdentifier: jobLocaleIdentifier
+        localeIdentifier: jobLocaleIdentifier,
+        transcriptionProviderID: transcriptionProviderID
     )
     try await jobStore.enqueue(job)
     return PipelineFixture(
@@ -364,7 +581,11 @@ func eventually(
         if try await condition() { return }
         try await Task.sleep(for: .milliseconds(10))
     }
-    throw FakeTranscriptionError.failed
+    throw TestSupportError.conditionTimedOut(timeout)
+}
+
+enum TestSupportError: Error, Equatable {
+    case conditionTimedOut(Duration)
 }
 
 func revisionDocuments(
@@ -385,6 +606,41 @@ func temporaryRunDirectories(
         at: library.layout.runsDirectory(meetingID),
         includingPropertiesForKeys: [.isDirectoryKey]
     ).filter { $0.lastPathComponent.hasPrefix(".") }
+}
+
+func simulateAbruptExit(
+    of coordinator: PipelineCoordinator,
+    whileRunning jobID: JobID,
+    jobStore: JobStore,
+    library: Library
+) async throws {
+    let runningJob = try await jobStore.load(jobID)
+    let runStore = RunArtifactStore(layout: library.layout)
+    let temporary = runStore.temporaryDirectory(for: runningJob)
+    let snapshot = temporary.deletingLastPathComponent().appendingPathComponent(
+        ".interrupted-\(jobID).snapshot",
+        isDirectory: true
+    )
+    try FileManager.default.copyItem(at: temporary, to: snapshot)
+
+    // A cooperative stop now records a terminal failure. Restore the exact
+    // pre-handler files to model a process exit that never ran the handler.
+    await coordinator.stop()
+    let stoppedJob = try await jobStore.load(jobID)
+    let committed = library.layout.runDirectory(
+        stoppedJob.meetingID,
+        runID: runStore.runID(for: stoppedJob)
+    )
+    if FileManager.default.fileExists(atPath: committed.path) {
+        try FileManager.default.removeItem(at: committed)
+    }
+    try FileManager.default.moveItem(at: snapshot, to: temporary)
+    try overwriteJob(
+        stoppedJob,
+        status: .running,
+        layout: library.layout,
+        importGenerationID: stoppedJob.importGenerationID
+    )
 }
 
 func pipelineSnapshotSessions(library: Library) throws -> [URL] {

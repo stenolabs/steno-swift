@@ -72,18 +72,92 @@ struct ReportTextModelDisplayTests {
         #expect(display.endpointSnapshot == nil)
     }
 
+    @Test("a snapshot with hosting shows the hosting classification, not a generic label")
+    func modelLabelShowsHostingWhenKnown() {
+        let cloudSnapshot = snapshot(name: "Cloud model", hosting: .cloud)
+        let selfHostedSnapshot = snapshot(name: "Self-hosted model", hosting: .selfHosted)
+
+        #expect(
+            ReportTextModelDisplay.external(cloudSnapshot).modelLabel
+                == "Cloud model · model-v1 (Cloud service)"
+        )
+        #expect(
+            ReportTextModelDisplay.external(selfHostedSnapshot).modelLabel
+                == "Self-hosted model · model-v1 (Self-hosted)"
+        )
+    }
+
+    @Test("a legacy pin without hosting shows no hosting addendum, never an inferred one")
+    func modelLabelOmitsHostingForLegacyPin() {
+        let legacy = snapshot(name: "Legacy pin", hosting: nil)
+
+        #expect(
+            ReportTextModelDisplay.external(legacy).modelLabel
+                == "Legacy pin · model-v1 (external)"
+        )
+    }
+
+    /// Der gemessene Fall: der Endpunkt wechselte von der OpenAI-Schicht auf
+    /// den Ollama-Dialekt, waehrend die Berichtsansicht offen war. Die alte
+    /// Kopie nannte danach weiter `/v1` und "cloud" - im Job, der daran
+    /// scheiterte, und im Hinweis, der dem Nutzer das Ziel nennt.
+    @Test("a selected endpoint follows the registry after it was edited")
+    func selectionFollowsEditedRegistry() throws {
+        let endpointID = UUID()
+        let stale = snapshot(
+            id: endpointID,
+            name: "Ollama 4070 Ti",
+            url: "http://192.168.1.10:11434/v1",
+            hosting: .cloud
+        )
+        let edited = TextModelEndpoint(
+            id: endpointID,
+            name: "Ollama 4070 Ti",
+            baseURL: URL(string: "http://192.168.1.10:11434")!,
+            modelID: "gemma4:12b",
+            requiresAPIKey: false,
+            hosting: .selfHosted,
+            dialect: .ollama,
+            contextWindowTokens: 4_096,
+            bedrock: nil
+        )
+
+        let refreshed = try #require(ReportTextModelDisplay.refreshedSelection(
+            stale,
+            in: [edited]
+        ))
+        #expect(refreshed.baseURL.absoluteString == "http://192.168.1.10:11434")
+        #expect(refreshed.hosting == .selfHosted)
+    }
+
+    /// Ein verschwundener Endpunkt darf nicht zu einer anderen Wahl werden.
+    @Test("a selection whose endpoint is gone keeps its snapshot")
+    func vanishedEndpointKeepsItsSnapshot() throws {
+        let stale = snapshot(name: "Removed endpoint")
+
+        let kept = try #require(ReportTextModelDisplay.refreshedSelection(stale, in: []))
+        #expect(kept == stale)
+    }
+
+    @Test("the on-device choice stays the on-device choice")
+    func onDeviceSelectionStaysNil() {
+        #expect(ReportTextModelDisplay.refreshedSelection(nil, in: []) == nil)
+    }
+
     private func snapshot(
         id: UUID = UUID(),
         name: String,
         url: String = "https://models.example.test/v1",
-        modelID: String = "model-v1"
+        modelID: String = "model-v1",
+        hosting: TextModelHosting? = nil
     ) -> TextModelEndpointSnapshot {
         TextModelEndpointSnapshot(
             id: id,
             name: name,
             baseURL: URL(string: url)!,
             modelID: modelID,
-            requiresAPIKey: true
+            requiresAPIKey: true,
+            hosting: hosting
         )
     }
 }

@@ -162,6 +162,7 @@ public struct PreparedDescriptorBackedMediaSource: Sendable {
 
 public enum PreparedMediaSourceDisposition: Sendable {
     case copy(URL)
+    case data(Data)
     case cloneValidatedDescriptor(PreparedDescriptorBackedMediaSource)
 }
 

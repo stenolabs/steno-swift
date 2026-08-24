@@ -3,7 +3,7 @@ import StenoDomain
 import Testing
 @testable import steno_macos
 
-@Suite("App model folder behavior", .serialized)
+@Suite("App model folder behavior")
 @MainActor
 struct AppModelFolderBehaviorTests {
     @Test("a failed folder refresh keeps the last visible folder structure")
@@ -15,12 +15,74 @@ struct AppModelFolderBehaviorTests {
             let visibleFolders = model.folders
             #expect(visibleFolders == [folder])
 
+            let foldersURL = libraryURL.appendingPathComponent("folders.json")
+            let persistedFolders = try Data(contentsOf: foldersURL)
+
             try Data("{".utf8).write(
-                to: libraryURL.appendingPathComponent("folders.json")
+                to: foldersURL
             )
             await model.refreshMeetings()
 
             #expect(model.folders == visibleFolders)
+            #expect(model.startupState == .ready)
+            #expect(model.runtime != nil)
+            #expect(model.canStartRecording)
+            let issue = try #require(
+                model.libraryIssues.first { $0.id == .folders }
+            )
+
+            try persistedFolders.write(to: foldersURL)
+            await model.retryLibraryIssue(issue)
+
+            #expect(model.libraryIssues.allSatisfy { $0.id != .folders })
+            #expect(model.folders == visibleFolders)
+        }
+    }
+
+    @Test("a meeting-list retry preserves the open runtime and existing meetings")
+    func meetingListRetryDoesNotRestartTheRuntime() async throws {
+        try await withIsolatedModel { model, libraryURL in
+            let runtime = try #require(model.runtime)
+            _ = try #require(await model.createFolder(named: "Retained folder"))
+            let meeting = try await runtime.library.createMeeting(
+                title: "Persisted meeting",
+                status: .ready
+            )
+            await model.refreshMeetings()
+            #expect(model.meetings.contains { $0.id == meeting.id })
+
+            let metadataURL = runtime.library.layout.meetingMetadata(meeting.id)
+            let persistedMetadata = try Data(contentsOf: metadataURL)
+            let foldersURL = libraryURL.appendingPathComponent("folders.json")
+            let persistedFolders = try Data(contentsOf: foldersURL)
+            try Data("{".utf8).write(to: metadataURL)
+            try Data("{".utf8).write(to: foldersURL)
+
+            await model.refreshMeetings()
+
+            #expect(model.startupState == .ready)
+            #expect(model.runtime != nil)
+            #expect(model.canStartRecording)
+            #expect(model.meetings.contains { $0.id == meeting.id })
+            let issue = try #require(
+                model.libraryIssues.first { $0.id == .meetings }
+            )
+            #expect(model.libraryIssues.contains { $0.id == .folders })
+
+            try persistedMetadata.write(to: metadataURL)
+            await model.retryLibraryIssue(issue)
+
+            #expect(model.libraryIssues.allSatisfy { $0.id != .meetings })
+            #expect(model.libraryIssues.contains { $0.id == .folders })
+            #expect(model.meetings.contains { $0.id == meeting.id })
+            #expect(model.runtime?.library === runtime.library)
+
+            try persistedFolders.write(to: foldersURL)
+            let folderIssue = try #require(
+                model.libraryIssues.first { $0.id == .folders }
+            )
+            await model.retryLibraryIssue(folderIssue)
+            #expect(model.libraryIssues.isEmpty)
         }
     }
 
@@ -85,18 +147,15 @@ struct AppModelFolderBehaviorTests {
         )
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let previousLibrary = ProcessInfo.processInfo.environment["STENO_LIBRARY_DIR"]
-        let previousModels = ProcessInfo.processInfo.environment["STENO_MODEL_DIR"]
-        setenv("STENO_LIBRARY_DIR", libraryURL.path, 1)
-        setenv("STENO_MODEL_DIR", modelURL.path, 1)
-        defer {
-            restoreEnvironment("STENO_LIBRARY_DIR", to: previousLibrary)
-            restoreEnvironment("STENO_MODEL_DIR", to: previousModels)
-        }
-
-        let model = AppModel()
+        let model = AppModel(
+            libraryURL: libraryURL,
+            modelCacheDirectoryOverride: modelURL
+        )
+        #expect(model.resolvedLibraryURL == libraryURL.standardizedFileURL)
+        #expect(model.resolvedModelCacheDirectory == modelURL.standardizedFileURL)
         await model.bootstrap()
-        _ = try #require(model.runtime)
+        let runtime = try #require(model.runtime)
+        #expect(runtime.library.layout.root == libraryURL.standardizedFileURL)
         _ = try #require(model.folderStore)
 
         do {
@@ -108,11 +167,4 @@ struct AppModelFolderBehaviorTests {
         }
     }
 
-    private func restoreEnvironment(_ name: String, to value: String?) {
-        if let value {
-            setenv(name, value, 1)
-        } else {
-            unsetenv(name)
-        }
-    }
 }

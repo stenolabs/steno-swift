@@ -1268,6 +1268,46 @@ struct MeetingTransferArchiveSecurityTests {
         #expect(try transferDirectoryContents(validationRoot).isEmpty)
     }
 
+    @Test("owned snapshot cleanup retains the original validation error")
+    func failedOwnedSnapshotCleanupRetainsValidationError() async throws {
+        let base = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let exportRoot = makeTransferTestRoot(under: base, name: "owned-snapshot")
+        let failCleanup = Mutex(true)
+        let root = try MeetingTransferPrivateRoot.prepareAndVerify(
+            at: exportRoot,
+            cleanupAction: { _ in
+                if failCleanup.withLock({ $0 }) {
+                    throw POSIXError(.EIO)
+                }
+            }
+        )
+        let archiveName = ".stenomeeting-staging-\(UUID().uuidString)"
+        let archive = exportRoot.appendingPathComponent(archiveName)
+        try writeTransferRawArchiveBytes(Data("not-an-archive".utf8), to: archive)
+        let descriptor = open(archive.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else {
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+        defer { _ = Darwin.close(descriptor) }
+
+        do {
+            _ = try await MeetingTransferArchiveReader().validateOwnedSnapshot(
+                fileDescriptor: descriptor,
+                archiveURL: archive,
+                within: root
+            )
+            Issue.record("expected owned snapshot validation failure")
+        } catch let error as MeetingTransferCleanupRequired {
+            #expect(error.originalError as? MeetingTransferValidationError == .notRawAppleArchive)
+            #expect(!error.cleanupHandle.sessionIdentity.isEmpty)
+            failCleanup.withLock { $0 = false }
+            try error.cleanupHandle.close()
+        }
+
+        #expect(try transferDirectoryContents(exportRoot) == [archiveName])
+    }
+
     @Test("cleanup handles retain initial and revalidation hash and audio failures")
     func cleanupHandlesCoverHashAndAudioFailures() async throws {
         let base = try makeTemporaryDirectory()

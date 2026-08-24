@@ -399,6 +399,21 @@ struct MeetingReportsPresentationTests {
         #expect(!secondRequest)
     }
 
+    @Test("an incomplete endpoint configuration requests a preflight refresh")
+    func incompleteEndpointConfigurationRequestsPreflightRefresh() {
+        var failed = job(status: .failed)
+        failed.failureReason = .textModelEndpointConfigurationIncomplete
+        var state = MeetingReportsPresentation()
+        state.accepted(job: failed)
+
+        state.reconcile(reports: [], jobs: [failed])
+
+        let firstRequest = state.consumePreflightRefreshRequest()
+        let secondRequest = state.consumePreflightRefreshRequest()
+        #expect(firstRequest)
+        #expect(!secondRequest)
+    }
+
     @Test("a cold latest missing-pins failure is actionable and refreshes once")
     func coldMissingPinsFailureIsObservedOnce() {
         let ledger = TemplateRenderPinsFailureObservationLedger()
@@ -493,7 +508,138 @@ struct MeetingReportsPresentationTests {
 
         #expect(MeetingReportsPresentation.engineLabel(stored.result.engine)
             == "fixture · gemma-3")
+        #expect(
+            MeetingReportsPresentation.engineLabel(
+                EngineDescriptor(name: "Synthetic Demo", version: "1"),
+                locale: Locale(identifier: "de")
+            ) == "Synthetische Demo"
+        )
         #expect(ReportSharePayload(report: stored).text == "SHARE_SENTINEL")
+    }
+
+    @Test("first report share explains the exact data boundary")
+    func reportShareDisclosureCopy() {
+        let message = ReportShareDisclosurePresentation.message.key
+
+        #expect(message.contains("selected report text"))
+        #expect(message.contains("chosen app or service"))
+        #expect(message.contains("Audio"))
+        #expect(message.contains("voice evidence"))
+        #expect(message.contains("embeddings"))
+        #expect(message.contains("not included"))
+    }
+
+    @Test("cancelling first-share disclosure does not persist consent")
+    func cancellingShareDisclosureDoesNotMarkItSeen() throws {
+        let suite = "ReportShareDisclosureTests.cancel.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = ReportShareDisclosureStore(defaults: defaults)
+        let payload = ReportSharePayload(text: "SHARE_SENTINEL")
+        let meetingID = MeetingID()
+        var state = ReportShareDisclosureState()
+
+        state.request(
+            payload,
+            meetingID: meetingID,
+            disclosureSeen: store.hasSeenDisclosure
+        )
+        state.cancelDisclosure()
+
+        #expect(!store.hasSeenDisclosure)
+        #expect(state.pendingPayload == nil)
+        #expect(state.activePayload == nil)
+        #expect(!state.isDisclosurePresented(for: meetingID))
+        #expect(!state.isSharePresented(for: meetingID))
+    }
+
+    @Test("proceeding to the share sheet persists disclosure and later shares directly")
+    func proceedingPersistsShareDisclosure() throws {
+        let suite = "ReportShareDisclosureTests.proceed.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = ReportShareDisclosureStore(defaults: defaults)
+        let payload = ReportSharePayload(text: "SHARE_SENTINEL")
+        let meetingID = MeetingID()
+        var first = ReportShareDisclosureState()
+
+        first.request(
+            payload,
+            meetingID: meetingID,
+            disclosureSeen: store.hasSeenDisclosure
+        )
+        #expect(first.isDisclosurePresented(for: meetingID))
+        #expect(!first.isSharePresented(for: meetingID))
+        first.proceed(meetingID: meetingID, store: store)
+
+        #expect(store.hasSeenDisclosure)
+        #expect(first.pendingPayload == nil)
+        #expect(first.activePayload == payload)
+        #expect(first.isSharePresented(for: meetingID))
+
+        var later = ReportShareDisclosureState()
+        later.request(
+            payload,
+            meetingID: meetingID,
+            disclosureSeen: store.hasSeenDisclosure
+        )
+
+        #expect(later.pendingPayload == nil)
+        #expect(later.activePayload == payload)
+    }
+
+    @Test("a meeting transition invalidates pending and active report shares")
+    func meetingTransitionInvalidatesShareRequests() {
+        let oldMeeting = MeetingID()
+        let newMeeting = MeetingID()
+        let payload = ReportSharePayload(text: "OLD_REPORT")
+        var pending = ReportShareDisclosureState()
+        pending.request(payload, meetingID: oldMeeting, disclosureSeen: false)
+
+        #expect(!pending.isDisclosurePresented(for: newMeeting))
+        pending.discardRequests(notMatching: newMeeting)
+        #expect(pending.pendingPayload == nil)
+
+        var active = ReportShareDisclosureState()
+        active.request(payload, meetingID: oldMeeting, disclosureSeen: true)
+
+        #expect(!active.isSharePresented(for: newMeeting))
+        active.discardRequests(notMatching: newMeeting)
+        #expect(active.activePayload == nil)
+    }
+
+    @Test("native report share receives only the selected report text")
+    @MainActor
+    func reportShareActivityItemsContainOnlyText() throws {
+        let items = ReportShareSheet.activityItems(text: "SHARE_SENTINEL")
+
+        #expect(items.count == 1)
+        #expect(try #require(items.first as? String) == "SHARE_SENTINEL")
+    }
+
+    @Test("report share lifecycle completes once when activity finishes first")
+    @MainActor
+    func reportShareLifecycleActivityFirst() {
+        var completions = 0
+        let lifecycle = ReportShareLifecycle { completions += 1 }
+
+        lifecycle.activityDidFinish()
+        lifecycle.presentationEnded()
+
+        #expect(completions == 1)
+    }
+
+    @Test("report share lifecycle completes once when presentation ends first")
+    @MainActor
+    func reportShareLifecyclePresentationFirst() {
+        var completions = 0
+        let lifecycle = ReportShareLifecycle { completions += 1 }
+
+        lifecycle.presentationEnded()
+        lifecycle.activityDidFinish()
+        lifecycle.presentationEnded()
+
+        #expect(completions == 1)
     }
 
     @Test("version labels distinguish reports created seconds apart")
@@ -532,22 +678,22 @@ struct MeetingReportsPresentationTests {
             (
                 .unavailable(.deviceNotEligible),
                 false,
-                "Dieses Gerät unterstützt Apple Intelligence nicht."
+                "This device does not support Apple Intelligence."
             ),
             (
                 .unavailable(.appleIntelligenceNotEnabled),
                 false,
-                "Apple Intelligence ist nicht aktiviert."
+                "Apple Intelligence is not enabled."
             ),
             (
                 .unavailable(.modelNotReady),
                 false,
-                "Das Apple-Intelligence-Modell ist noch nicht verfügbar."
+                "The Apple Intelligence model is not available yet."
             ),
             (
                 .unavailable(.unknown),
                 false,
-                "Das Textmodell ist derzeit nicht verfügbar."
+                "The text model is currently unavailable."
             ),
         ]
     )
@@ -559,7 +705,7 @@ struct MeetingReportsPresentationTests {
         let presentation = MeetingReportsAvailabilityPresentation(availability)
 
         #expect(presentation.canGenerate == canGenerate)
-        #expect(presentation.message == message)
+        #expect(presentation.message.map(english) == message)
     }
 
     @Test("external notice names exactly the outbound classes")
@@ -574,7 +720,10 @@ struct MeetingReportsPresentationTests {
                 name: "LM Studio",
                 baseURL: URL(string: "https://models.example.com/v1")!,
                 modelID: "gemma-3",
-                requiresAPIKey: true
+                requiresAPIKey: true,
+                hosting: .cloud,
+                dialect: .openAICompatible,
+                contextWindowTokens: TextModelEndpoint.defaultContextWindowTokens
             )
 
             let notice = try ExternalModelNotice(
@@ -591,7 +740,7 @@ struct MeetingReportsPresentationTests {
                 "Audio, structured profile email fields, and attachments are not added to the model input."
             ))
             #expect(notice.text.contains(
-                "Email addresses written in the transcript or your notes are included with that text."
+                "Email addresses written into the meeting text or the notes are included with it."
             ))
             #expect(!notice.text.contains("email addresses and attached documents stay"))
             for dataClass in PromptDataClass.allCases {
@@ -609,7 +758,10 @@ struct MeetingReportsPresentationTests {
             name: "LM Studio",
             baseURL: URL(string: "http://100.64.1.2:1234/v1")!,
             modelID: "gemma-3",
-            requiresAPIKey: false
+            requiresAPIKey: false,
+            hosting: .selfHosted,
+            dialect: .openAICompatible,
+            contextWindowTokens: TextModelEndpoint.defaultContextWindowTokens
         )
 
         let notice = try ExternalModelNotice(
@@ -624,6 +776,12 @@ struct MeetingReportsPresentationTests {
 
     private func job(status: Job.Status) -> Job {
         Job(kind: .templateRender, meetingID: MeetingID(), status: status)
+    }
+
+    private func english(_ resource: LocalizedStringResource) -> String {
+        var resource = resource
+        resource.locale = Locale(identifier: "en")
+        return String(localized: resource)
     }
 
     private func report(

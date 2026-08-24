@@ -47,13 +47,20 @@ struct RecordingSessionTests {
         #expect(result.assets.count == 2)
         #expect(result.assets[.microphone]?.kind == .micTrack)
         #expect(result.assets[.system]?.kind == .systemTrack)
-        #expect(result.assets[.microphone]?.duration == 0.5)
+        // Mindestens, nicht genau: TrackContinuity polstert die Spur beim
+        // Stoppen bewusst auf die Wanduhrzeit, damit Mikro- und Systemspur
+        // ausgerichtet bleiben. Auf einer belasteten Maschine vergeht zwischen
+        // Start und Stopp mehr Zeit als der emittierte Ton, es wird also mehr
+        // Stille geschrieben. Eine Gleichheitspruefung haelt nur auf einer
+        // leerlaufenden Maschine und macht den Test unter Last flakig.
+        let micDuration = try #require(result.assets[.microphone]?.duration)
+        #expect(micDuration >= 0.5)
         #expect(result.assets[.system]?.sampleRate == 8_000)
         let micAsset = try #require(result.assets[.microphone])
         let micURL = library.layout.mediaFile(meeting.id, fileName: micAsset.fileName)
         let recordedFile = try AVAudioFile(forReading: micURL)
         #expect(recordedFile.fileFormat.commonFormat == .pcmFormatInt16)
-        #expect(recordedFile.length == 4_000)
+        #expect(recordedFile.length >= 4_000)
         let stagingFiles = try FileManager.default.contentsOfDirectory(
             at: directory.appendingPathComponent("Capture"),
             includingPropertiesForKeys: nil
@@ -61,6 +68,47 @@ struct RecordingSessionTests {
         #expect(stagingFiles.filter { $0.pathExtension == "caf" }.isEmpty)
         #expect(try await library.loadMeeting(meeting.id).status == .ready)
         #expect(await activity.counts() == ActivityCounts(begun: 1, ended: 1))
+    }
+
+    @Test("finalization renames the durable capture inode into the library")
+    func finalizationRenamesCaptureInode() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = try Library.open(at: directory.appendingPathComponent("Library"))
+        let meeting = try await library.createMeeting(
+            title: "Durable",
+            status: .recording
+        )
+        let captureDirectory = library.layout.captureDirectory(meeting.id)
+        let mic = FakeAudioSource(track: .microphone)
+        let session = RecordingSession(
+            meetingID: meeting.id,
+            library: library,
+            outputDirectory: captureDirectory,
+            sources: [.microphone: mic],
+            activityManager: FakeActivityManager(),
+            availableDiskBytes: { _ in 3_000_000_000 }
+        )
+
+        try await session.start()
+        let captureURL = try #require(
+            try FileManager.default.contentsOfDirectory(
+                at: captureDirectory,
+                includingPropertiesForKeys: nil
+            ).first { $0.pathExtension == "caf" }
+        )
+        let captureInode = try inode(of: captureURL)
+        await mic.emit(syntheticBuffer())
+
+        let result = try await session.stop()
+        let asset = try #require(result.assets[.microphone])
+        let mediaURL = library.layout.mediaFile(
+            meeting.id,
+            fileName: asset.fileName
+        )
+
+        #expect(try inode(of: mediaURL) == captureInode)
+        #expect(!FileManager.default.fileExists(atPath: captureURL.path))
     }
 
     @Test("a requested source order fully starts system audio before preparing the microphone")
@@ -150,7 +198,14 @@ struct RecordingSessionTests {
 
         #expect(await mic.stopCount == 1)
         #expect(await system.stopCount == 1)
-        #expect(result.assets[.microphone]?.duration == 0.5)
+        // Mindestens, nicht genau: TrackContinuity polstert die Spur beim
+        // Stoppen bewusst auf die Wanduhrzeit, damit Mikro- und Systemspur
+        // ausgerichtet bleiben. Auf einer belasteten Maschine vergeht zwischen
+        // Start und Stopp mehr Zeit als der emittierte Ton, es wird also mehr
+        // Stille geschrieben. Eine Gleichheitspruefung haelt nur auf einer
+        // leerlaufenden Maschine und macht den Test unter Last flakig.
+        let micDuration = try #require(result.assets[.microphone]?.duration)
+        #expect(micDuration >= 0.5)
         if case .writerFailure(.microphone) = result.stopReason {
             // Expected.
         } else {
@@ -210,6 +265,53 @@ struct RecordingSessionTests {
             requiredBytes: 2_000_000_000,
             availableBytes: 1_000_000_000
         ))
+    }
+
+    @Test("thirty consecutive disk probe failures finalize the recorded prefix")
+    func persistentDiskProbeFailureFinalizesRecording() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = try Library.open(at: directory.appendingPathComponent("Library"))
+        let meeting = try await library.createMeeting(
+            title: "Probe failure",
+            status: .recording
+        )
+        let mic = FakeAudioSource(track: .microphone)
+        let probe = FailingCapacityProbe()
+        let session = RecordingSession(
+            meetingID: meeting.id,
+            library: library,
+            outputDirectory: library.layout.captureDirectory(meeting.id),
+            sources: [.microphone: mic],
+            activityManager: FakeActivityManager(),
+            diskCheckInterval: .milliseconds(2),
+            availableDiskBytes: { _ in try probe.next() }
+        )
+
+        try await session.start()
+        await mic.emit(syntheticBuffer())
+        try await waitUntil { await session.state.isTerminal }
+        let result = try #require(await session.lastResult())
+        let asset = try #require(result.assets[.microphone])
+        let mediaURL = library.layout.mediaFile(
+            meeting.id,
+            fileName: asset.fileName
+        )
+        let audio = try AVAudioFile(forReading: mediaURL)
+
+        #expect(probe.failureCount == 30)
+        #expect(result.stopReason == .diskSpaceMonitoringFailure)
+        #expect(await session.lastError() == .diskSpaceMonitoringFailed(
+            message: PersistentDiskProbeError().localizedDescription
+        ))
+        // Mindestens, nicht genau: TrackContinuity polstert die Spur beim
+        // Stoppen bewusst auf die Wanduhrzeit, damit Mikro- und Systemspur
+        // ausgerichtet bleiben. Auf einer belasteten Maschine vergeht zwischen
+        // Start und Stopp mehr Zeit als der emittierte Ton, es wird also mehr
+        // Stille geschrieben. Eine Gleichheitspruefung haelt nur auf einer
+        // leerlaufenden Maschine und macht den Test unter Last flakig.
+        #expect(audio.length >= 4_000)
+        #expect(try await library.loadMeeting(meeting.id).status == .ready)
     }
 
     @Test("concurrent stop callers share one finalization and one pair of assets")
@@ -306,7 +408,18 @@ struct RecordingSessionTests {
         let micDuration = try #require(result.assets[.microphone]?.duration)
         let systemDuration = try #require(result.assets[.system]?.duration)
         #expect(abs(micDuration - systemDuration) <= 0.010_001)
-        #expect(eventKinds(events) == [.buffer, .gapStarted, .gapEnded, .buffer])
+        // Der Live-Strom ist `bufferingNewest` und damit ausdruecklich
+        // verlustbehaftet; nur der Writer-Strom der Aufnahme ist es nicht.
+        // Auf eine exakte Ereignisfolge zu pruefen, verlangt eine Zusicherung,
+        // die es nicht gibt: das letzte Ereignis kann noch unterwegs sein, wenn
+        // `stop()` den Strom schliesst. Zugesichert ist die Reihenfolge der
+        // Luecke, und dass die Spur trotz der Luecke kontinuierlich bleibt -
+        // letzteres pruefen die Dauern oben.
+        let kinds = eventKinds(events)
+        let gapStart = try #require(kinds.firstIndex(of: .gapStarted))
+        let gapEnd = try #require(kinds.firstIndex(of: .gapEnded))
+        #expect(gapStart < gapEnd)
+        #expect(kinds.first == .buffer)
     }
 
     @Test("manual microphone pause never pauses system audio or auto-resumes")
@@ -500,6 +613,29 @@ private final class CapacitySequence: @unchecked Sendable {
     }
 }
 
+private struct PersistentDiskProbeError: Error, LocalizedError {
+    var errorDescription: String? { "disk capacity probe unavailable" }
+}
+
+private final class FailingCapacityProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls = 0
+    private var failures = 0
+
+    var failureCount: Int {
+        lock.withLock { failures }
+    }
+
+    func next() throws -> Int64 {
+        try lock.withLock {
+            calls += 1
+            guard calls > 1 else { return 3_000_000_000 }
+            failures += 1
+            throw PersistentDiskProbeError()
+        }
+    }
+}
+
 private func waitUntil(
     timeout: Duration = .seconds(2),
     condition: @escaping @Sendable () async -> Bool
@@ -512,4 +648,11 @@ private func waitUntil(
         }
         try await Task.sleep(for: .milliseconds(10))
     }
+}
+
+private func inode(of url: URL) throws -> UInt64 {
+    let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+    return try #require(
+        (attributes[.systemFileNumber] as? NSNumber)?.uint64Value
+    )
 }

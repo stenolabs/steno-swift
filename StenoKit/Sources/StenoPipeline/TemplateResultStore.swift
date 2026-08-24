@@ -12,6 +12,16 @@ public struct StoredTemplateResult: Equatable, Sendable {
     }
 }
 
+public struct TemplateResultListing: Equatable, Sendable {
+    public let results: [StoredTemplateResult]
+    public let didRepair: Bool
+
+    public init(results: [StoredTemplateResult], didRepair: Bool) {
+        self.results = results
+        self.didRepair = didRepair
+    }
+}
+
 public enum TemplateResultStoreError: Error, Equatable, Sendable {
     case conflictingResult(RunID)
     case invalidResult(RunID)
@@ -25,12 +35,22 @@ public struct TemplateResultStore: Sendable {
     }
 
     public func list(meetingID: MeetingID) throws -> [StoredTemplateResult] {
+        try listWithRepairOutcome(meetingID: meetingID).results
+    }
+
+    /// Lists reports and reports whether the read repaired a damaged copy.
+    /// The caller can then publish the meeting-tree mutation without polling.
+    public func listWithRepairOutcome(
+        meetingID: MeetingID
+    ) throws -> TemplateResultListing {
         let documents = try FileManager.default.contentsOfDirectory(
             at: layout.reportsDirectory(meetingID),
             includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles]
         )
-        return try documents.compactMap { url in
+        var didRepair = false
+        let results: [StoredTemplateResult] = try documents.compactMap {
+            url -> StoredTemplateResult? in
             guard url.pathExtension == "json",
                   let rawID = UUID(uuidString: url.deletingPathExtension().lastPathComponent)
             else { return nil }
@@ -44,6 +64,7 @@ public struct TemplateResultStore: Sendable {
                 // Ein beschädigtes Report-Dokument wird quarantänisiert und
                 // aus dem committeten Lauf-Artefakt wiederhergestellt - der
                 // Lauf ist die Quelle, das Report-Dokument nur eine Kopie.
+                didRepair = true
                 return try quarantineAndRestore(
                     url: url,
                     runID: runID,
@@ -56,6 +77,7 @@ public struct TemplateResultStore: Sendable {
             }
             return lhs.result.createdAt > rhs.result.createdAt
         }
+        return TemplateResultListing(results: results, didRepair: didRepair)
     }
 
     func persist(

@@ -15,6 +15,7 @@ struct ConfirmationFlowTests {
         var state = IdentityReviewState(
             meetingID: meetingID,
             currentRunID: runID,
+            voiceEvidenceMutationPolicy: .allowed,
             clusters: [
                 makeCluster(meetingID: meetingID, runID: runID, clusterID: "A1", distance: 0),
                 makeCluster(meetingID: meetingID, runID: runID, clusterID: "A2", distance: 0.8),
@@ -53,7 +54,9 @@ struct ConfirmationFlowTests {
             clusterID: "A1", channel: "system", runID: runID,
             in: state
         ).state
-        #expect(person(bob.id, in: state)?.prototypes.map(\.clusterID) == ["B1"])
+        let bobPrototypes = try #require(person(bob.id, in: state)?.prototypes)
+        #expect(bobPrototypes.filter(\.isActive).map(\.clusterID) == ["B1"])
+        #expect(bobPrototypes.first { $0.clusterID == "A1" }?.isActive == false)
         #expect(person(ada.id, in: state)?.hardNegatives.map(\.clusterID) == ["B1"])
         #expect(state.participantIDs.contains(bob.id))
     }
@@ -66,6 +69,7 @@ struct ConfirmationFlowTests {
         let state = IdentityReviewState(
             meetingID: meetingID,
             currentRunID: runID,
+            voiceEvidenceMutationPolicy: .allowed,
             clusters: [makeCluster(meetingID: meetingID, runID: runID, clusterID: "A")],
             persons: [ada]
         )

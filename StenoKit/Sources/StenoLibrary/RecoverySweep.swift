@@ -23,10 +23,11 @@ public enum RecoverySweep {
             ).isEmpty
             if hasAssets, try await !jobStore.containsJob(
                 kind: .finalASR,
-                meetingID: meeting.id
+                meetingID: meeting.id,
+                processingGenerationID: meeting.processingGenerationID
             ) {
                 try await jobStore.enqueue(
-                    Job(kind: .finalASR, meetingID: meeting.id)
+                    Job.finalASR(for: meeting)
                 )
             }
             _ = try await library.updateMeetingStatus(

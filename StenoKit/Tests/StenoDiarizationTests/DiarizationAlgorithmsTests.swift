@@ -34,6 +34,23 @@ struct DiarizationAlgorithmsTests {
         #expect(resampleMask([], to: 3) == [0, 0, 0])
     }
 
+    @Test("the final embedding window pads audio and mask on the same time axis")
+    func padsFinalEmbeddingWindowInSync() {
+        let window = prepareSortformerEmbeddingWindow(
+            audio: [1, 2, 3, 4, 5],
+            masks: [[0, 0, 1]],
+            samplesPerWindow: 10,
+            framesPerWindow: 6
+        )
+
+        #expect(window.audio == [1, 2, 3, 4, 5, 0, 0, 0, 0, 0])
+        #expect(window.masks == [[0, 0, 1, 0, 0, 0]])
+        #expect(resampleMask(window.masks[0], to: 12) == [
+            0, 0, 0, 0, 1, 1,
+            0, 0, 0, 0, 0, 0,
+        ])
+    }
+
     @Test("centroid aggregation averages every chunk and L2 normalizes the result")
     func aggregatesNormalizedCentroids() throws {
         let centroids = aggregateCentroids(

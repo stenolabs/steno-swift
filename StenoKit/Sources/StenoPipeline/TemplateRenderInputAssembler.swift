@@ -107,6 +107,7 @@ public enum TemplateRenderInputAssembler {
         let review = try MeetingReviewAssembler.loadForRendering(
             layout: library.layout,
             meetingID: meetingID,
+            revision: revision,
             transaction: transaction
         )
         let meeting = try library.loadMeeting(meetingID, transaction: transaction)
@@ -128,11 +129,94 @@ public enum TemplateRenderInputAssembler {
             meetingID,
             transaction: transaction
         )
+        let outputLocaleIdentifier = outputLocaleIdentifier(
+            library: library,
+            meeting: meeting,
+            revision: revision
+        )
         return TemplateRenderInput(
             transcript: resolvedTranscript,
             participants: participants,
-            context: RenderContext(userNotes: notes, participants: participants)
+            context: RenderContext(
+                userNotes: notes,
+                participants: participants,
+                outputLocaleIdentifier: outputLocaleIdentifier
+            )
         )
+    }
+
+    /// Die Sprache des Protokolls kommt aus der gespeicherten Wahl, nie aus
+    /// `Locale.current`. Eine neue Aufnahme traegt sie ausdruecklich in
+    /// `Meeting.sourceLocale` (Ursprung `.explicit`, siehe
+    /// `Job.localeIdentifier`); importierte oder zusammengefuehrte Meetings
+    /// koennen ungepinnt sein, dann ist die tatsaechlich verwendete Locale im
+    /// unveraenderlichen Final-ASR-Artefakt die verlaesslichste Quelle. Bei
+    /// widerspruechlichen Spuren (mehrere Locales im selben Lauf) liefert
+    /// diese Funktion nil statt zu raten - das Modell bestimmt dann die
+    /// Sprache selbst aus dem Transkript, wie ohne gespeicherte Wahl auch.
+    ///
+    /// Der Blick auf Diarisierungs- und Final-ASR-Artefakt ist bewusst rein
+    /// lesend und nicht `RunArtifactStore.loadFinished`: dessen
+    /// Validierung quarantaent ein Artefakt bei jedem Mismatch, richtig fuer
+    /// die Pipeline, die ihr eigenes committetes Ergebnis nachlaedt, falsch
+    /// fuer einen beilaeufigen Sprachhinweis. Ein unerwarteter Zustand
+    /// bedeutet hier nur "kein Hinweis", nie "beschaedigt".
+    static func outputLocaleIdentifier(
+        library: Library,
+        meeting: Meeting,
+        revision: TranscriptRevision
+    ) -> String? {
+        if let sourceLocale = meeting.sourceLocale, sourceLocale.origin == .explicit {
+            return normalizedLocaleIdentifier(sourceLocale.localeIdentifier)
+        }
+        guard let diarizationRunID = diarizationRunID(in: revision),
+              let diarization = peekFinishedArtifact(
+                  DiarizationArtifact.self,
+                  layout: library.layout,
+                  meetingID: meeting.id,
+                  runID: diarizationRunID,
+                  expectedKind: .diarization,
+                  artifactPath: LibraryLayout.runDiarization
+              ),
+              let finalASR = peekFinishedArtifact(
+                  FinalASRArtifact.self,
+                  layout: library.layout,
+                  meetingID: meeting.id,
+                  runID: diarization.sourceRunID,
+                  expectedKind: .finalASR,
+                  artifactPath: LibraryLayout.runTranscript
+              )
+        else {
+            return nil
+        }
+
+        let locales = Set(finalASR.tracks.map {
+            normalizedLocaleIdentifier($0.output.localeIdentifier)
+        })
+        return locales.count == 1 ? locales.first : nil
+    }
+
+    private static func peekFinishedArtifact<Artifact: Decodable>(
+        _ type: Artifact.Type,
+        layout: LibraryLayout,
+        meetingID: MeetingID,
+        runID: RunID,
+        expectedKind: ProcessingRun.Kind,
+        artifactPath: (LibraryLayout) -> (MeetingID, RunID) -> URL
+    ) -> Artifact? {
+        guard let runData = try? Data(contentsOf: layout.runMetadata(meetingID, runID: runID)),
+              let run = try? JSONDecoder().decode(ProcessingRun.self, from: runData),
+              run.id == runID, run.meetingID == meetingID, run.kind == expectedKind,
+              run.status == .finished
+        else { return nil }
+        guard let data = try? Data(contentsOf: artifactPath(layout)(meetingID, runID)) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(Artifact.self, from: data)
+    }
+
+    private static func normalizedLocaleIdentifier(_ identifier: String) -> String {
+        identifier.replacingOccurrences(of: "_", with: "-")
     }
 
     static func fingerprint(for input: TemplateRenderInput) throws -> String {
@@ -157,11 +241,27 @@ private struct FingerprintPayload: Codable {
 }
 
 private extension MeetingReviewAssembler {
+    /// Laedt den Review-Stand fuer eine gepinnte Revision. Ein Report wird
+    /// aus genau der Revision gerendert, die in job.revisionID pinnt; das
+    /// Review daneben darf deshalb nicht den juengsten Diarisierungslauf
+    /// nehmen, sondern nur den, der diese Revision erzeugt hat. Laesst
+    /// sich der Lauf nicht ableiten, oder passt kein Vorschlagsartefakt zu
+    /// ihm, wird ohne Review gerendert (Kanal-Labels statt Namen) statt mit
+    /// dem Review eines anderen Laufs.
     static func loadForRendering(
         layout: LibraryLayout,
         meetingID: MeetingID,
+        revision: TranscriptRevision,
         transaction: LibraryMutationTransaction
     ) throws -> MeetingReviewData? {
-        try load(layout: layout, meetingID: meetingID, transaction: transaction)
+        guard let pinnedDiarizationRunID = diarizationRunID(in: revision) else {
+            return nil
+        }
+        return try load(
+            layout: layout,
+            meetingID: meetingID,
+            diarizationRunID: pinnedDiarizationRunID,
+            transaction: transaction
+        )
     }
 }

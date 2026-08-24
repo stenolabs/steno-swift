@@ -135,6 +135,96 @@ struct RevisionStoreTests {
         }
     }
 
+    @Test("recovery discards a stale intent instead of replacing a newer pointer")
+    func staleIntentDoesNotReplaceNewerPointer() async throws {
+        try await withTemporaryDirectory { root in
+            let library = try Library.open(at: root)
+            let meeting = try await library.createMeeting(title: "Meeting", status: .ready)
+            let base = makeRevision(meetingID: meeting.id, origin: .finalRun(RunID()))
+            let edit = makeRevision(meetingID: meeting.id, origin: .userEdit(base.id))
+            let adopted = makeRevision(meetingID: meeting.id, origin: .finalRun(RunID()))
+            let interrupted = makeRevision(
+                meetingID: meeting.id,
+                origin: .finalRun(RunID())
+            )
+            _ = try await library.appendRevision(base)
+            _ = try await library.appendRevision(edit)
+            _ = try await library.appendRevision(adopted)
+            await #expect(throws: RevisionAppendInterruption.self) {
+                _ = try await library.appendRevision(
+                    interrupted,
+                    interruptAfterRevisionWrite: true
+                )
+            }
+
+            let newerPointer = CurrentRevisionPointer(
+                currentRevisionID: adopted.id
+            )
+            try JSONDocumentStore.write(
+                newerPointer,
+                to: library.layout.currentRevision(meeting.id)
+            )
+
+            #expect(try RevisionAppendRecovery.recover(
+                layout: library.layout,
+                meetingID: meeting.id
+            ) == nil)
+            #expect(
+                try await library.loadCurrentRevisionPointer(meetingID: meeting.id)
+                    == newerPointer
+            )
+            #expect(!FileManager.default.fileExists(
+                atPath: library.layout.revisionAppendIntent(meeting.id).path
+            ))
+            #expect(
+                try await library.loadRevision(interrupted.id, meetingID: meeting.id)
+                    == interrupted
+            )
+        }
+    }
+
+    @Test("adopting first recovers an interrupted append before comparing candidates")
+    func adoptionRecoversBeforeComparingCandidate() async throws {
+        try await withTemporaryDirectory { root in
+            let library = try Library.open(at: root)
+            let meeting = try await library.createMeeting(title: "Meeting", status: .ready)
+            let base = makeRevision(meetingID: meeting.id, origin: .finalRun(RunID()))
+            let edit = makeRevision(meetingID: meeting.id, origin: .userEdit(base.id))
+            let inspectedCandidate = makeRevision(
+                meetingID: meeting.id,
+                origin: .finalRun(RunID())
+            )
+            let interruptedCandidate = makeRevision(
+                meetingID: meeting.id,
+                origin: .finalRun(RunID())
+            )
+            _ = try await library.appendRevision(base)
+            _ = try await library.appendRevision(edit)
+            _ = try await library.appendRevision(inspectedCandidate)
+            await #expect(throws: RevisionAppendInterruption.self) {
+                _ = try await library.appendRevision(
+                    interruptedCandidate,
+                    interruptAfterRevisionWrite: true
+                )
+            }
+
+            let adopted = try await library.adoptPendingRevision(
+                meetingID: meeting.id,
+                expectedCandidateID: inspectedCandidate.id
+            )
+            let pointer = try await library.loadCurrentRevisionPointer(
+                meetingID: meeting.id
+            )
+
+            #expect(adopted == nil)
+            #expect(pointer.currentRevisionID == edit.id)
+            #expect(pointer.pendingCandidate == interruptedCandidate.id)
+            #expect(!FileManager.default.fileExists(
+                atPath: library.layout.revisionAppendIntent(meeting.id).path
+            ))
+        }
+    }
+
     @Test("a user edit must descend from the current revision")
     func validatesUserEditParent() async throws {
         try await withTemporaryDirectory { root in

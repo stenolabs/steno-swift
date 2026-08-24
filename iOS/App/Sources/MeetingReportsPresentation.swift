@@ -146,6 +146,7 @@ struct MeetingReportsPresentation: Equatable {
                 ?? "The minutes could not be generated."
             needsPreflightRefresh = pending.failureReason == .templateRenderInputChanged
                 || pending.failureReason == .templateRenderPinsRequired
+                || pending.failureReason == .textModelEndpointConfigurationIncomplete
             snapshotFailureIsCurrent = false
         case .cancelled:
             self.pendingJobID = nil
@@ -182,11 +183,15 @@ struct MeetingReportsPresentation: Equatable {
         selectionWasManual = false
     }
 
-    static func engineLabel(_ engine: EngineDescriptor) -> String {
+    static func engineLabel(
+        _ engine: EngineDescriptor,
+        locale: Locale = .autoupdatingCurrent
+    ) -> String {
+        let name = DemoDisplayLocalization.engineName(engine.name, locale: locale)
         if let modelVersion = engine.modelVersion {
-            return "\(engine.name) · \(modelVersion)"
+            return "\(name) · \(modelVersion)"
         }
-        return engine.name
+        return name
     }
 
     static func versionLabel(
@@ -200,7 +205,7 @@ struct MeetingReportsPresentation: Equatable {
         formatter.dateStyle = .medium
         formatter.timeStyle = .medium
         return "\(formatter.string(from: report.result.createdAt)) · "
-            + engineLabel(report.result.engine)
+            + engineLabel(report.result.engine, locale: locale)
     }
 
     func isShownVersion(_ report: StoredTemplateResult) -> Bool {
@@ -210,7 +215,7 @@ struct MeetingReportsPresentation: Equatable {
 
 struct MeetingReportsAvailabilityPresentation: Equatable {
     let canGenerate: Bool
-    let message: String?
+    let message: LocalizedStringResource?
 
     init(_ availability: TextModelAvailability) {
         switch availability {
@@ -219,7 +224,24 @@ struct MeetingReportsAvailabilityPresentation: Equatable {
             message = nil
         case .unavailable:
             canGenerate = false
-            message = availability.unavailabilityMessage
+            message = Self.message(for: availability)
+        }
+    }
+
+    private static func message(
+        for availability: TextModelAvailability
+    ) -> LocalizedStringResource? {
+        switch availability {
+        case .available:
+            nil
+        case .unavailable(.deviceNotEligible):
+            "This device does not support Apple Intelligence."
+        case .unavailable(.appleIntelligenceNotEnabled):
+            "Apple Intelligence is not enabled."
+        case .unavailable(.modelNotReady):
+            "The Apple Intelligence model is not available yet."
+        case .unavailable(.unknown):
+            "The text model is currently unavailable."
         }
     }
 }
@@ -227,16 +249,20 @@ struct MeetingReportsAvailabilityPresentation: Equatable {
 struct ReportSharePayload: Equatable {
     let text: String
 
+    init(text: String) {
+        self.text = text
+    }
+
     init(report: StoredTemplateResult) {
         text = report.result.markdown
     }
 }
 
 struct MeetingReportsViewState: Equatable {
-    let actionTitle: String
+    let actionTitle: LocalizedStringResource
     let canGenerate: Bool
-    let availabilityMessage: String?
-    let speakerHint: String?
+    let availabilityMessage: LocalizedStringResource?
+    let speakerHint: LocalizedStringResource?
 
     init(
         hasReport: Bool,
@@ -265,7 +291,7 @@ struct MeetingReportsViewState: Equatable {
         }
     }
 
-    static func actionTitle(hasReport: Bool) -> String {
+    static func actionTitle(hasReport: Bool) -> LocalizedStringResource {
         hasReport ? "Regenerate" : "Generate minutes"
     }
 

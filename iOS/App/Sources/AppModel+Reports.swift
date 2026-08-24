@@ -6,7 +6,7 @@ enum AppModelReportError: LocalizedError {
     case runtimeUnavailable
 
     var errorDescription: String? {
-        "The library is not ready yet."
+        String(localized: "The library is not ready yet.")
     }
 }
 
@@ -37,8 +37,11 @@ extension AppModel {
 
     func jobs(for meetingID: MeetingID) async throws -> [Job] {
         let runtime = try reportRuntime()
+        let meeting = try await runtime.library.loadMeeting(meetingID)
         return try await runtime.jobStore.list().filter {
-            $0.meetingID == meetingID && $0.kind == .templateRender
+            $0.meetingID == meetingID
+                && $0.processingGenerationID == meeting.processingGenerationID
+                && $0.kind == .templateRender
         }
     }
 
@@ -62,6 +65,10 @@ extension AppModel {
         preflight: TemplateRenderPreflight
     ) async throws -> Job {
         let runtime = try reportRuntime()
+        guard let operation = beginLibraryOperation() else {
+            throw AppModelLibraryOperationError.operationInProgress
+        }
+        defer { endFolderOperation(operation) }
         return try await TemplateRenderRequest.enqueue(
             library: runtime.library,
             jobStore: runtime.jobStore,

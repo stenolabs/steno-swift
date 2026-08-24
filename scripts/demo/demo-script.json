@@ -1,0 +1,150 @@
+{
+  "schemaVersion": 1,
+  "datasetID": "synthetic-demo",
+  "datasetVersion": "2026-08-23",
+  "rendering": {
+    "platform": "macOS arm64 only",
+    "sampleRate": 22050,
+    "fixedPointFractionBits": 16,
+    "pcmFormat": "PCM16 mono little-endian",
+    "noiseScale": 0,
+    "noiseW": 0,
+    "generator": "rhasspy/piper",
+    "generatorCommit": "38917ffd8c0e219c6581d73e07b30ef1d572fce1",
+    "sourcePatchSHA256": "4f0f8af3ce4a34caec4094974f466e4e3a85b9206be0360d1383522bc11160a4",
+    "voice": "de_DE-mls-medium",
+    "voiceRepositoryRevision": "7e8200c80dbc9147404face0d3ee0bb69995d873",
+    "speakers": [
+      { "label": "Sprecherin A", "speakerReferenceID": "00000000-0000-7000-8000-00000000aa01", "modelIndex": 0, "modelSpeakerID": "2422", "gainDB": 0.0, "gainNumerator": 65536 },
+      { "label": "Sprecher B", "speakerReferenceID": "00000000-0000-7000-8000-00000000aa02", "modelIndex": 1, "modelSpeakerID": "4536", "gainDB": -1.0, "gainNumerator": 58409 },
+      { "label": "Sprecherin C", "speakerReferenceID": "00000000-0000-7000-8000-00000000aa03", "modelIndex": 5, "modelSpeakerID": "6507", "gainDB": -0.5, "gainNumerator": 61870 }
+    ]
+  },
+  "artifacts": [
+    {
+      "name": "cmake-4.4.2-arm64_tahoe.bottle.tar.gz",
+      "url": "https://ghcr.io/v2/homebrew/core/cmake/blobs/sha256:207ce99392cf1560ad0ce1f3ca95d519645bbe7392a91321f37c2b8bfd9b8ae0",
+      "bytes": 19763212,
+      "sha256": "207ce99392cf1560ad0ce1f3ca95d519645bbe7392a91321f37c2b8bfd9b8ae0",
+      "license": "BSD-3-Clause",
+      "licenseURL": "https://raw.githubusercontent.com/Kitware/CMake/v4.4.2/LICENSE.rst",
+      "verifiedAt": "2026-08-23"
+    },
+    {
+      "name": "espeak-ng-2023.9.7-4.tar.gz",
+      "url": "https://github.com/rhasspy/espeak-ng/archive/5c3a2e79c24f92cd408d067a9aa47553927ec891.tar.gz",
+      "bytes": 16320510,
+      "sha256": "31e206e25fd3a837244609e0d37540062ffc32eae7000f0dd12f93186e1d5126",
+      "revision": "5c3a2e79c24f92cd408d067a9aa47553927ec891",
+      "license": "GPL-3.0-or-later",
+      "licenseURL": "https://raw.githubusercontent.com/rhasspy/espeak-ng/5c3a2e79c24f92cd408d067a9aa47553927ec891/COPYING",
+      "verifiedAt": "2026-08-23"
+    },
+    {
+      "name": "onnxruntime-osx-arm64-1.14.1.tgz",
+      "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.14.1/onnxruntime-osx-arm64-1.14.1.tgz",
+      "bytes": 6563098,
+      "sha256": "ed75ab93a7950cece7f9f3b2d97507479c359a083f67772ee527c94d0e5cd83c",
+      "license": "MIT",
+      "licenseURL": "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.14.1/LICENSE",
+      "verifiedAt": "2026-08-23"
+    },
+    {
+      "name": "piper-phonemize-2023.11.14-2.tar.gz",
+      "url": "https://github.com/rhasspy/piper-phonemize/archive/7e9174083b94fcc3c51c983a2394593abd81925b.tar.gz",
+      "bytes": 9788127,
+      "sha256": "dea13c71bd335c88f3be5d6ca9b235acc6da4f9753913112cc78e98ab8936ff1",
+      "revision": "7e9174083b94fcc3c51c983a2394593abd81925b",
+      "license": "MIT",
+      "licenseURL": "https://raw.githubusercontent.com/rhasspy/piper-phonemize/7e9174083b94fcc3c51c983a2394593abd81925b/LICENSE.md",
+      "verifiedAt": "2026-08-23"
+    },
+    {
+      "name": "fmt-10.0.0.tar.gz",
+      "url": "https://github.com/fmtlib/fmt/archive/refs/tags/10.0.0.tar.gz",
+      "bytes": 851582,
+      "sha256": "ede1b6b42188163a3f2e0f25ad5c0637eca564bd8df74d02e31a311dd6b37ad8",
+      "license": "MIT",
+      "licenseURL": "https://raw.githubusercontent.com/fmtlib/fmt/10.0.0/LICENSE.rst",
+      "verifiedAt": "2026-08-23"
+    },
+    {
+      "name": "spdlog-1.12.0.tar.gz",
+      "url": "https://github.com/gabime/spdlog/archive/refs/tags/v1.12.0.tar.gz",
+      "bytes": 251037,
+      "sha256": "4dccf2d10f410c1e2feaff89966bfc49a1abb29ef6f08246335b110e001e09a9",
+      "license": "MIT",
+      "licenseURL": "https://raw.githubusercontent.com/gabime/spdlog/v1.12.0/LICENSE",
+      "verifiedAt": "2026-08-23"
+    },
+    {
+      "name": "piper-2023.11.14-2.tar.gz",
+      "url": "https://github.com/rhasspy/piper/archive/38917ffd8c0e219c6581d73e07b30ef1d572fce1.tar.gz",
+      "bytes": 25603435,
+      "sha256": "4506521709cbad8ac355594005c8ff9aa0269f03f217bb6d512881f90ede1415",
+      "revision": "38917ffd8c0e219c6581d73e07b30ef1d572fce1",
+      "license": "MIT",
+      "licenseURL": "https://raw.githubusercontent.com/rhasspy/piper/38917ffd8c0e219c6581d73e07b30ef1d572fce1/LICENSE.md",
+      "verifiedAt": "2026-08-23"
+    },
+    {
+      "name": "de_DE-mls-medium.onnx",
+      "url": "https://huggingface.co/rhasspy/piper-voices/resolve/7e8200c80dbc9147404face0d3ee0bb69995d873/de/de_DE/mls/medium/de_DE-mls-medium.onnx",
+      "bytes": 76961079,
+      "sha256": "69cd1d2aa5a35839a518966fcc4924b5f93e5f8c948ed0752b1a616ad53f65bf",
+      "license": "Piper Voices MIT; model card declares MLS CC BY 4.0",
+      "licenseURL": "https://huggingface.co/rhasspy/piper-voices/blob/7e8200c80dbc9147404face0d3ee0bb69995d873/de/de_DE/mls/medium/MODEL_CARD",
+      "verifiedAt": "2026-08-23"
+    },
+    {
+      "name": "de_DE-mls-medium.onnx.json",
+      "url": "https://huggingface.co/rhasspy/piper-voices/resolve/7e8200c80dbc9147404face0d3ee0bb69995d873/de/de_DE/mls/medium/de_DE-mls-medium.onnx.json",
+      "bytes": 8948,
+      "sha256": "b0af1c89ddfdc72d32e015729b0e89b99eec13c2c8caa1db7488d98e9e570b40",
+      "license": "Piper Voices MIT; model card declares MLS CC BY 4.0",
+      "licenseURL": "https://huggingface.co/rhasspy/piper-voices/blob/7e8200c80dbc9147404face0d3ee0bb69995d873/de/de_DE/mls/medium/MODEL_CARD",
+      "verifiedAt": "2026-08-23"
+    }
+  ],
+  "meetings": [
+    {
+      "itemID": "projektauftakt",
+      "segments": [
+        { "start": 0.0, "startFrame": 0, "gainDB": 0.0, "gainNumerator": 65536, "speaker": "Sprecherin A", "modelIndex": 0, "text": "Willkommen zum fiktiven Projektauftakt für die Musterstadt. Wir testen heute nur einen erfundenen Ablauf." },
+        { "start": 11.3, "startFrame": 249165, "gainDB": -1.0, "gainNumerator": 58409, "speaker": "Sprecher B", "modelIndex": 1, "text": "Das Ziel ist ein klarer Plan für einen kleinen, vollständig synthetischen Beispielservice." },
+        { "start": 18.0, "startFrame": 396900, "gainDB": -0.5, "gainNumerator": 61870, "speaker": "Sprecherin C", "modelIndex": 5, "text": "Ich übernehme die Skizze der Startseite und notiere offene Fragen für die nächste Runde." },
+        { "start": 23.0, "startFrame": 507150, "gainDB": -0.5, "gainNumerator": 61870, "speaker": "Sprecherin C", "modelIndex": 5, "text": "Ich schlage vor, die Hinweise direkt neben den Eingabefeldern zu platzieren." },
+        { "start": 27.5, "startFrame": 606375, "gainDB": 0.0, "gainNumerator": 65536, "speaker": "Sprecherin A", "modelIndex": 0, "text": "Einverstanden, dann kann die zweite Probe die Beschriftungen und die Reihenfolge prüfen." },
+        { "start": 36.7, "startFrame": 809235, "gainDB": -0.5, "gainNumerator": 61870, "speaker": "Sprecherin C", "modelIndex": 5, "text": "Für die Darstellung nutze ich neutrale Farben und eine gut lesbare, kurze Beispielsprache." },
+        { "start": 42.5, "startFrame": 937125, "gainDB": -1.0, "gainNumerator": 58409, "speaker": "Sprecher B", "modelIndex": 1, "text": "Ich ergänze einen Prüfpunkt für die Audiodauer und für die Zuordnung der drei Kunststimmen." },
+        { "start": 48.4, "startFrame": 1067220, "gainDB": -0.5, "gainNumerator": 61870, "speaker": "Sprecherin C", "modelIndex": 5, "text": "Danach können wir den Entwurf in Ruhe gegen die fiktiven Anforderungen vergleichen." },
+        { "start": 52.3, "startFrame": 1153215, "gainDB": 0.0, "gainNumerator": 65536, "speaker": "Sprecherin A", "modelIndex": 0, "text": "Zum Abschluss sammeln wir nur noch die nächsten Schritte und beenden diese Musterbesprechung." },
+        { "start": 60.6, "startFrame": 1336230, "gainDB": -1.0, "gainNumerator": 58409, "speaker": "Sprecher B", "modelIndex": 1, "text": "Der nächste Termin ist ebenfalls erfunden und dient ausschließlich diesem gebündelten Demo-Datensatz." }
+      ]
+    },
+    {
+      "itemID": "wochenrunde",
+      "segments": [
+        { "start": 0.0, "startFrame": 0, "gainDB": 0.0, "gainNumerator": 65536, "speaker": "Sprecherin A", "modelIndex": 0, "text": "In dieser fiktiven Wochenrunde prüfen wir drei kleine Verbesserungen am Beispielablauf." },
+        { "start": 9.7, "startFrame": 213885, "gainDB": -1.0, "gainNumerator": 58409, "speaker": "Sprecher B", "modelIndex": 1, "text": "Der erste Punkt ist die Übersicht. Jede Probe soll sofort ihren klaren Zweck zeigen." },
+        { "start": 19.1, "startFrame": 421155, "gainDB": -0.5, "gainNumerator": 61870, "speaker": "Sprecherin C", "modelIndex": 5, "text": "Beim zweiten Punkt ergänze ich einen kurzen Hinweis für die lokale Auswertung." },
+        { "start": 23.9, "startFrame": 526995, "gainDB": 0.0, "gainNumerator": 65536, "speaker": "Sprecherin A", "modelIndex": 0, "text": "Der dritte Punkt betrifft die Notizen. Sie bleiben bewusst knapp und vollständig erfunden." },
+        { "start": 37.3, "startFrame": 822465, "gainDB": -1.0, "gainNumerator": 58409, "speaker": "Sprecher B", "modelIndex": 1, "text": "Für diese Runde gibt es keine offenen Risiken. Wir dokumentieren nur die geplante Reihenfolge." },
+        { "start": 45.0, "startFrame": 992250, "gainDB": -0.5, "gainNumerator": 61870, "speaker": "Sprecherin C", "modelIndex": 5, "text": "Ich prüfe danach, ob die Texte und Zeitmarken zueinander passen." },
+        { "start": 49.0, "startFrame": 1080450, "gainDB": 0.0, "gainNumerator": 65536, "speaker": "Sprecherin A", "modelIndex": 0, "text": "Damit ist die fiktive Wochenrunde abgeschlossen. Die nächste Probe beginnt mit demselben neutralen Material." }
+      ]
+    },
+    {
+      "itemID": "produktinterview",
+      "segments": [
+        { "start": 0.0, "startFrame": 0, "gainDB": 0.0, "gainNumerator": 65536, "speaker": "Sprecherin A", "modelIndex": 0, "text": "Dieses fiktive Produktinterview beschreibt eine erfundene Notizfunktion für eine lokale Demo." },
+        { "start": 10.4, "startFrame": 229320, "gainDB": -1.0, "gainNumerator": 58409, "speaker": "Sprecher B", "modelIndex": 1, "text": "Wichtig ist mir, dass die Aufgabe klar bleibt und keine echten Gesprächsinhalte benötigt." },
+        { "start": 17.6, "startFrame": 388080, "gainDB": -0.5, "gainNumerator": 61870, "speaker": "Sprecherin C", "modelIndex": 5, "text": "Die Oberfläche zeigt eine kurze Zusammenfassung, eine Liste von Schritten und eine neutrale Referenz." },
+        { "start": 23.6, "startFrame": 520380, "gainDB": 0.0, "gainNumerator": 65536, "speaker": "Sprecherin A", "modelIndex": 0, "text": "Wie erkennen Nutzende, dass alle Angaben aus einem künstlich erzeugten Beispiel stammen?" },
+        { "start": 33.0, "startFrame": 727650, "gainDB": -1.0, "gainNumerator": 58409, "speaker": "Sprecher B", "modelIndex": 1, "text": "Eine deutliche Kennzeichnung im Titel, in den Notizen und in der Herkunftserklärung macht das sichtbar." },
+        { "start": 41.0, "startFrame": 904050, "gainDB": -0.5, "gainNumerator": 61870, "speaker": "Sprecherin C", "modelIndex": 5, "text": "Zusätzlich prüfen wir feste Prüfsummen, Laufzeiten und die Zuordnung der rein synthetischen Stimmen." },
+        { "start": 46.8, "startFrame": 1031940, "gainDB": 0.0, "gainNumerator": 65536, "speaker": "Sprecherin A", "modelIndex": 0, "text": "Damit endet das Interview. Es bleibt ein erfundenes Trainingsbeispiel ohne Bezug zu Personen oder Unternehmen." }
+      ]
+    }
+  ]
+}

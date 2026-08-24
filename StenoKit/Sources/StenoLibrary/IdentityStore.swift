@@ -5,16 +5,38 @@ private struct PersonsDocument: Codable, Equatable, Sendable {
     static let currentSchemaVersion = 1
 
     let schemaVersion: Int
+    let revision: UUID?
     var persons: [Person]
 
     init(
         schemaVersion: Int = Self.currentSchemaVersion,
+        revision: UUID? = UUID(),
         persons: [Person]
     ) {
         self.schemaVersion = schemaVersion
+        self.revision = revision
         self.persons = persons
     }
 }
+
+public struct IdentityDocumentSnapshot: Equatable, Sendable {
+    public let persons: [Person]
+    public let revision: UUID?
+
+    public init(persons: [Person], revision: UUID?) {
+        self.persons = persons
+        self.revision = revision
+    }
+}
+
+package enum IdentityStoreMutationCheckpoint: Equatable, Sendable {
+    case afterExclusiveTransactionBeforeRead
+}
+
+package typealias IdentityStoreMutationAction = @Sendable (
+    IdentityStoreMutationCheckpoint,
+    LibraryMutationTransaction
+) throws -> Void
 
 /// Alles, was ein Loeschvorgang aus der Bibliothek genommen hat. Die
 /// Ruecknahme braucht beides: die Person selbst und die Negatives, die aus
@@ -33,9 +55,23 @@ public struct DeletedPerson: Equatable, Sendable {
 
 public actor IdentityStore {
     public nonisolated let layout: LibraryLayout
+    private nonisolated let mutationAction: IdentityStoreMutationAction
 
     public init(layout: LibraryLayout) throws {
         self.layout = layout
+        mutationAction = { _, _ in }
+        try FileManager.default.createDirectory(
+            at: layout.identityDirectory,
+            withIntermediateDirectories: true
+        )
+    }
+
+    package init(
+        layout: LibraryLayout,
+        mutationAction: @escaping IdentityStoreMutationAction
+    ) throws {
+        self.layout = layout
+        self.mutationAction = mutationAction
         try FileManager.default.createDirectory(
             at: layout.identityDirectory,
             withIntermediateDirectories: true
@@ -43,21 +79,26 @@ public actor IdentityStore {
     }
 
     public func listPersons() throws -> [Person] {
-        guard FileManager.default.fileExists(atPath: layout.persons.path) else {
-            return []
-        }
-        return try Self.readDocument(layout: layout).persons
+        try snapshot().persons
+    }
+
+    public func snapshot() throws -> IdentityDocumentSnapshot {
+        try Self.snapshot(layout: layout)
+    }
+
+    package nonisolated static func snapshot(
+        layout: LibraryLayout,
+        transaction: LibraryMutationTransaction
+    ) throws -> IdentityDocumentSnapshot {
+        try transaction.validate(layout: layout)
+        return try snapshot(layout: layout)
     }
 
     package nonisolated static func listPersons(
         layout: LibraryLayout,
         transaction: LibraryMutationTransaction
     ) throws -> [Person] {
-        try transaction.validate(layout: layout)
-        guard FileManager.default.fileExists(atPath: layout.persons.path) else {
-            return []
-        }
-        return try readDocument(layout: layout).persons
+        try snapshot(layout: layout, transaction: transaction).persons
     }
 
     public func person(_ personID: PersonID) throws -> Person? {
@@ -69,16 +110,15 @@ public actor IdentityStore {
         displayName: String,
         createdAt: Date = Date()
     ) throws -> Person {
-        let name = try Self.normalizedDisplayName(displayName)
-        var persons = try listPersons()
-        try Self.validateUniqueName(name, among: persons)
-        let person = Person(
-            displayName: name,
+        let person = try Self.makePerson(
+            displayName: displayName,
             createdAt: createdAt
         )
-        persons.append(person)
-        try write(persons)
-        return person
+        return try mutatePersons { persons in
+            try Self.validateUniqueName(person.displayName, among: persons)
+            persons.append(person)
+            return person
+        }
     }
 
     @discardableResult
@@ -88,19 +128,19 @@ public actor IdentityStore {
         updatedAt: Date = Date()
     ) throws -> Person {
         let name = try Self.normalizedDisplayName(displayName)
-        var persons = try listPersons()
-        guard let index = persons.firstIndex(where: { $0.id == personID }) else {
-            throw LibraryError.personNotFound(personID)
+        return try mutatePersons { persons in
+            guard let index = persons.firstIndex(where: { $0.id == personID }) else {
+                throw LibraryError.personNotFound(personID)
+            }
+            try Self.validateUniqueName(
+                name,
+                among: persons,
+                excluding: personID
+            )
+            persons[index].displayName = name
+            persons[index].updatedAt = updatedAt
+            return persons[index]
         }
-        try Self.validateUniqueName(
-            name,
-            among: persons,
-            excluding: personID
-        )
-        persons[index].displayName = name
-        persons[index].updatedAt = updatedAt
-        try write(persons)
-        return persons[index]
     }
 
     /// Setzt die Kontaktadresse; eine leere oder nur aus Leerraum bestehende
@@ -113,14 +153,14 @@ public actor IdentityStore {
         updatedAt: Date = Date()
     ) throws -> Person {
         let normalized = try Self.normalizedEmail(email)
-        var persons = try listPersons()
-        guard let index = persons.firstIndex(where: { $0.id == personID }) else {
-            throw LibraryError.personNotFound(personID)
+        return try mutatePersons { persons in
+            guard let index = persons.firstIndex(where: { $0.id == personID }) else {
+                throw LibraryError.personNotFound(personID)
+            }
+            persons[index].email = normalized
+            persons[index].updatedAt = updatedAt
+            return persons[index]
         }
-        persons[index].email = normalized
-        persons[index].updatedAt = updatedAt
-        try write(persons)
-        return persons[index]
     }
 
     /// Firma oder Organisation; leere Eingabe loescht sie. Anders als beim
@@ -135,19 +175,47 @@ public actor IdentityStore {
         let trimmed = organization?
             .split(whereSeparator: \.isWhitespace)
             .joined(separator: " ")
-        var persons = try listPersons()
-        guard let index = persons.firstIndex(where: { $0.id == personID }) else {
-            throw LibraryError.personNotFound(personID)
+        return try mutatePersons { persons in
+            guard let index = persons.firstIndex(where: { $0.id == personID }) else {
+                throw LibraryError.personNotFound(personID)
+            }
+            persons[index].organization = (trimmed?.isEmpty ?? true) ? nil : trimmed
+            persons[index].updatedAt = updatedAt
+            return persons[index]
         }
-        persons[index].organization = (trimmed?.isEmpty ?? true) ? nil : trimmed
-        persons[index].updatedAt = updatedAt
-        try write(persons)
-        return persons[index]
     }
 
-    public func replacePersons(_ persons: [Person]) throws {
+    @discardableResult
+    public func replacePersons(
+        _ persons: [Person],
+        expectedRevision: UUID?
+    ) throws -> UUID {
         try Self.validateUniqueNames(persons)
-        try write(persons)
+        return try LibraryMutationCoordination.withExclusiveTransaction(
+            layout: layout
+        ) { transaction in
+            try mutationAction(.afterExclusiveTransactionBeforeRead, transaction)
+            return try replacePersons(
+                persons,
+                expectedRevision: expectedRevision,
+                transaction: transaction
+            )
+        }
+    }
+
+    @discardableResult
+    package nonisolated func replacePersons(
+        _ persons: [Person],
+        expectedRevision: UUID?,
+        transaction: LibraryMutationTransaction
+    ) throws -> UUID {
+        try transaction.validate(layout: layout)
+        try Self.validateUniqueNames(persons)
+        let current = try Self.snapshot(layout: layout)
+        guard current.revision == expectedRevision else {
+            throw LibraryError.identityDocumentRevisionConflict
+        }
+        return try Self.write(persons, layout: layout, transaction: transaction)
     }
 
     /// Nimmt eine Stimmprobe von der Erkennung aus oder wieder auf. Die Probe
@@ -211,53 +279,53 @@ public actor IdentityStore {
         guard sourceID != targetID else {
             throw LibraryError.cannotMergePersonIntoItself
         }
-        var persons = try listPersons()
-        guard let sourceIndex = persons.firstIndex(where: { $0.id == sourceID }) else {
-            throw LibraryError.personNotFound(sourceID)
-        }
-        guard let targetIndex = persons.firstIndex(where: { $0.id == targetID }) else {
-            throw LibraryError.personNotFound(targetID)
-        }
-        let source = persons[sourceIndex]
-        var target = persons[targetIndex]
-
-        let mutualKeys = Set(source.prototypes.map(EvidenceKey.init))
-            .union(target.prototypes.map(EvidenceKey.init))
-
-        var prototypes = target.prototypes
-        var seenPrototypes = Set(prototypes.map(EvidenceKey.init))
-        for prototype in source.prototypes {
-            guard seenPrototypes.insert(EvidenceKey(prototype)).inserted else { continue }
-            var moved = prototype
-            moved.personID = targetID
-            prototypes.append(moved)
-        }
-
-        var negatives: [HardNegative] = []
-        var seenNegatives: Set<EvidenceKey> = []
-        for negative in target.hardNegatives + source.hardNegatives {
-            let key = EvidenceKey(negative)
-            guard !mutualKeys.contains(key), seenNegatives.insert(key).inserted else {
-                continue
+        return try mutatePersons { persons in
+            guard let sourceIndex = persons.firstIndex(where: { $0.id == sourceID }) else {
+                throw LibraryError.personNotFound(sourceID)
             }
-            var moved = negative
-            moved.personID = targetID
-            negatives.append(moved)
+            guard let targetIndex = persons.firstIndex(where: { $0.id == targetID }) else {
+                throw LibraryError.personNotFound(targetID)
+            }
+            let source = persons[sourceIndex]
+            var target = persons[targetIndex]
+
+            let mutualKeys = Set(source.prototypes.map(EvidenceKey.init))
+                .union(target.prototypes.map(EvidenceKey.init))
+
+            var prototypes = target.prototypes
+            var seenPrototypes = Set(prototypes.map(EvidenceKey.init))
+            for prototype in source.prototypes {
+                guard seenPrototypes.insert(EvidenceKey(prototype)).inserted else { continue }
+                var moved = prototype
+                moved.personID = targetID
+                prototypes.append(moved)
+            }
+
+            var negatives: [HardNegative] = []
+            var seenNegatives: Set<EvidenceKey> = []
+            for negative in target.hardNegatives + source.hardNegatives {
+                let key = EvidenceKey(negative)
+                guard !mutualKeys.contains(key), seenNegatives.insert(key).inserted else {
+                    continue
+                }
+                var moved = negative
+                moved.personID = targetID
+                negatives.append(moved)
+            }
+
+            target.prototypes = prototypes
+            target.hardNegatives = negatives
+            // Leere Felder fuellen, belegte nie ueberschreiben: das Ziel ist die
+            // Person, die der Benutzer behalten wollte.
+            if target.email == nil { target.email = source.email }
+            if target.organization == nil { target.organization = source.organization }
+            target.updatedAt = updatedAt
+            persons[targetIndex] = target
+            persons.removeAll { $0.id == sourceID }
+
+            // Kein Sweep durch fremde Profile, anders als beim Loeschen.
+            return target
         }
-
-        target.prototypes = prototypes
-        target.hardNegatives = negatives
-        // Leere Felder fuellen, belegte nie ueberschreiben: das Ziel ist die
-        // Person, die der Benutzer behalten wollte.
-        if target.email == nil { target.email = source.email }
-        if target.organization == nil { target.organization = source.organization }
-        target.updatedAt = updatedAt
-        persons[targetIndex] = target
-        persons.removeAll { $0.id == sourceID }
-
-        // Kein Sweep durch fremde Profile, anders als beim Loeschen.
-        try write(persons)
-        return target
     }
 
     /// Loescht eine Person und liefert alles zurueck, was dafuer aus der
@@ -265,26 +333,26 @@ public actor IdentityStore {
     /// Prototypen abgeleiteten Negatives in fremden Profilen. Nur mit diesem
     /// Schnappschuss ist `restorePerson` verlustfrei.
     public func deletePerson(_ personID: PersonID) throws -> DeletedPerson? {
-        var persons = try listPersons()
-        guard let target = persons.first(where: { $0.id == personID }) else {
-            return nil
-        }
-        let evidenceKeys = Set(target.prototypes.map(EvidenceKey.init))
-        persons.removeAll { $0.id == personID }
-        var removedNegatives: [PersonID: [HardNegative]] = [:]
-        for index in persons.indices {
-            let owner = persons[index].id
-            let removed = persons[index].hardNegatives.filter {
-                evidenceKeys.contains(EvidenceKey($0))
+        try mutatePersons { persons in
+            guard let target = persons.first(where: { $0.id == personID }) else {
+                return nil
             }
-            guard !removed.isEmpty else { continue }
-            removedNegatives[owner] = removed
-            persons[index].hardNegatives.removeAll {
-                evidenceKeys.contains(EvidenceKey($0))
+            let evidenceKeys = Set(target.prototypes.map(EvidenceKey.init))
+            persons.removeAll { $0.id == personID }
+            var removedNegatives: [PersonID: [HardNegative]] = [:]
+            for index in persons.indices {
+                let owner = persons[index].id
+                let removed = persons[index].hardNegatives.filter {
+                    evidenceKeys.contains(EvidenceKey($0))
+                }
+                guard !removed.isEmpty else { continue }
+                removedNegatives[owner] = removed
+                persons[index].hardNegatives.removeAll {
+                    evidenceKeys.contains(EvidenceKey($0))
+                }
             }
+            return DeletedPerson(person: target, removedNegatives: removedNegatives)
         }
-        try write(persons)
-        return DeletedPerson(person: target, removedNegatives: removedNegatives)
     }
 
     /// Setzt einen Loeschvorgang punktgenau zurueck. Bewusst kein
@@ -294,37 +362,37 @@ public actor IdentityStore {
     /// scheitern, statt zwei gleichnamige Personen anzulegen.
     @discardableResult
     public func restorePerson(_ snapshot: DeletedPerson) throws -> Person {
-        var persons = try listPersons()
-        guard !persons.contains(where: { $0.id == snapshot.person.id }) else {
-            throw LibraryError.personAlreadyExists(snapshot.person.id)
-        }
-        try Self.validateUniqueName(snapshot.person.displayName, among: persons)
-        persons.append(snapshot.person)
-        for (owner, negatives) in snapshot.removedNegatives {
-            guard let index = persons.firstIndex(where: { $0.id == owner }) else {
-                continue
+        try mutatePersons { persons in
+            guard !persons.contains(where: { $0.id == snapshot.person.id }) else {
+                throw LibraryError.personAlreadyExists(snapshot.person.id)
             }
-            let existing = Set(persons[index].hardNegatives.map(EvidenceKey.init))
-            persons[index].hardNegatives.append(contentsOf: negatives.filter {
-                !existing.contains(EvidenceKey($0))
-            })
+            try Self.validateUniqueName(snapshot.person.displayName, among: persons)
+            persons.append(snapshot.person)
+            for (owner, negatives) in snapshot.removedNegatives {
+                guard let index = persons.firstIndex(where: { $0.id == owner }) else {
+                    continue
+                }
+                let existing = Set(persons[index].hardNegatives.map(EvidenceKey.init))
+                persons[index].hardNegatives.append(contentsOf: negatives.filter {
+                    !existing.contains(EvidenceKey($0))
+                })
+            }
+            return snapshot.person
         }
-        try write(persons)
-        return snapshot.person
     }
 
     private func updatePerson(
         _ personID: PersonID,
         _ mutate: (inout Person) throws -> Void
     ) throws -> Person {
-        var persons = try listPersons()
-        guard let index = persons.firstIndex(where: { $0.id == personID }) else {
-            throw LibraryError.personNotFound(personID)
+        try mutatePersons { persons in
+            guard let index = persons.firstIndex(where: { $0.id == personID }) else {
+                throw LibraryError.personNotFound(personID)
+            }
+            try mutate(&persons[index])
+            persons[index].updatedAt = Date()
+            return persons[index]
         }
-        try mutate(&persons[index])
-        persons[index].updatedAt = Date()
-        try write(persons)
-        return persons[index]
     }
 
     private nonisolated static func readDocument(
@@ -338,13 +406,66 @@ public actor IdentityStore {
         )
     }
 
-    private func write(_ persons: [Person]) throws {
-        try LibraryMutationCoordination.withExclusiveAccess(layout: layout) {
-            try JSONDocumentStore.write(
-                PersonsDocument(persons: persons),
-                to: layout.persons
-            )
+    private nonisolated static func snapshot(
+        layout: LibraryLayout
+    ) throws -> IdentityDocumentSnapshot {
+        guard FileManager.default.fileExists(atPath: layout.persons.path) else {
+            return IdentityDocumentSnapshot(persons: [], revision: nil)
         }
+        let document = try readDocument(layout: layout)
+        return IdentityDocumentSnapshot(
+            persons: document.persons,
+            revision: document.revision
+        )
+    }
+
+    private func mutatePersons<Result>(
+        _ mutate: (inout [Person]) throws -> Result
+    ) throws -> Result {
+        try LibraryMutationCoordination.withExclusiveTransaction(
+            layout: layout
+        ) { transaction in
+            try mutationAction(.afterExclusiveTransactionBeforeRead, transaction)
+            let snapshot = try Self.snapshot(
+                layout: layout,
+                transaction: transaction
+            )
+            var persons = snapshot.persons
+            let result = try mutate(&persons)
+            if persons != snapshot.persons {
+                _ = try Self.write(
+                    persons,
+                    layout: layout,
+                    transaction: transaction
+                )
+            }
+            return result
+        }
+    }
+
+    @discardableResult
+    private nonisolated static func write(
+        _ persons: [Person],
+        layout: LibraryLayout,
+        transaction: LibraryMutationTransaction
+    ) throws -> UUID {
+        try transaction.validate(layout: layout)
+        let revision = UUID()
+        try JSONDocumentStore.write(
+            PersonsDocument(revision: revision, persons: persons),
+            to: layout.persons
+        )
+        return revision
+    }
+
+    package nonisolated static func makePerson(
+        displayName: String,
+        createdAt: Date = Date()
+    ) throws -> Person {
+        Person(
+            displayName: try normalizedDisplayName(displayName),
+            createdAt: createdAt
+        )
     }
 
     /// Bewusst milde Prüfung: genau ein @, links und rechts davon etwas ohne

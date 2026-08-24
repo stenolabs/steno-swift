@@ -218,26 +218,25 @@ struct MeetingReportsIntegrationTests {
         #expect(await fixture.provider.callCount() > 0)
     }
 
-    @Test("concurrent report requests converge on one durable job")
+    @Test("successive report requests converge on one durable job")
     @MainActor
-    func concurrentRequestsConverge() async throws {
+    func successiveRequestsConverge() async throws {
         let fixture = try await ReportFixture.make()
         defer { fixture.remove() }
         let preflight = try await fixture.app.reportPreflight(for: fixture.meetingID)
 
-        async let first = fixture.app.requestMeetingMinutes(
+        let first = try await fixture.app.requestMeetingMinutes(
             meetingID: fixture.meetingID,
             textModelEndpointID: nil,
             preflight: preflight
         )
-        async let second = fixture.app.requestMeetingMinutes(
+        let second = try await fixture.app.requestMeetingMinutes(
             meetingID: fixture.meetingID,
             textModelEndpointID: nil,
             preflight: preflight
         )
-        let jobs = try await [first, second]
 
-        #expect(jobs[0].id == jobs[1].id)
+        #expect(first.id == second.id)
         #expect(try await fixture.store.list().count == 1)
     }
 
@@ -269,6 +268,38 @@ struct MeetingReportsIntegrationTests {
         #expect(reports.map(\.result.markdown) == ["new", "old"])
         #expect(jobs.count == 1)
         #expect(jobs.first?.meetingID == fixture.meetingID)
+    }
+
+    @Test("report jobs from a replaced demo generation stay historical")
+    @MainActor
+    func reportJobsAreGenerationScoped() async throws {
+        let currentGeneration = MeetingTransferGenerationID()
+        let fixture = try await ReportFixture.make(
+            metadata: MeetingMetadata(demoProvenance: DemoProvenance(
+                datasetID: "steno-demo-v1",
+                datasetVersion: "v2",
+                itemID: "report",
+                installationGenerationID: currentGeneration
+            ))
+        )
+        defer { fixture.remove() }
+        let stale = Job(
+            kind: .templateRender,
+            meetingID: fixture.meetingID,
+            importGenerationID: MeetingTransferGenerationID()
+        )
+        let current = Job(
+            kind: .templateRender,
+            meetingID: fixture.meetingID,
+            importGenerationID: currentGeneration
+        )
+        try await fixture.store.enqueue(stale)
+        try await fixture.store.enqueue(current)
+
+        let jobs = try await fixture.app.jobs(for: fixture.meetingID)
+
+        #expect(jobs.map(\.id) == [current.id])
+        #expect(try await fixture.store.list().count == 2)
     }
 
     @Test("queued report cancellation is persisted")
@@ -320,7 +351,9 @@ private struct ReportFixture {
     let revisionID: RevisionID
 
     @MainActor
-    static func make() async throws -> ReportFixture {
+    static func make(
+        metadata: MeetingMetadata? = nil
+    ) async throws -> ReportFixture {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
             "Steno-iPad-report-\(UUID().uuidString)",
             isDirectory: true
@@ -328,15 +361,26 @@ private struct ReportFixture {
         let library = try Library.open(at: root)
         let meeting = try await library.createMeeting(
             title: "Report",
-            status: .ready
+            status: .ready,
+            metadata: metadata
         )
         let person = Person(displayName: "Ada Lovelace")
-        try await IdentityStore(layout: library.layout).replacePersons([person])
+        let identityStore = try IdentityStore(layout: library.layout)
+        let identitySnapshot = try await identityStore.snapshot()
+        _ = try await identityStore.replacePersons(
+            [person],
+            expectedRevision: identitySnapshot.revision
+        )
         let diarizationRunID = RunID()
         let clusterID = "fixture/SPEAKER_0"
         let revision = TranscriptRevision(
             meetingID: meeting.id,
-            origin: .legacyImport,
+            // Wie mains Pipeline es nach einer echten Diarisierung schreibt
+            // (PipelineCoordinator.commitDiarizationRevision): der
+            // Diarisierungslauf steckt in der Herkunft, nicht nur in den
+            // Clusterverweisen - sonst laesst sich das Review nicht mehr
+            // gepinnt ableiten (TemplateRenderInputAssembler.loadForRendering).
+            origin: .finalRun(diarizationRunID),
             turns: [TranscriptTurn(
                 speaker: .cluster(
                     runID: diarizationRunID,
@@ -430,7 +474,20 @@ private actor ReportTextModelProvider: StructuredTextModelProvider {
         version: "1"
     )
     nonisolated let availability = TextModelAvailability.available
+    nonisolated let contextWindow = TextModelContextWindow(
+        maximumTokens: 1_000_000,
+        reservedResponseTokens: 0,
+        safetyTokens: 0
+    )
     private var calls = 0
+
+    func inputTokenCount(
+        template: Template,
+        request: TextModelRequest,
+        context: RenderContext
+    ) async throws -> Int {
+        1
+    }
 
     func generate(
         template: Template,

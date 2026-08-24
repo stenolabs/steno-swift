@@ -17,7 +17,8 @@ public enum MissingDiarizationModelJobRetrier {
             kind: .diarization,
             failureReason: .diarizationModelsNotInstalled,
             legacyErrorPrefix: legacyErrorPrefix,
-            legacyErrorSuffix: legacyErrorSuffix
+            legacyErrorSuffix: legacyErrorSuffix,
+            currentMeetingGenerationOnly: true
         )
     }
 }

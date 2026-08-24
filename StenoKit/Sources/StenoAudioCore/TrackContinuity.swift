@@ -189,7 +189,7 @@ public actor TrackContinuity {
                 min(remaining, AVAudioFramePosition(maximumSilenceFrames))
             )
             guard let silence = makeSilence(frameCount: frameCount) else { return }
-            yieldToWriter(silence)
+            guard yieldToWriter(silence, isSilence: true) else { return }
             writtenFrames += AVAudioFramePosition(frameCount)
         }
     }
@@ -199,18 +199,25 @@ public actor TrackContinuity {
         if let liveCopy = AudioBufferTransfer.copy(buffer) {
             liveContinuation.yield(.buffer(OwnedAudioBuffer(buffer: liveCopy)))
         }
-        yieldToWriter(buffer)
-        writtenFrames += AVAudioFramePosition(buffer.frameLength)
+        if yieldToWriter(buffer, isSilence: false) {
+            writtenFrames += AVAudioFramePosition(buffer.frameLength)
+        }
     }
 
-    private func yieldToWriter(_ buffer: sending AVAudioPCMBuffer) {
+    private func yieldToWriter(
+        _ buffer: sending AVAudioPCMBuffer,
+        isSilence: Bool
+    ) -> Bool {
         switch writerContinuation.yield(buffer) {
         case .dropped:
-            writerOverflowHandler()
-        case .enqueued, .terminated:
-            break
+            if !isSilence { writerOverflowHandler() }
+            return false
+        case .enqueued:
+            return true
+        case .terminated:
+            return false
         @unknown default:
-            break
+            return false
         }
     }
 

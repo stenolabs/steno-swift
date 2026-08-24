@@ -21,7 +21,7 @@ Alles bleibt lokal.
 - Import prüfen
 
 ## Participants
-Ada, Alex
+Ada, Grace
 
 ## Transcript
 [00:05] [You] Erste Zeile.

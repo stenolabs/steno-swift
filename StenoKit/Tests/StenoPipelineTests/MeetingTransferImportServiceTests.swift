@@ -955,7 +955,7 @@ struct MeetingTransferImportServiceTests {
 
     @Test("a prepared fresh retry cannot resolve a replacement generation with identical content")
     func freshRetryRejectsGenerationABA() async throws {
-        try await withTemporaryDirectory { root in
+        try await withBlockingTemporaryDirectory { root in
             let package = try await makeImportPackage(at: root, includeAudio: true)
             let target = try await makeImportTarget(at: root)
             let firstInterrupted = MeetingTransferImportService(
@@ -999,7 +999,7 @@ struct MeetingTransferImportServiceTests {
             let warmup = try await replacementInterrupted.prepareImport(at: package.url)
             try await replacementInterrupted.discardPrepared(sessionID: warmup.sessionID)
 
-            let pause = ImportServicePause()
+            let pause = BlockingTestPause(name: "prepared fresh import retry")
             let staleRetry = MeetingTransferImportService(
                 library: target.library,
                 jobStore: target.jobStore,
@@ -1009,7 +1009,7 @@ struct MeetingTransferImportServiceTests {
                 }
             )
             let stalePrepared = try await staleRetry.prepareImport(at: package.url)
-            let staleAttempt = Task {
+            let staleAttempt = blockingTestTask {
                 try await staleRetry.importPrepared(
                     sessionID: stalePrepared.sessionID,
                     choice: .process(
@@ -1477,22 +1477,6 @@ private struct ImportTarget: Sendable {
 
 private enum ImportServiceTestError: Error {
     case injected
-}
-
-private final class ImportServicePause: @unchecked Sendable {
-    private let arrived = Mutex(false)
-    private let resume = DispatchSemaphore(value: 0)
-
-    var hasArrived: Bool { arrived.withLock { $0 } }
-
-    func arriveAndWait() {
-        arrived.withLock { $0 = true }
-        resume.wait()
-    }
-
-    func release() {
-        resume.signal()
-    }
 }
 
 private func makeImportTarget(at root: URL) async throws -> ImportTarget {

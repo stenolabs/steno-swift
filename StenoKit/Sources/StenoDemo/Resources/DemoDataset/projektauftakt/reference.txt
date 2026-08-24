@@ -1,0 +1,10 @@
+Sprecherin A: Willkommen zum fiktiven Projektauftakt für die Musterstadt. Wir testen heute nur einen erfundenen Ablauf.
+Sprecher B: Das Ziel ist ein klarer Plan für einen kleinen, vollständig synthetischen Beispielservice.
+Sprecherin C: Ich übernehme die Skizze der Startseite und notiere offene Fragen für die nächste Runde.
+Sprecherin C: Ich schlage vor, die Hinweise direkt neben den Eingabefeldern zu platzieren.
+Sprecherin A: Einverstanden, dann kann die zweite Probe die Beschriftungen und die Reihenfolge prüfen.
+Sprecherin C: Für die Darstellung nutze ich neutrale Farben und eine gut lesbare, kurze Beispielsprache.
+Sprecher B: Ich ergänze einen Prüfpunkt für die Audiodauer und für die Zuordnung der drei Kunststimmen.
+Sprecherin C: Danach können wir den Entwurf in Ruhe gegen die fiktiven Anforderungen vergleichen.
+Sprecherin A: Zum Abschluss sammeln wir nur noch die nächsten Schritte und beenden diese Musterbesprechung.
+Sprecher B: Der nächste Termin ist ebenfalls erfunden und dient ausschließlich diesem gebündelten Demo-Datensatz.

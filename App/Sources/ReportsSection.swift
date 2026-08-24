@@ -30,7 +30,18 @@ struct ReportsSection: View {
     /// externe Endpunkte werden erst beim Rendern kontaktiert (nie vorab).
     private var availabilityHint: String? {
         guard !endpointDisplay.usesExternalEndpoint else { return nil }
-        return FoundationModelsProvider().availability.unavailabilityMessage
+        switch FoundationModelsProvider().availability {
+        case .available:
+            return nil
+        case .unavailable(.deviceNotEligible):
+            return String(localized: "This device does not support Apple Intelligence.")
+        case .unavailable(.appleIntelligenceNotEnabled):
+            return String(localized: "Apple Intelligence is not enabled.")
+        case .unavailable(.modelNotReady):
+            return String(localized: "The Apple Intelligence model is not available yet.")
+        case .unavailable(.unknown):
+            return String(localized: "The text model is currently unavailable.")
+        }
     }
 
     var body: some View {
@@ -124,6 +135,16 @@ struct ReportsSection: View {
             await refreshPreflight()
             await refreshLoop()
         }
+        // Die Wahl bleibt, ihr Inhalt wird nachgezogen. Ohne das behaelt eine
+        // offene Ansicht die Kopie vom Oeffnen: der Bericht ginge mit der
+        // alten `configurationRevision` in die Warteschlange und wuerde
+        // abgewiesen, und der Hinweis darueber naennte ein Ziel von gestern.
+        .onChange(of: textModelSettings.endpoints) {
+            selectedEndpointSnapshot = ReportTextModelDisplay.refreshedSelection(
+                selectedEndpointSnapshot,
+                in: textModelSettings.endpoints
+            )
+        }
     }
 
     /// Modellwahl je Erstellung; extern nur nach ausdrücklicher Wahl,
@@ -132,7 +153,8 @@ struct ReportsSection: View {
         Picker("Model", selection: selectedEndpointID) {
             Text("Apple Intelligence (on device)").tag(UUID?.none)
             ForEach(textModelSettings.endpoints, id: \.id) { endpoint in
-                Text("\(endpoint.name) (external)").tag(UUID?.some(endpoint.id))
+                Text("\(endpoint.name) (\(endpoint.hosting.displayName))")
+                    .tag(UUID?.some(endpoint.id))
             }
         }
         .labelsHidden()
@@ -151,19 +173,20 @@ struct ReportsSection: View {
         )
     }
 
-    private var externalModelNotice: ExternalModelNotice? {
+    private var externalModelNotice: LocalizedExternalModelNotice? {
         guard let snapshot = endpointDisplay.endpointSnapshot,
               let preflight
         else { return nil }
-        return try? ReportsDisclosurePresentation.externalNotice(
+        return try? LocalizedExternalModelNotice.make(
             endpoint: TextModelEndpoint(snapshot: snapshot),
-            preflight: preflight
+            disclosure: preflight.disclosure,
+            localDeviceDescription: "this Mac"
         )
     }
 
     private var externalModelNoticeError: String? {
         if case .unavailableExternal = endpointDisplay {
-            return "The selected text-model endpoint is no longer available."
+            return String(localized: "The selected text-model endpoint is no longer available.")
         }
         guard let snapshot = endpointDisplay.endpointSnapshot,
               let preflight else { return nil }
@@ -202,7 +225,7 @@ struct ReportsSection: View {
             return true
         }
         guard !open.isEmpty else { return nil }
-        return "\(open.count) of \(nameable.count) speakers are still unconfirmed; the minutes will call them \u{201C}Speaker 1\u{201D} and so on."
+        return String(localized: "\(open.count) of \(nameable.count) speakers are still unconfirmed; the minutes will call them \u{201C}Speaker 1\u{201D} and so on.")
     }
 
     private var shownReport: StoredTemplateResult? {
@@ -258,10 +281,11 @@ struct ReportsSection: View {
     }
 
     private func engineLabel(_ engine: EngineDescriptor) -> String {
+        let name = DemoDisplayLocalization.engineName(engine.name)
         if let modelVersion = engine.modelVersion {
-            return "\(engine.name) · \(modelVersion)"
+            return "\(name) · \(modelVersion)"
         }
-        return engine.name
+        return name
     }
 
     private func startRender() async {
@@ -370,7 +394,9 @@ struct ReportsSection: View {
 }
 
 enum ReportsPendingJobObservation {
-    static func statusLabel(for endpoint: ReportTextModelDisplay) -> String {
+    static func statusLabel(
+        for endpoint: ReportTextModelDisplay
+    ) -> LocalizedStringResource {
         "Generating with \(endpoint.modelLabel)…"
     }
 
@@ -382,6 +408,7 @@ enum ReportsPendingJobObservation {
         guard job.status == .failed,
               job.failureReason == .templateRenderInputChanged
                 || job.failureReason == .templateRenderPinsRequired
+                || job.failureReason == .textModelEndpointConfigurationIncomplete
         else { return }
         await refreshPreflight()
     }
@@ -440,7 +467,7 @@ enum ReportsDisclosurePresentation {
 struct MarkdownLiteView: View {
     let markdown: String
 
-    /// Lesbare Protokollschrift; die 13-pt-Systemgröße war im Einsatz zu klein.
+    /// Lesbare Protokollschrift; die 13-pt-Systemgröße war im Nutzungstest zu klein.
     /// Transkript und Protokoll teilen sich die Größe über das Token.
     private static let bodyFont = Steno.readingBody
 

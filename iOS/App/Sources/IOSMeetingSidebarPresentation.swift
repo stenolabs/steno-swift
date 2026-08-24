@@ -47,6 +47,17 @@ struct IOSMeetingSidebarPresentation: Equatable {
             : unsearchedTree
     }
 
+    static func emptyMeetingMessage(
+        isReady: Bool,
+        query: String
+    ) -> LocalizedStringResource {
+        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalizedQuery.isEmpty else {
+            return "No meeting titles match \u{201c}\(normalizedQuery)\u{201d}."
+        }
+        return isReady ? "No recordings yet." : "Opening the library\u{2026}"
+    }
+
     /// Eine Suche öffnet nur für die Dauer ihrer Anzeige die sichtbaren
     /// Knoten. Die übergebene gespeicherte Menge wird dabei nie verändert.
     func effectiveExpandedFolderIDs(persisted: Set<FolderID>) -> Set<FolderID> {
@@ -114,7 +125,8 @@ struct IOSMeetingSidebarPresentation: Equatable {
     /// "No folder". The UI can show the complete model and disable the no-op,
     /// while every accepted meeting drop has the same explicit menu route.
     func meetingActionPolicy(
-        for meetingID: MeetingID
+        for meetingID: MeetingID,
+        locale: Locale = .current
     ) -> IOSSidebarMeetingActionPolicy {
         let currentFolderID = meetingsByID[meetingID]?.folderID
         let destinations = unsearchedTree.folderNodes.flatMap { root in
@@ -131,10 +143,19 @@ struct IOSMeetingSidebarPresentation: Equatable {
             }
         } + [IOSSidebarMoveDestination(
             folderID: nil,
-            title: "No folder",
+            title: localized("No folder", locale: locale),
             isCurrent: currentFolderID == nil && meetingsByID[meetingID] != nil
         )]
         return IOSSidebarMeetingActionPolicy(moveDestinations: destinations)
+    }
+
+    private func localized(
+        _ resource: LocalizedStringResource,
+        locale: Locale
+    ) -> String {
+        var resource = resource
+        resource.locale = locale
+        return String(localized: resource)
     }
 
     /// Ein Hauptordner mit Kindern würde beim Verschachteln eine dritte Ebene
@@ -177,7 +198,7 @@ struct IOSMeetingSidebarPresentation: Equatable {
         for folderID: FolderID
     ) -> IOSSidebarFolderDeletionConfirmation? {
         guard let folder = folder(for: folderID) else { return nil }
-        let message: String
+        let message: LocalizedStringResource
         if hasSharedChild(folderID) {
             message = "Only the folder goes away. Its direct meetings stay in the library and move to No folder. Its subfolders move to the top level."
         } else {
@@ -321,7 +342,7 @@ enum IOSSidebarNoFolderDropSurface: Equatable, Identifiable {
         }
     }
 
-    var accessibilityHint: String {
+    var accessibilityHint: LocalizedStringResource {
         switch self {
         case .foldersHeading:
             "Drop a meeting here to move it to No folder. Drop a subfolder here to move it to the top level."
@@ -354,8 +375,8 @@ struct IOSSidebarFolderActionPolicy: Equatable {
 }
 
 struct IOSSidebarFolderDeletionConfirmation: Equatable {
-    let title: String
-    let message: String
+    let title: LocalizedStringResource
+    let message: LocalizedStringResource
 }
 
 private extension UTType {

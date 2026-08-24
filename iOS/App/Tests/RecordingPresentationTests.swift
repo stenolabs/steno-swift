@@ -4,6 +4,58 @@ import Testing
 
 @Suite("Recording model presentation")
 struct RecordingPresentationTests {
+    @Test("empty recording states localize at the presentation boundary")
+    func emptyRecordingStatesLocalize() {
+        #expect(
+            german(RecordingPresentation.emptyStateText(
+                isRecording: false,
+                hasTranscriptionFailure: false
+            )) == "Keine Aufnahme."
+        )
+        #expect(
+            german(RecordingPresentation.emptyStateText(
+                isRecording: true,
+                hasTranscriptionFailure: false
+            )) == "Hört zu…"
+        )
+        #expect(
+            german(RecordingPresentation.emptyStateText(
+                isRecording: true,
+                hasTranscriptionFailure: true
+            )) == "Auf diesem Gerät ist kein Live-Transkript verfügbar."
+        )
+    }
+
+    @Test("an interruption while preparing is retained until capture has started")
+    func preparingInterruptionIsRetained() {
+        var latch = RecordingInterruptionLatch()
+
+        let action = latch.receive(
+            "another app or a call took the microphone",
+            while: .preparing
+        )
+
+        #expect(action == .deferUntilStarted)
+        #expect(
+            latch.takePendingReason()
+                == "another app or a call took the microphone"
+        )
+        #expect(latch.takePendingReason() == nil)
+    }
+
+    @Test("an interruption while recording stops immediately")
+    func recordingInterruptionStopsImmediately() {
+        var latch = RecordingInterruptionLatch()
+
+        let action = latch.receive(
+            "audio services restarted",
+            while: .recording
+        )
+
+        #expect(action == .stop("audio services restarted"))
+        #expect(latch.takePendingReason() == nil)
+    }
+
     @Test("an unchanged explicit language remains explicit for recording")
     func exactExplicitLanguageRemainsExplicit() {
         let selection = TranscriptionLanguageSelection(
@@ -58,7 +110,7 @@ struct RecordingPresentationTests {
                 isRecording: true,
                 transcriptionFailure: nil,
                 modelReady: false
-            ) == "Recording without transcription. The speech model is not installed."
+            ).map(english) == "Recording without transcription. The speech model is not installed."
         )
     }
 
@@ -69,7 +121,7 @@ struct RecordingPresentationTests {
                 isRecording: true,
                 transcriptionFailure: "SpeechAnalyzer failed",
                 modelReady: false
-            ) == "Recording. No live transcript: SpeechAnalyzer failed"
+            ).map(english) == "Recording. No live transcript: SpeechAnalyzer failed"
         )
     }
 
@@ -102,7 +154,7 @@ struct RecordingPresentationTests {
                 hasContent: true,
                 isSaving: false,
                 failure: "Disk full"
-            ) == "Notes could not be saved: Disk full"
+            ).map(english) == "Notes could not be saved: Disk full"
         )
     }
 
@@ -113,7 +165,19 @@ struct RecordingPresentationTests {
                 hasContent: true,
                 isSaving: true,
                 failure: nil
-            ) == "Saving notes…"
+            ).map(english) == "Saving notes…"
         )
+    }
+
+    private func english(_ resource: LocalizedStringResource) -> String {
+        var resource = resource
+        resource.locale = Locale(identifier: "en")
+        return String(localized: resource)
+    }
+
+    private func german(_ resource: LocalizedStringResource) -> String {
+        var resource = resource
+        resource.locale = Locale(identifier: "de")
+        return String(localized: resource)
     }
 }

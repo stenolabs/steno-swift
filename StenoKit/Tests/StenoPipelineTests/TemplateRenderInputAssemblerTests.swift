@@ -5,6 +5,7 @@ import StenoIntelligence
 import Testing
 @testable import StenoLibrary
 @testable import StenoPipeline
+import StenoTranscription
 
 @Suite("Template render input assembly")
 struct TemplateRenderInputAssemblerTests {
@@ -53,6 +54,117 @@ struct TemplateRenderInputAssemblerTests {
             }
         }
     }
+
+    @Test("the output locale uses the meeting's pinned source locale")
+    func outputLocaleUsesPinnedSourceLocale() async throws {
+        try await withTemporaryDirectory { root in
+            let library = try Library.open(at: root)
+            let meeting = try await library.createMeeting(
+                title: "Pinned",
+                status: .ready,
+                sourceLocale: try MeetingSourceLocale(
+                    localeIdentifier: "de_DE",
+                    origin: .explicit
+                )
+            )
+            let revision = TranscriptRevision(
+                meetingID: meeting.id,
+                origin: .liveProvisional,
+                turns: []
+            )
+
+            let locale = TemplateRenderInputAssembler.outputLocaleIdentifier(
+                library: library,
+                meeting: meeting,
+                revision: revision
+            )
+
+            #expect(locale == "de-DE")
+        }
+    }
+
+    @Test("the output locale recovers from the final ASR artifact when unpinned")
+    func outputLocaleRecoversFromFinalASRArtifact() async throws {
+        try await withTemporaryDirectory { root in
+            let library = try Library.open(at: root)
+            let meeting = try await library.createMeeting(title: "Imported", status: .ready)
+            let finalASRRunID = RunID()
+            let diarizationRunID = RunID()
+            try writeRenderInputRun(
+                ProcessingRun(
+                    id: finalASRRunID,
+                    meetingID: meeting.id,
+                    kind: .finalASR,
+                    engine: EngineDescriptor(name: "Test", version: "1"),
+                    status: .finished
+                ),
+                artifact: FinalASRArtifact(
+                    jobID: JobID(),
+                    revisionID: RevisionID(),
+                    tracks: [
+                        FinalASRTrackResult(
+                            assetID: MediaAssetID(),
+                            assetKind: .imported,
+                            output: TranscriptOutput(localeIdentifier: "de_DE", blocks: [])
+                        ),
+                    ]
+                ),
+                artifactName: "transcript.json",
+                layout: library.layout
+            )
+            try writeRenderInputRun(
+                ProcessingRun(
+                    id: diarizationRunID,
+                    meetingID: meeting.id,
+                    kind: .diarization,
+                    engine: EngineDescriptor(name: "Test", version: "1"),
+                    status: .finished
+                ),
+                artifact: DiarizationArtifact(
+                    jobID: JobID(),
+                    sourceRunID: finalASRRunID,
+                    revisionID: RevisionID(),
+                    tracks: []
+                ),
+                artifactName: "diarization.json",
+                layout: library.layout
+            )
+            let revision = TranscriptRevision(
+                meetingID: meeting.id,
+                origin: .finalRun(diarizationRunID),
+                turns: []
+            )
+
+            let locale = TemplateRenderInputAssembler.outputLocaleIdentifier(
+                library: library,
+                meeting: meeting,
+                revision: revision
+            )
+
+            #expect(locale == "de-DE")
+        }
+    }
+
+    @Test("an unfinished or missing diarization run yields no output locale hint")
+    func outputLocaleIsNilWithoutACommittedDiarizationRun() async throws {
+        try await withTemporaryDirectory { root in
+            let library = try Library.open(at: root)
+            let meeting = try await library.createMeeting(title: "No run", status: .ready)
+            let revision = TranscriptRevision(
+                meetingID: meeting.id,
+                origin: .finalRun(RunID()),
+                turns: []
+            )
+
+            let locale = TemplateRenderInputAssembler.outputLocaleIdentifier(
+                library: library,
+                meeting: meeting,
+                revision: revision
+            )
+
+            #expect(locale == nil)
+        }
+    }
 }
 
 private struct RenderInputFixture {
@@ -78,7 +190,10 @@ private func makeRenderInputFixture(at root: URL) async throws -> RenderInputFix
         organization: "Analytical Engines"
     )
     let additional = Person(displayName: "Grace Hopper")
-    try await IdentityStore(layout: library.layout).replacePersons([confirmed, additional])
+    try await replacePersonsForTest(
+        [confirmed, additional],
+        layout: library.layout
+    )
     _ = try await library.updateAdditionalMeetingParticipants(
         meeting.id,
         participantIDs: [additional.id]
@@ -95,7 +210,10 @@ private func makeRenderInputFixture(at root: URL) async throws -> RenderInputFix
     )
     let revision = TranscriptRevision(
         meetingID: meeting.id,
-        origin: .liveProvisional,
+        // Wie mains Pipeline es nach einer echten Diarisierung schreibt
+        // (PipelineCoordinator.commitDiarizationRevision): der Diarisierungs-
+        // lauf steckt in der Herkunft, nicht nur in den Clusterverweisen.
+        origin: .finalRun(runID),
         turns: [
             TranscriptTurn(
                 speaker: .cluster(runID: runID, clusterID: clusterID),
@@ -110,7 +228,7 @@ private func makeRenderInputFixture(at root: URL) async throws -> RenderInputFix
     _ = try await library.appendRevision(revision)
     try await MeetingNotesStore(layout: library.layout).setNotes(
         meeting.id,
-        to: "Synthetic Project"
+        to: "Project Aurora"
     )
     return RenderInputFixture(library: library, meeting: meeting, revision: revision)
 }

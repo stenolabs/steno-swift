@@ -49,7 +49,7 @@ struct ModelChecksumManifestTests {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let manifest = ModelChecksumManifest(entries: ["absent.bin": String(repeating: "0", count: 64)])
-        #expect(throws: DiarizationError.self) {
+        #expect(throws: ModelManifestError.self) {
             try manifest.verify(directory: directory)
         }
     }

@@ -573,7 +573,10 @@ struct AppModelFolderIntegrationTests {
         fixture.failTheNextFolderLoad()
 
         #expect(await fixture.app.createFolder(named: "Unpublished") == nil)
-        #expect(fixture.app.startupFailure?.contains("folders") == true)
+        #expect(
+            fixture.app.startupFailure?
+                .contains(FolderFixtureError.storeOpenFailed.localizedDescription) == true
+        )
     }
 
     @Test("a delete error after a committed index removal never restores an orphan folder ID")
@@ -618,7 +621,11 @@ struct AppModelFolderIntegrationTests {
         #expect(try await fixture.currentLibrary.loadMeeting(meeting).folderID == nil)
         #expect(fixture.app.meetings.map(\.id) == [meeting])
         #expect(fixture.app.folders.isEmpty)
-        #expect(fixture.app.startupFailure?.contains("folders") == true)
+        guard case .folders(let failure) = fixture.app.libraryIssue else {
+            Issue.record("Expected the unreadable folder tree to publish a folder issue")
+            return
+        }
+        #expect(!failure.isEmpty)
     }
 
     @Test("folder-store startup failure remains visible across meeting reloads")

@@ -4,21 +4,43 @@ import StenoIdentity
 
 public struct SpeakerPresentation: Equatable, Sendable {
     public let label: String?
+    public let labelKind: SpeakerLabelKind
     public let marker: SpeakerMarker?
     public let channel: String?
     public let originCue: String?
 
     public init(
         label: String?,
+        labelKind: SpeakerLabelKind = .verbatim,
         marker: SpeakerMarker?,
         channel: String?,
         originCue: String? = nil
     ) {
         self.label = label
+        self.labelKind = labelKind
         self.marker = marker
         self.channel = channel
         self.originCue = originCue
     }
+}
+
+/// Describes where a visible speaker label came from without making the apps
+/// infer semantics from a user-visible string.
+public enum SpeakerLabelKind: Equatable, Sendable {
+    case verbatim
+    case me
+    case others
+    case unknown
+    case namedPerson
+    case multiplePeople
+    case probablePerson(String)
+    case generic(number: Int?, identifier: String, source: SpeakerLabelSource)
+}
+
+public enum SpeakerLabelSource: Equatable, Sendable {
+    case none
+    case microphone
+    case system
 }
 
 public enum SpeakerMarker: Equatable, Sendable {
@@ -55,14 +77,22 @@ public enum SpeakerPresentationResolver {
 
         switch reference {
         case .channel(let label):
+            let kind: SpeakerLabelKind = switch label {
+            case "Ich": .me
+            case "Andere": .others
+            default: .verbatim
+            }
             return SpeakerPresentation(
                 label: ChannelLabel.speakerLabel(label),
+                labelKind: kind,
                 marker: nil,
                 channel: label
             )
         case .person(let personID):
+            let name = review?.persons.first { $0.id == personID }?.displayName
             return SpeakerPresentation(
-                label: review?.persons.first { $0.id == personID }?.displayName ?? "Named person",
+                label: name ?? "Named person",
+                labelKind: name == nil ? .namedPerson : .verbatim,
                 marker: .person(personID),
                 channel: nil
             )
@@ -72,6 +102,9 @@ public enum SpeakerPresentationResolver {
                 label: imported.wasConfirmedAtSource && !text.isEmpty
                     ? text
                     : "Unknown speaker",
+                labelKind: imported.wasConfirmedAtSource && !text.isEmpty
+                    ? .verbatim
+                    : .unknown,
                 marker: nil,
                 channel: nil,
                 originCue: "Imported text label - not a locally confirmed identity"
@@ -110,13 +143,20 @@ public enum SpeakerPresentationResolver {
         let clusterID = SpeakerClusterKey(clusterID: cluster.clusterID).clusterID
 
         if cluster.containsMultipleSpeakers || cluster.reviewState == .multiple {
-            return SpeakerPresentation(label: "Multiple people", marker: nil, channel: channel)
+            return SpeakerPresentation(
+                label: "Multiple people",
+                labelKind: .multiplePeople,
+                marker: nil,
+                channel: channel
+            )
         }
 
         switch cluster.reviewState {
         case .confirmed(let personID):
+            let name = review.persons.first { $0.id == personID }?.displayName
             return SpeakerPresentation(
-                label: review.persons.first { $0.id == personID }?.displayName ?? "Named person",
+                label: name ?? "Named person",
+                labelKind: name == nil ? .namedPerson : .verbatim,
                 marker: .person(personID),
                 channel: channel
             )
@@ -126,20 +166,34 @@ public enum SpeakerPresentationResolver {
             }
             return SpeakerPresentation(label: "\(name)?", marker: .person(personID), channel: channel)
         case .generic, .unreviewed:
-            let label = review.suggestions.first {
+            let suggestedName = review.suggestions.first {
                 $0.runID == review.runID
                     && SpeakerClusterKey.normalizedChannel($0.channel) == channel
                     && SpeakerClusterKey(clusterID: $0.clusterID).clusterID == clusterID
                     && $0.status == .confirmed
-            }?.suggestedName.map { "Probably \($0)" }
-                ?? generic(clusterID: clusterID, channel: channel).label
+            }?.suggestedName
+            if let suggestedName {
+                return SpeakerPresentation(
+                    label: "Probably \(suggestedName)",
+                    labelKind: .probablePerson(suggestedName),
+                    marker: unconfirmedMarker(for: cluster, review: review),
+                    channel: channel
+                )
+            }
+            let generic = generic(clusterID: clusterID, channel: channel)
             return SpeakerPresentation(
-                label: label,
+                label: generic.label,
+                labelKind: generic.labelKind,
                 marker: unconfirmedMarker(for: cluster, review: review),
                 channel: channel
             )
         case .multiple:
-            return SpeakerPresentation(label: "Multiple people", marker: nil, channel: channel)
+            return SpeakerPresentation(
+                label: "Multiple people",
+                labelKind: .multiplePeople,
+                marker: nil,
+                channel: channel
+            )
         }
     }
 
@@ -174,15 +228,24 @@ public enum SpeakerPresentationResolver {
             .map { $0 + 1 }
         let base = number.map { "Speaker \($0)" } ?? clusterID
         let label: String
+        let source: SpeakerLabelSource
         switch channel {
         case MediaAsset.Kind.micTrack.rawValue:
             label = "\(base) (microphone)"
+            source = .microphone
         case MediaAsset.Kind.systemTrack.rawValue:
             label = "\(base) (system)"
+            source = .system
         default:
             label = base
+            source = .none
         }
-        return SpeakerPresentation(label: label, marker: nil, channel: channel)
+        return SpeakerPresentation(
+            label: label,
+            labelKind: .generic(number: number, identifier: clusterID, source: source),
+            marker: nil,
+            channel: channel
+        )
     }
 }
 

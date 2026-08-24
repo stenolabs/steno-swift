@@ -8,6 +8,14 @@ import Foundation
 /// here and every revocation surfaces as an `AudioSessionEvent` instead of a
 /// silent gap in the recording.
 public actor AudioSessionController {
+    public struct MeteringLease: Hashable, Sendable {
+        fileprivate let id: UUID
+    }
+
+    public struct RecordingLease: Hashable, Sendable {
+        fileprivate let id: UUID
+    }
+
     /// Recording mode. Which one produces better ASR and diarisation on real
     /// room recordings is measurement task R4 in `docs/PLAN-IOS.md`, not a
     /// matter of taste, so it stays configurable and defaults to the mode
@@ -27,14 +35,21 @@ public actor AudioSessionController {
     }
 
     private let session: AVAudioSession
-    private var observers: [Task<Void, Never>] = []
+    private let notificationCenter: NotificationCenter
+    private var observers: [NSObjectProtocol] = []
     private var continuations: [UUID: AsyncStream<AudioSessionEvent>.Continuation] = [:]
+    private var ownership = AudioSessionOwnership()
+    private var meteringStops: [UUID: @Sendable () async -> Void] = [:]
 
-    public init(session: AVAudioSession = .sharedInstance()) {
+    public init(
+        session: AVAudioSession = .sharedInstance(),
+        notificationCenter: NotificationCenter = .default
+    ) {
         self.session = session
+        self.notificationCenter = notificationCenter
     }
 
-    /// Configures the session for recording without activating it.
+    /// Configures the idle shared session without activating it.
     ///
     /// `.playAndRecord` rather than `.record`, because speaker review plays
     /// audio excerpts back while the library stays recordable.
@@ -43,24 +58,62 @@ public actor AudioSessionController {
     /// become the input, and HFP is a narrowband channel that would cost more
     /// transcription accuracy than the convenience is worth. The built-in
     /// microphone or a wired/USB interface is the intended source.
-    public func configure(mode: Mode = .standard) throws {
-        try session.setCategory(
-            .playAndRecord,
-            mode: mode.sessionMode,
-            options: [.defaultToSpeaker]
-        )
+    public func configureForReadiness(mode: Mode = .standard) throws -> Bool {
+        guard ownership.allowsReadinessConfiguration else { return false }
+        try configureSession(mode: mode)
+        return true
     }
 
-    public func activate() throws {
-        try session.setActive(true)
-        startObservingIfNeeded()
+    /// Reserves the shared session for diagnostics. A recording atomically
+    /// takes this lease and waits for its capture tap to be removed before it
+    /// changes or activates the session itself.
+    public func beginMetering(
+        mode: Mode = .standard,
+        stopBeforeRecording: @Sendable @escaping () async -> Void
+    ) throws -> MeteringLease? {
+        let id = UUID()
+        guard ownership.beginMetering(id) else { return nil }
+        meteringStops[id] = stopBeforeRecording
+        do {
+            try configureSession(mode: mode)
+            try activateSession()
+            return MeteringLease(id: id)
+        } catch {
+            meteringStops[id] = nil
+            _ = ownership.endMetering(id)
+            try? deactivateSession()
+            throw error
+        }
     }
 
-    public func deactivate() throws {
-        try session.setActive(
-            false,
-            options: [.notifyOthersOnDeactivation]
-        )
+    public func endMetering(_ lease: MeteringLease) throws {
+        meteringStops[lease.id] = nil
+        guard ownership.endMetering(lease.id) else { return }
+        try deactivateSession()
+    }
+
+    /// Recording owns the irreplaceable capture. Claim ownership before the
+    /// first suspension so no readiness screen can configure or reactivate
+    /// the process-wide session while its old tap is being removed.
+    public func beginRecording(mode: Mode = .standard) async throws -> RecordingLease {
+        let lease = RecordingLease(id: UUID())
+        let meteringID = ownership.beginRecording(lease.id)
+        let stopMetering = meteringID.flatMap { meteringStops.removeValue(forKey: $0) }
+        await stopMetering?()
+        do {
+            try configureSession(mode: mode)
+            try activateSession()
+            return lease
+        } catch {
+            _ = ownership.endRecording(lease.id)
+            try? deactivateSession()
+            throw error
+        }
+    }
+
+    public func endRecording(_ lease: RecordingLease) throws {
+        guard ownership.endRecording(lease.id) else { return }
+        try deactivateSession()
     }
 
     /// Events for as long as the returned stream is held.
@@ -95,6 +148,26 @@ public actor AudioSessionController {
         continuations[id] = nil
     }
 
+    private func configureSession(mode: Mode) throws {
+        try session.setCategory(
+            .playAndRecord,
+            mode: mode.sessionMode,
+            options: [.defaultToSpeaker]
+        )
+    }
+
+    private func activateSession() throws {
+        try session.setActive(true)
+        startObservingIfNeeded()
+    }
+
+    private func deactivateSession() throws {
+        try session.setActive(
+            false,
+            options: [.notifyOthersOnDeactivation]
+        )
+    }
+
     private func emit(_ event: AudioSessionEvent) {
         for continuation in continuations.values {
             continuation.yield(event)
@@ -103,40 +176,41 @@ public actor AudioSessionController {
 
     private func startObservingIfNeeded() {
         guard observers.isEmpty else { return }
-        let center = NotificationCenter.default
-
         observers.append(
-            Task { [weak self] in
-                let notifications = center.notifications(
-                    named: AVAudioSession.interruptionNotification
-                )
-                for await notification in notifications {
-                    guard let event = Self.interruptionEvent(from: notification) else {
-                        continue
-                    }
+            notificationCenter.addObserver(
+                forName: AVAudioSession.interruptionNotification,
+                object: nil,
+                queue: nil
+            ) { [weak self] notification in
+                guard let event = Self.interruptionEvent(from: notification) else {
+                    return
+                }
+                Task { [weak self] in
                     await self?.emit(event)
                 }
             }
         )
 
         observers.append(
-            Task { [weak self] in
-                let notifications = center.notifications(
-                    named: AVAudioSession.routeChangeNotification
-                )
-                for await notification in notifications {
-                    let reason = Self.routeChangeReason(from: notification)
+            notificationCenter.addObserver(
+                forName: AVAudioSession.routeChangeNotification,
+                object: nil,
+                queue: nil
+            ) { [weak self] notification in
+                let reason = Self.routeChangeReason(from: notification)
+                Task { [weak self] in
                     await self?.emit(.routeChanged(reason))
                 }
             }
         )
 
         observers.append(
-            Task { [weak self] in
-                let notifications = center.notifications(
-                    named: AVAudioSession.mediaServicesWereResetNotification
-                )
-                for await _ in notifications {
+            notificationCenter.addObserver(
+                forName: AVAudioSession.mediaServicesWereResetNotification,
+                object: nil,
+                queue: nil
+            ) { [weak self] _ in
+                Task { [weak self] in
                     await self?.emit(.mediaServicesWereReset)
                 }
             }
@@ -145,11 +219,43 @@ public actor AudioSessionController {
 
     deinit {
         for observer in observers {
-            observer.cancel()
+            notificationCenter.removeObserver(observer)
         }
         for continuation in continuations.values {
             continuation.finish()
         }
+    }
+}
+
+struct AudioSessionOwnership {
+    private var recordingID: UUID?
+    private var meteringID: UUID?
+
+    var isRecording: Bool { recordingID != nil }
+    var allowsReadinessConfiguration: Bool { recordingID == nil }
+
+    mutating func beginMetering(_ id: UUID) -> Bool {
+        guard recordingID == nil, meteringID == nil else { return false }
+        meteringID = id
+        return true
+    }
+
+    mutating func endMetering(_ id: UUID) -> Bool {
+        guard meteringID == id else { return false }
+        meteringID = nil
+        return recordingID == nil
+    }
+
+    mutating func beginRecording(_ id: UUID) -> UUID? {
+        recordingID = id
+        defer { meteringID = nil }
+        return meteringID
+    }
+
+    mutating func endRecording(_ id: UUID) -> Bool {
+        guard recordingID == id else { return false }
+        recordingID = nil
+        return true
     }
 }
 

@@ -21,6 +21,7 @@ public enum RecordingStopReason: Equatable, Sendable {
     case lowDiskSpace
     case writerFailure(AudioTrack)
     case ringBufferOverflow(AudioTrack)
+    case diskSpaceMonitoringFailure
 }
 
 public struct RecordingResult: Sendable {
@@ -65,6 +66,7 @@ public actor RecordingSession {
     private let ringCapacity: Int
     private let diskCheckInterval: Duration
     private let continuityTickInterval: Duration
+    private let maximumConsecutiveDiskProbeFailures = 30
 
     private var pipelines: [AudioTrack: TrackPipeline] = [:]
     private var availableLiveStreams: [AudioTrack: LiveAudioEventStream] = [:]
@@ -308,7 +310,7 @@ public actor RecordingSession {
                 guard let writer = writers[track],
                       let format = formats[track] else { continue }
                 let summary = try await writer.close()
-                let asset = try await library.registerMediaAsset(
+                let asset = try await library.registerCapturedMediaAsset(
                     for: meetingID,
                     sourceURL: writer.url,
                     kind: track == .microphone ? .micTrack : .systemTrack,
@@ -316,7 +318,6 @@ public actor RecordingSession {
                     duration: summary.duration
                 )
                 assets[track] = asset
-                try FileManager.default.removeItem(at: writer.url)
             }
             _ = try await library.updateMeetingStatus(meetingID, to: .ready)
             await endActivityIfNeeded()
@@ -438,11 +439,13 @@ public actor RecordingSession {
     private func startDiskMonitor() {
         diskMonitorTask = Task { [weak self] in
             guard let self else { return }
+            var consecutiveFailures = 0
             while !Task.isCancelled {
                 do {
                     try await Task.sleep(for: self.diskCheckInterval)
                     guard !Task.isCancelled else { return }
                     let available = try self.availableDiskBytes(self.outputDirectory)
+                    consecutiveFailures = 0
                     if available < DiskSpaceChecker.minimumRecordingBytes {
                         await self.diskSpaceDidRunLow(availableBytes: available)
                         return
@@ -450,7 +453,13 @@ public actor RecordingSession {
                 } catch is CancellationError {
                     return
                 } catch {
-                    continue
+                    consecutiveFailures += 1
+                    guard consecutiveFailures
+                        >= self.maximumConsecutiveDiskProbeFailures else {
+                        continue
+                    }
+                    await self.diskSpaceMonitorDidFail(error)
+                    return
                 }
             }
         }
@@ -486,6 +495,15 @@ public actor RecordingSession {
             error: .insufficientDiskSpace(
                 requiredBytes: DiskSpaceChecker.minimumRecordingBytes,
                 availableBytes: availableBytes
+            )
+        )
+    }
+
+    private func diskSpaceMonitorDidFail(_ error: any Error) {
+        requestAutomaticStop(
+            reason: .diskSpaceMonitoringFailure,
+            error: .diskSpaceMonitoringFailed(
+                message: error.localizedDescription
             )
         )
     }

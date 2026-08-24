@@ -1,0 +1,64 @@
+{
+  "schemaVersion" : 1,
+  "datasetID" : "synthetic-demo",
+  "datasetVersion" : "2026-08-23",
+  "generator" : {
+    "generator" : "rhasspy/piper",
+    "generatorRevision" : "38917ffd8c0e219c6581d73e07b30ef1d572fce1",
+    "model" : "de_DE-mls-medium",
+    "modelRevision" : "7e8200c80dbc9147404face0d3ee0bb69995d873",
+    "speakerIDs" : ["2422", "4536", "6507"],
+    "inputScriptSHA256" : "0a7c729a449950c636e95b39e2856e4a7eda2e5c69d2f8defee35797d122f7d2",
+    "mixParameters" : { "sampleRate" : 22050, "fixedPointFractionBits" : 16, "speakerAGainDB" : 0, "speakerBGainDB" : -1, "speakerCGainDB" : -0.5, "speakerAGainNumerator" : 65536, "speakerBGainNumerator" : 58409, "speakerCGainNumerator" : 61870 },
+    "license" : "Piper MIT; Piper Voices MIT; model card declares MLS CC BY 4.0",
+    "modificationProvenance" : "Fully synthetic German fictional scripts, Piper synthesis, deterministic PCM16 mixing."
+  },
+  "meetings" : [
+    {
+      "id" : "00000000-0000-7000-8000-000000000001",
+      "itemID" : "projektauftakt",
+      "title" : "DEMO: Projektauftakt Musterstadt",
+      "createdAtUTC" : "2026-08-21T12:00:00Z",
+      "transcript" : { "id" : "00000000-0000-7000-8000-000000000101", "resourceID" : "transcript-projektauftakt", "createdAtUTC" : "2026-08-21T12:01:00Z" },
+      "audio" : { "mediaAssetID" : "00000000-0000-7000-8000-000000000201", "resourceID" : "audio-projektauftakt", "sampleRate" : 22050, "duration" : 67.45251700680272 },
+      "runs" : [{ "id" : "00000000-0000-7000-8000-000000000301", "resourceIDs" : ["notes-projektauftakt", "report-projektauftakt", "reference-text-projektauftakt", "reference-rttm-projektauftakt", "attribution"] }]
+    },
+    {
+      "id" : "00000000-0000-7000-8000-000000000002",
+      "itemID" : "wochenrunde",
+      "title" : "DEMO: Wochenrunde",
+      "createdAtUTC" : "2026-08-22T12:00:00Z",
+      "transcript" : { "id" : "00000000-0000-7000-8000-000000000102", "resourceID" : "transcript-wochenrunde", "createdAtUTC" : "2026-08-22T12:01:00Z" },
+      "audio" : { "mediaAssetID" : "00000000-0000-7000-8000-000000000202", "resourceID" : "audio-wochenrunde", "sampleRate" : 22050, "duration" : 59.45424036281179 },
+      "runs" : [{ "id" : "00000000-0000-7000-8000-000000000302", "resourceIDs" : ["notes-wochenrunde", "reference-text-wochenrunde", "reference-rttm-wochenrunde", "attribution"] }]
+    },
+    {
+      "id" : "00000000-0000-7000-8000-000000000003",
+      "itemID" : "produktinterview",
+      "title" : "DEMO: Produktinterview",
+      "createdAtUTC" : "2026-08-23T12:00:00Z",
+      "transcript" : { "id" : "00000000-0000-7000-8000-000000000103", "resourceID" : "transcript-produktinterview", "createdAtUTC" : "2026-08-23T12:01:00Z" },
+      "audio" : { "mediaAssetID" : "00000000-0000-7000-8000-000000000203", "resourceID" : "audio-produktinterview", "sampleRate" : 22050, "duration" : 59.86648526077097 },
+      "runs" : [{ "id" : "00000000-0000-7000-8000-000000000303", "resourceIDs" : ["report-produktinterview", "reference-text-produktinterview", "reference-rttm-produktinterview", "attribution"] }]
+    }
+  ],
+  "resources" : [
+    { "id" : "attribution", "kind" : "attribution", "relativePath" : "ATTRIBUTION.md", "byteCount" : 1437, "sha256" : "c14676c1501a68fedc47457958d340264ba86a63faf15930d2b8b48f95b04ef1" },
+    { "id" : "audio-projektauftakt", "kind" : "audio", "relativePath" : "projektauftakt/audio.wav", "byteCount" : 2974700, "sha256" : "272327f366fb6b2a4cc0aef014d99a7655828b51e7aa922dcf1c86b28b42001b" },
+    { "id" : "transcript-projektauftakt", "kind" : "transcript", "relativePath" : "projektauftakt/transcript.json", "byteCount" : 5808, "sha256" : "9f35a89966f06c43e2835962fba7aa1cb8ed7c88825eec060cecf1b9d50aa27a" },
+    { "id" : "notes-projektauftakt", "kind" : "note", "relativePath" : "projektauftakt/notes.md", "byteCount" : 494, "sha256" : "cc26e3036ef011c0f0a1e175a032abbb1a450f8e65dddb8d492d3a90332a5139" },
+    { "id" : "report-projektauftakt", "kind" : "report", "relativePath" : "projektauftakt/report.md", "byteCount" : 292, "sha256" : "b6aad0d5b732a9806df5488bfc651fb72d0373ed76adda59b4e09e263a57415f" },
+    { "id" : "reference-text-projektauftakt", "kind" : "referenceTranscript", "relativePath" : "projektauftakt/reference.txt", "byteCount" : 1066, "sha256" : "795c23d821b4908d190c74af58f07f30e004f56cd1efafa682858a1d399aeb91" },
+    { "id" : "reference-rttm-projektauftakt", "kind" : "referenceTimeline", "relativePath" : "projektauftakt/reference.rttm", "byteCount" : 740, "sha256" : "b1781a20c498ab71fa981a32edc7055ab2d5ddcc8450c1e122aea2fe7eee5a21" },
+    { "id" : "audio-wochenrunde", "kind" : "audio", "relativePath" : "wochenrunde/audio.wav", "byteCount" : 2621976, "sha256" : "5c16018e7149551650fa42480d740c39f4e7c7d6571520b327264f2cf6ef7f6b" },
+    { "id" : "transcript-wochenrunde", "kind" : "transcript", "relativePath" : "wochenrunde/transcript.json", "byteCount" : 4134, "sha256" : "708d4b7391852dbdd0dc48c993c78930facb42446255c21c3018d6a47dac72ee" },
+    { "id" : "notes-wochenrunde", "kind" : "note", "relativePath" : "wochenrunde/notes.md", "byteCount" : 216, "sha256" : "5513dfe571bf212a5b5817f09323f066c0cf7001eef0b9a8dab6f916083bd655" },
+    { "id" : "reference-text-wochenrunde", "kind" : "referenceTranscript", "relativePath" : "wochenrunde/reference.txt", "byteCount" : 714, "sha256" : "a04296df00ac8047e24ed1f8843f855246648c430b73d599dc7f0aae4fdd92fe" },
+    { "id" : "reference-rttm-wochenrunde", "kind" : "referenceTimeline", "relativePath" : "wochenrunde/reference.rttm", "byteCount" : 497, "sha256" : "04554731006f9ed6c9549c262cf527cd50efc41be553346786b6c17182786e2a" },
+    { "id" : "audio-produktinterview", "kind" : "audio", "relativePath" : "produktinterview/audio.wav", "byteCount" : 2640156, "sha256" : "cb6e30ba3f6fa3fdd140473fa702d02239d9b990a117e4c6faebd5ae132b7fa9" },
+    { "id" : "transcript-produktinterview", "kind" : "transcript", "relativePath" : "produktinterview/transcript.json", "byteCount" : 4213, "sha256" : "c1999fa6a63b1629086c0c87db93d4f19cabb1739cdabb4088846cc8654f7e11" },
+    { "id" : "report-produktinterview", "kind" : "report", "relativePath" : "produktinterview/report.md", "byteCount" : 270, "sha256" : "74901f11db01b83c7cdb27ed58417bc033ea63f56b6512ea1a7009573eb94009" },
+    { "id" : "reference-text-produktinterview", "kind" : "referenceTranscript", "relativePath" : "produktinterview/reference.txt", "byteCount" : 794, "sha256" : "deb4f1cfea9644f2b29a46db50a54ea2708048fa330be3f9154581053f6aaa37" },
+    { "id" : "reference-rttm-produktinterview", "kind" : "referenceTimeline", "relativePath" : "produktinterview/reference.rttm", "byteCount" : 532, "sha256" : "28d60f10e7d051c220bc708020b47dfb2a50872f2d8b5ca336e759b4ceee299b" }
+  ]
+}

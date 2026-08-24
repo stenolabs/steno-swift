@@ -27,7 +27,11 @@ struct TextModelSettingsTests {
             name: original.name,
             baseURL: URL(string: "http://localhost:4321/v1")!,
             modelID: original.modelID,
-            requiresAPIKey: true
+            requiresAPIKey: true,
+            hosting: original.hosting,
+            dialect: original.dialect,
+            contextWindowTokens: original.contextWindowTokens,
+            bedrock: original.bedrock
         )
 
         #expect(throws: TestRegistryError.persistFailed) {
@@ -56,7 +60,58 @@ struct TextModelSettingsTests {
         ])
     }
 
-    @Test("a legacy endpoint migrates its legacy keychain slot compatibly")
+    @Test("a Bedrock endpoint with a region-matched base URL saves as a cloud endpoint")
+    func bedrockEndpointWithMatchingRegionSavesAsCloud() throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.cleanUp() }
+        let settings = TextModelSettings(
+            defaults: fixture.defaults,
+            secrets: fixture.secrets,
+            registry: fixture.registry
+        )
+        let draft = EndpointDraft()
+        draft.selectDialect(.amazonBedrock)
+        draft.name = "Bedrock"
+        draft.modelID = "anthropic.claude-3"
+        draft.selectBedrockRegion("eu-central-1")
+        draft.updateHostingFromURLIfAutomatic()
+        let endpoint = try #require(draft.validated)
+
+        try settings.upsert(endpoint, apiKey: "sentinel-bedrock")
+
+        let saved = try #require(settings.endpoints.first)
+        #expect(saved.hosting == .cloud)
+        #expect(saved.dialect == .amazonBedrock)
+        #expect(saved.bedrock?.region == "eu-central-1")
+    }
+
+    @Test("a Bedrock endpoint whose base URL does not match its region is rejected")
+    func bedrockEndpointWithMismatchedRegionIsRejected() throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.cleanUp() }
+        let settings = TextModelSettings(
+            defaults: fixture.defaults,
+            secrets: fixture.secrets,
+            registry: fixture.registry
+        )
+        let mismatched = TextModelEndpoint(
+            name: "Bedrock",
+            baseURL: URL(string: "https://bedrock-runtime.us-east-1.amazonaws.com")!,
+            modelID: "anthropic.claude-3",
+            requiresAPIKey: true,
+            hosting: .cloud,
+            dialect: .amazonBedrock,
+            contextWindowTokens: TextModelEndpoint.defaultContextWindowTokens,
+            bedrock: AmazonBedrockConfiguration(region: "eu-central-1", inferenceProfile: nil)
+        )
+
+        #expect(throws: TextModelEndpointPolicyError.invalidProviderConfiguration) {
+            try settings.upsert(mismatched, apiKey: "sentinel-bedrock")
+        }
+        #expect(settings.endpoints.isEmpty)
+    }
+
+    @Test("a legacy endpoint copies its key without removing the legacy slot")
     func legacyEndpointMigratesSecretSlot() throws {
         let fixture = try SettingsFixture()
         defer { fixture.cleanUp() }
@@ -77,7 +132,7 @@ struct TextModelSettingsTests {
 
         let migrated = try #require(settings.endpoints.first)
         #expect(migrated.configurationRevision != nil)
-        #expect(try fixture.secrets.value(for: legacySlot) == nil)
+        #expect(try fixture.secrets.value(for: legacySlot) == "sentinel-legacy")
         let constructions = ProviderConstructionRecorder()
         _ = try TextModelSettings.makeProviderResolver(
             defaults: fixture.defaults,
@@ -91,6 +146,35 @@ struct TextModelSettingsTests {
         #expect(constructions.values == [
             .init(endpoint: migrated, secret: "sentinel-legacy"),
         ])
+    }
+
+    @Test("deleting a migrated endpoint removes current and legacy key slots")
+    func deletingMigratedEndpointRemovesEveryKeySlot() throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.cleanUp() }
+        let legacy = fixture.endpoint()
+        let legacySlot = TextModelSecretSlot(
+            endpointID: legacy.id,
+            configurationRevision: nil
+        )
+        try fixture.registry.persist(.init(endpoints: [legacy]))
+        try fixture.secrets.setValue("sentinel-legacy", for: legacySlot)
+        let settings = TextModelSettings(
+            defaults: fixture.defaults,
+            secrets: fixture.secrets,
+            registry: fixture.registry
+        )
+        let migrated = try #require(settings.endpoints.first)
+        let currentSlot = TextModelSecretSlot(endpoint: migrated)
+
+        #expect(try fixture.secrets.value(for: currentSlot) == "sentinel-legacy")
+        #expect(try fixture.secrets.value(for: legacySlot) == "sentinel-legacy")
+
+        try settings.remove(migrated)
+
+        #expect(settings.endpoints.isEmpty)
+        #expect(try fixture.secrets.value(for: currentSlot) == nil)
+        #expect(try fixture.secrets.value(for: legacySlot) == nil)
     }
 
     @Test("endpoints persist without secrets or a remembered selection")
@@ -232,6 +316,109 @@ struct TextModelSettingsTests {
         #expect(
             try secrets.value(for: TextModelSecretSlot(endpoint: persisted)) == "secret"
         )
+        #expect(try fixture.registry.load().journal == nil)
+    }
+
+    @Test("a failed first-slot delete and rollback write recover without deletion")
+    func firstSlotAndRollbackPersistenceFailureRecoverSafely() throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.cleanUp() }
+        let original = fixture.endpoint()
+        let seeded = TextModelSettings(
+            defaults: fixture.defaults,
+            secrets: fixture.secrets,
+            registry: fixture.registry
+        )
+        try seeded.upsert(original, apiKey: "sentinel-current")
+        let persisted = try #require(seeded.endpoints.first)
+        fixture.secrets.deleteError = .deleteFailed
+        let settings = TextModelSettings(
+            defaults: fixture.defaults,
+            secrets: fixture.secrets,
+            registry: fixture.registry,
+            mutationAction: { checkpoint in
+                if checkpoint == .deleteJournalPersisted {
+                    fixture.registry.failAllPersistence = true
+                }
+            }
+        )
+        settings.selectedEndpointID = persisted.id
+
+        #expect(throws: TestSecretStoreError.deleteFailed) {
+            try settings.remove(persisted)
+        }
+
+        #expect(settings.endpoints == [persisted])
+        #expect(settings.selectedEndpointID == persisted.id)
+        #expect(
+            try fixture.secrets.value(for: TextModelSecretSlot(endpoint: persisted))
+                == "sentinel-current"
+        )
+        let interrupted = try fixture.registry.load()
+        #expect(interrupted.endpoints == [persisted])
+        #expect(interrupted.journal?.operation == .delete)
+        #expect(interrupted.journal?.phase == .prepared)
+        #expect(interrupted.journal?.deleteCurrentSecretWasPresent == true)
+
+        fixture.registry.failAllPersistence = false
+        fixture.secrets.deleteError = nil
+        let cold = TextModelSettings(
+            defaults: fixture.defaults,
+            secrets: fixture.secrets,
+            registry: fixture.registry
+        )
+
+        #expect(cold.endpoints == [persisted])
+        #expect(cold.recoveryErrorMessage == nil)
+        #expect(try fixture.registry.load().journal == nil)
+        #expect(
+            try fixture.secrets.value(for: TextModelSecretSlot(endpoint: persisted))
+                == "sentinel-current"
+        )
+    }
+
+    @Test("a second-slot delete failure remains journaled for cold recovery")
+    func legacySlotDeleteFailureRecoversOnColdLaunch() throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.cleanUp() }
+        let original = fixture.endpoint()
+        let settings = TextModelSettings(
+            defaults: fixture.defaults,
+            secrets: fixture.secrets,
+            registry: fixture.registry
+        )
+        try settings.upsert(original, apiKey: "sentinel-current")
+        let persisted = try #require(settings.endpoints.first)
+        let currentSlot = TextModelSecretSlot(endpoint: persisted)
+        let legacySlot = TextModelSecretSlot(
+            endpointID: persisted.id,
+            configurationRevision: nil
+        )
+        try fixture.secrets.setValue("sentinel-legacy", for: legacySlot)
+        fixture.secrets.deleteErrorSlots = [legacySlot]
+
+        #expect(throws: TestSecretStoreError.deleteFailed) {
+            try settings.remove(persisted)
+        }
+
+        #expect(try fixture.secrets.value(for: currentSlot) == nil)
+        #expect(try fixture.secrets.value(for: legacySlot) == "sentinel-legacy")
+        let interrupted = try fixture.registry.load()
+        #expect(interrupted.endpoints == [persisted])
+        #expect(interrupted.journal?.operation == .delete)
+        #expect(interrupted.journal?.phase == .committed)
+
+        fixture.secrets.deleteErrorSlots = []
+        let cold = TextModelSettings(
+            defaults: fixture.defaults,
+            secrets: fixture.secrets,
+            registry: fixture.registry
+        )
+
+        #expect(cold.endpoints.isEmpty)
+        #expect(cold.recoveryErrorMessage == nil)
+        #expect(try fixture.secrets.value(for: currentSlot) == nil)
+        #expect(try fixture.secrets.value(for: legacySlot) == nil)
     }
 
     @Test("a failed secret write preserves the endpoint registry")
@@ -270,7 +457,11 @@ struct TextModelSettingsTests {
             name: original.name,
             baseURL: URL(string: "http://localhost:4321/v1")!,
             modelID: original.modelID,
-            requiresAPIKey: true
+            requiresAPIKey: true,
+            hosting: original.hosting,
+            dialect: original.dialect,
+            contextWindowTokens: original.contextWindowTokens,
+            bedrock: original.bedrock
         )
 
         #expect(throws: TextModelSettingsMutationError.replacementAPIKeyRequired) {
@@ -297,7 +488,10 @@ struct TextModelSettingsTests {
             name: "Remote HTTP",
             baseURL: try #require(URL(string: "http://models.example.com/v1")),
             modelID: "model",
-            requiresAPIKey: false
+            requiresAPIKey: false,
+            hosting: .cloud,
+            dialect: .openAICompatible,
+            contextWindowTokens: TextModelEndpoint.defaultContextWindowTokens
         )
 
         #expect(throws: TextModelEndpointPolicyError.insecureRemoteURL) {
@@ -325,7 +519,11 @@ struct TextModelSettingsTests {
                 name: original.name,
                 baseURL: URL(string: "http://localhost:4321/v1")!,
                 modelID: original.modelID,
-                requiresAPIKey: true
+                requiresAPIKey: true,
+                hosting: original.hosting,
+                dialect: original.dialect,
+                contextWindowTokens: original.contextWindowTokens,
+                bedrock: original.bedrock
             ),
             apiKey: "sentinel-two"
         )
@@ -464,7 +662,11 @@ struct TextModelSettingsTests {
             name: original.name,
             baseURL: URL(string: "http://localhost:4321/v1")!,
             modelID: original.modelID,
-            requiresAPIKey: true
+            requiresAPIKey: true,
+            hosting: original.hosting,
+            dialect: original.dialect,
+            contextWindowTokens: original.contextWindowTokens,
+            bedrock: original.bedrock
         )
         let crashing = TextModelSettings(
             defaults: fixture.defaults,
@@ -569,15 +771,29 @@ struct TextModelSettingsTests {
             secrets: fixture.secrets,
             registry: fixture.registry
         )
-        #expect(cold.endpoints.isEmpty)
-        #expect(cold.selectedEndpointID == nil)
-        #expect(try fixture.secrets.value(for: TextModelSecretSlot(endpoint: persisted)) == nil)
+        if testCase.checkpoint == .deleteJournalPersisted {
+            #expect(cold.endpoints == [persisted])
+            #expect(cold.selectedEndpointID == nil)
+            #expect(
+                try fixture.secrets.value(for: TextModelSecretSlot(endpoint: persisted))
+                    == "sentinel-delete"
+            )
+        } else {
+            #expect(cold.endpoints.isEmpty)
+            #expect(cold.selectedEndpointID == nil)
+            #expect(
+                try fixture.secrets.value(for: TextModelSecretSlot(endpoint: persisted)) == nil
+            )
+        }
         let secondCold = TextModelSettings(
             defaults: fixture.defaults,
             secrets: fixture.secrets,
             registry: fixture.registry
         )
-        #expect(secondCold.endpoints.isEmpty)
+        #expect(
+            secondCold.endpoints
+                == (testCase.checkpoint == .deleteJournalPersisted ? [persisted] : [])
+        )
         #expect(secondCold.recoveryErrorMessage == nil)
     }
 
@@ -607,7 +823,11 @@ struct TextModelSettingsTests {
                     name: original.name,
                     baseURL: URL(string: "http://localhost:4321/v1")!,
                     modelID: original.modelID,
-                    requiresAPIKey: true
+                    requiresAPIKey: true,
+                    hosting: original.hosting,
+                    dialect: original.dialect,
+                    contextWindowTokens: original.contextWindowTokens,
+                    bedrock: original.bedrock
                 ),
                 apiKey: "sentinel-new"
             )
@@ -661,7 +881,11 @@ struct TextModelSettingsTests {
                     name: original.name,
                     baseURL: URL(string: "http://localhost:4321/v1")!,
                     modelID: original.modelID,
-                    requiresAPIKey: true
+                    requiresAPIKey: true,
+                    hosting: original.hosting,
+                    dialect: original.dialect,
+                    contextWindowTokens: original.contextWindowTokens,
+                    bedrock: original.bedrock
                 ),
                 apiKey: "sentinel-new"
             )
@@ -711,7 +935,11 @@ struct TextModelSettingsTests {
             name: original.name,
             baseURL: URL(string: "http://localhost:4321/v1")!,
             modelID: original.modelID,
-            requiresAPIKey: true
+            requiresAPIKey: true,
+            hosting: original.hosting,
+            dialect: original.dialect,
+            contextWindowTokens: original.contextWindowTokens,
+            bedrock: original.bedrock
         )
         let failingStore = fixture.store { checkpoint, state in
             guard checkpoint == testCase.checkpoint,
@@ -732,6 +960,11 @@ struct TextModelSettingsTests {
                 try subject.upsert(edited, apiKey: "sentinel-new")
             case .delete:
                 try subject.remove(old)
+            case .revisionMigration:
+                // Keine Benutzeraktion: die Revisionsmigration laeuft in der
+                // Wiederherstellung und wird dort eigenstaendig geprueft. Taucht
+                // sie hier auf, ist der Testfall falsch aufgesetzt.
+                Issue.record("revisionMigration is not a user operation")
             }
         }
 
@@ -821,7 +1054,10 @@ struct TextModelSettingsTests {
             baseURL: URL(string: "http://localhost:1234/v1")!,
             modelID: "old-model",
             requiresAPIKey: true,
-            configurationRevision: UUID()
+            configurationRevision: UUID(),
+            hosting: .selfHosted,
+            dialect: .openAICompatible,
+            contextWindowTokens: TextModelEndpoint.defaultContextWindowTokens
         )
         let next = TextModelEndpoint(
             id: old.id,
@@ -829,7 +1065,10 @@ struct TextModelSettingsTests {
             baseURL: URL(string: "http://localhost:4321/v1")!,
             modelID: "new-model",
             requiresAPIKey: true,
-            configurationRevision: UUID()
+            configurationRevision: UUID(),
+            hosting: .selfHosted,
+            dialect: .openAICompatible,
+            contextWindowTokens: TextModelEndpoint.defaultContextWindowTokens
         )
         let canonicalData = try JSONEncoder().encode(
             TextModelEndpointRegistryState(
@@ -900,6 +1139,7 @@ struct DeleteCrashCase: Sendable, CustomTestStringConvertible {
 
     static let all = [
         Self(checkpoint: .deleteJournalPersisted, testDescription: "after journal"),
+        Self(checkpoint: .deleteCurrentSecretRemoved, testDescription: "after current secret"),
         Self(checkpoint: .deleteSecretRemoved, testDescription: "after secret"),
         Self(checkpoint: .deleteRegistryCommitted, testDescription: "after registry"),
     ]
@@ -927,7 +1167,7 @@ struct RegistryMutationPersistenceCase: Sendable, CustomTestStringConvertible {
         Self(operation: .upsert, phase: .committed, checkpoint: .afterRenameBeforeDirectorySync, expected: .new, testDescription: "upsert committed after rename"),
         Self(operation: .delete, phase: .prepared, checkpoint: .beforeWrite, expected: .old, testDescription: "delete prepared before write"),
         Self(operation: .delete, phase: .prepared, checkpoint: .afterFileSync, expected: .old, testDescription: "delete prepared after file sync"),
-        Self(operation: .delete, phase: .prepared, checkpoint: .afterRenameBeforeDirectorySync, expected: .deleted, testDescription: "delete prepared after rename"),
+        Self(operation: .delete, phase: .prepared, checkpoint: .afterRenameBeforeDirectorySync, expected: .old, testDescription: "delete prepared after rename"),
         Self(operation: .delete, phase: .committed, checkpoint: .beforeWrite, expected: .deleted, testDescription: "delete committed before write"),
         Self(operation: .delete, phase: .committed, checkpoint: .afterFileSync, expected: .deleted, testDescription: "delete committed after file sync"),
         Self(operation: .delete, phase: .committed, checkpoint: .afterRenameBeforeDirectorySync, expected: .deleted, testDescription: "delete committed after rename"),
@@ -970,7 +1210,10 @@ private final class AtomicSettingsFixture {
             name: "Local model",
             baseURL: URL(string: "http://localhost:1234/v1")!,
             modelID: "gemma",
-            requiresAPIKey: true
+            requiresAPIKey: true,
+            hosting: .selfHosted,
+            dialect: .openAICompatible,
+            contextWindowTokens: TextModelEndpoint.defaultContextWindowTokens
         )
     }
 
@@ -1022,7 +1265,10 @@ private final class SettingsFixture {
             name: name,
             baseURL: URL(string: "http://localhost:1234/v1")!,
             modelID: "gemma",
-            requiresAPIKey: requiresAPIKey
+            requiresAPIKey: requiresAPIKey,
+            hosting: .selfHosted,
+            dialect: .openAICompatible,
+            contextWindowTokens: TextModelEndpoint.defaultContextWindowTokens
         )
     }
 
@@ -1037,6 +1283,7 @@ private final class InMemoryTextModelSecretStore: TextModelSecretStoring, @unche
     var readError: (any Error)?
     var writeError: (any Error)?
     var deleteError: TestSecretStoreError?
+    var deleteErrorSlots: Set<TextModelSecretSlot> = []
     private(set) var readSlots: [TextModelSecretSlot] = []
     private(set) var writtenSlots: [TextModelSecretSlot] = []
     private(set) var removedSlots: [TextModelSecretSlot] = []
@@ -1054,6 +1301,7 @@ private final class InMemoryTextModelSecretStore: TextModelSecretStoring, @unche
     }
 
     func removeValue(for slot: TextModelSecretSlot) throws {
+        if deleteErrorSlots.contains(slot) { throw TestSecretStoreError.deleteFailed }
         if let deleteError { throw deleteError }
         removedSlots.append(slot)
         values[slot] = nil

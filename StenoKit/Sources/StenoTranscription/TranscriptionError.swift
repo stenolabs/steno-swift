@@ -12,6 +12,8 @@ public enum TranscriptionError: Error, Equatable, Sendable {
     case noCompatibleAudioFormat
     case audioConversionFailed(String)
     case audioInputOverflow(capacity: Int)
+    case liveModeNotEnabled
+    case missingWordTimings
 }
 
 extension TranscriptionError: LocalizedError {
@@ -33,6 +35,10 @@ extension TranscriptionError: LocalizedError {
             "Audio conversion for SpeechAnalyzer failed: \(message)"
         case .audioInputOverflow(let capacity):
             "SpeechAnalyzer could not keep up with the live audio buffer of \(capacity) chunks."
+        case .liveModeNotEnabled:
+            "This transcription model is not enabled for live transcription."
+        case .missingWordTimings:
+            "The transcription model returned text without trustworthy word timings."
         }
     }
 }

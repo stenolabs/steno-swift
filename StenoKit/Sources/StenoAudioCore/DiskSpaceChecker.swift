@@ -13,11 +13,24 @@ public struct DiskSpaceChecker: Sendable {
         let capacities = [
             values.volumeAvailableCapacityForImportantUsage,
             values.volumeAvailableCapacity.map(Int64.init),
-        ].compactMap { $0 }
-        if let capacity = capacities.max(), capacity > 0 { return capacity }
-        throw AudioRecordingError.audioSourceUnavailable(
-            "free disk capacity could not be determined"
+        ]
+        return try Self.resolveAvailableBytes(
+            importantUsage: capacities[0],
+            general: capacities[1]
         )
+    }
+
+    static func resolveAvailableBytes(
+        importantUsage: Int64?,
+        general: Int64?
+    ) throws -> Int64 {
+        guard let capacity = [importantUsage, general].compactMap({ $0 }).max()
+        else {
+            throw AudioRecordingError.audioSourceUnavailable(
+                "free disk capacity could not be determined"
+            )
+        }
+        return max(0, capacity)
     }
 
     public func validate(at url: URL) throws {

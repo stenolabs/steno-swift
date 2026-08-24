@@ -7,6 +7,28 @@ import Testing
 struct IOSMeetingSidebarPresentationTests {
     private let now = Date(timeIntervalSince1970: 1_784_060_400)
 
+    @Test("empty library states localize at the presentation boundary")
+    func emptyLibraryStatesLocalize() {
+        #expect(
+            german(IOSMeetingSidebarPresentation.emptyMeetingMessage(
+                isReady: true,
+                query: ""
+            )) == "Noch keine Aufnahmen."
+        )
+        #expect(
+            german(IOSMeetingSidebarPresentation.emptyMeetingMessage(
+                isReady: false,
+                query: ""
+            )) == "Bibliothek wird geöffnet…"
+        )
+        #expect(
+            german(IOSMeetingSidebarPresentation.emptyMeetingMessage(
+                isReady: true,
+                query: "  Demo  "
+            )) == "Keine Meeting-Titel entsprechen „Demo“."
+        )
+    }
+
     @Test("delegates visible depth order to the shared sidebar tree")
     func buildsSharedTreeInDepthOrder() {
         let work = folder(1, name: "Work", sortIndex: 0)
@@ -277,8 +299,8 @@ struct IOSMeetingSidebarPresentationTests {
             onto: dateHeader
         ) == .reject)
 
-        #expect(IOSSidebarNoFolderDropSurface.foldersHeading.accessibilityHint == "Drop a meeting here to move it to No folder. Drop a subfolder here to move it to the top level.")
-        #expect(dateHeader.accessibilityHint == "Drop a meeting here to move it to No folder.")
+        #expect(english(IOSSidebarNoFolderDropSurface.foldersHeading.accessibilityHint) == "Drop a meeting here to move it to No folder. Drop a subfolder here to move it to the top level.")
+        #expect(english(dateHeader.accessibilityHint) == "Drop a meeting here to move it to No folder.")
     }
 
     @Test("a root with a child has no nesting destinations")
@@ -609,11 +631,11 @@ struct IOSMeetingSidebarPresentationTests {
         )
 
         let root = try #require(presentation.folderDeletionConfirmation(for: work.id))
-        #expect(root.title == "Delete \u{201c}Work\u{201d}?")
-        #expect(root.message == "Only the folder goes away. Its direct meetings stay in the library and move to No folder. Its subfolders move to the top level.")
+        #expect(english(root.title) == "Delete \u{201c}Work\u{201d}?")
+        #expect(english(root.message) == "Only the folder goes away. Its direct meetings stay in the library and move to No folder. Its subfolders move to the top level.")
 
         let child = try #require(presentation.folderDeletionConfirmation(for: weekly.id))
-        #expect(child.message == "Only the folder goes away. Its direct meetings stay in the library and move to No folder.")
+        #expect(english(child.message) == "Only the folder goes away. Its direct meetings stay in the library and move to No folder.")
 
         let emptyRoot = try #require(presentation.folderDeletionConfirmation(for: archive.id))
         #expect(emptyRoot.message == child.message)
@@ -713,6 +735,39 @@ struct IOSMeetingSidebarPresentationTests {
         #expect(homeMenuDecisions == [
             .moveFolder(home.id, work.id),
         ])
+    }
+
+    @Test("visible and contextual meeting menus share destinations and enabled states")
+    func meetingMoveSurfacesUseTheSamePresentation() {
+        let work = folder(1, name: "Work", sortIndex: 0)
+        let weekly = folder(
+            2,
+            name: "Weekly",
+            parentFolderID: work.id,
+            sortIndex: 0
+        )
+        let home = folder(3, name: "Home", sortIndex: 1)
+        let planning = meeting(1, title: "Planning", folderID: weekly.id)
+        let policy = IOSMeetingSidebarPresentation(
+            folders: [work, weekly, home],
+            meetings: [planning],
+            query: "",
+            now: now
+        ).meetingActionPolicy(
+            for: planning.id,
+            locale: Locale(identifier: "en")
+        )
+
+        let destinations = IOSMeetingMoveActions.destinations(for: policy)
+
+        #expect(destinations.map(\.folderID) == [work.id, weekly.id, home.id, nil])
+        #expect(destinations.map(\.title) == [
+            "Work",
+            "Work / Weekly",
+            "Home",
+            "No folder",
+        ])
+        #expect(destinations.map(\.isCurrent) == [false, true, false, false])
     }
 
     @Test("payload encoding contains only its case and raw UUID")
@@ -836,6 +891,18 @@ struct IOSMeetingSidebarPresentationTests {
         tree.folderNodes.flatMap { root in
             [root.folder.name] + root.children.map(\.folder.name)
         }
+    }
+
+    private func english(_ resource: LocalizedStringResource) -> String {
+        var resource = resource
+        resource.locale = Locale(identifier: "en")
+        return String(localized: resource)
+    }
+
+    private func german(_ resource: LocalizedStringResource) -> String {
+        var resource = resource
+        resource.locale = Locale(identifier: "de")
+        return String(localized: resource)
     }
 
     private func meetingID(_ value: Int) -> MeetingID {

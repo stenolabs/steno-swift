@@ -88,6 +88,7 @@ enum IOSSidebarRevealApplication {
 struct MeetingSidebarView: View {
     @Environment(AppModel.self) private var model
     @Binding var selection: SidebarItem?
+    let router: NavigationRouter
     let revealRequest: IOSSidebarRevealRequest?
     let onRevealApplied: (IOSSidebarRevealRequest, SidebarItem) -> Void
 
@@ -96,6 +97,9 @@ struct MeetingSidebarView: View {
     @State private var folderNameOperation: FolderNameOperation?
     @State private var folderName = ""
     @State private var folderDeleteTarget: Folder?
+    @State private var retranscribeTarget: Meeting?
+    @State private var deleteTarget: Meeting?
+    @State private var actionAlert: MeetingActionAlert?
     @State private var targetedFolderID: FolderID?
     @State private var isFoldersHeadingTargeted = false
     @State private var targetedUnfiledSectionID: String?
@@ -103,12 +107,25 @@ struct MeetingSidebarView: View {
     private let disclosureStore = IOSFolderDisclosureStore()
 
     var body: some View {
+        actionPresentationContent
+    }
+
+    private var navigationContent: some View {
         List(selection: $selection) {
-            if let failure = model.startupFailure {
+            if !model.libraryIssues.isEmpty {
                 Section("Library") {
-                    Label(failure, systemImage: "exclamationmark.triangle")
+                    ForEach(model.libraryIssues) { issue in
+                        Label {
+                            Text(issue.title)
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle")
+                        }
                         .font(.body)
                         .foregroundStyle(Steno.Colors.error)
+                        Button(issue.retryTitle) {
+                            Task { await model.retryLibraryIssue(issue) }
+                        }
+                    }
                 }
             }
 
@@ -150,15 +167,30 @@ struct MeetingSidebarView: View {
                 NavigationLink(value: SidebarItem.languageModels) {
                     Label("Language models", systemImage: "brain")
                 }
+                NavigationLink(value: SidebarItem.transcriptionModels) {
+                    Label("Transcription models", systemImage: "waveform.and.mic")
+                }
+                NavigationLink(value: SidebarItem.demoData) {
+                    Label(DemoDataPresentation.toolTitle, systemImage: SidebarItem.demoData.systemImage)
+                }
             }
         }
         .listStyle(.sidebar)
         .navigationTitle("Steno")
         .searchable(text: $query, prompt: "Search titles")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                newMeetingButton
+            }
+        }
         .onChange(of: revealRequest, initial: true) { _, request in
             guard let request else { return }
             revealMeeting(request)
         }
+    }
+
+    private var actionPresentationContent: some View {
+        AnyView(navigationContent)
         .alert(
             folderNameOperation?.title ?? "Folder",
             isPresented: folderNameOperationIsPresented
@@ -193,6 +225,79 @@ struct MeetingSidebarView: View {
                 Text(confirmation.message)
             }
         }
+        .alert(
+            retranscribeTarget.map {
+                MeetingActionCopy.retranscriptionTitle(meetingTitle: $0.title)
+            } ?? "",
+            isPresented: retranscribeTargetIsPresented,
+            presenting: retranscribeTarget
+        ) { meeting in
+            Button("Transcribe Again") {
+                retranscribeTarget = nil
+                Task {
+                    do {
+                        try await model.requestRetranscription(meetingID: meeting.id)
+                        selection = .meeting(meeting.id)
+                    } catch {
+                        actionAlert = .retranscriptionFailure(error.localizedDescription)
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) { retranscribeTarget = nil }
+        } message: { _ in
+            Text(MeetingActionCopy.retranscriptionMessage)
+        }
+        .confirmationDialog(
+            deleteTarget.map {
+                MeetingActionCopy.deletionTitle(meetingTitle: $0.title)
+            } ?? "",
+            isPresented: deleteTargetIsPresented,
+            titleVisibility: .visible,
+            presenting: deleteTarget
+        ) { meeting in
+            Button(MeetingActionCopy.deletionConfirmationLabel, role: .destructive) {
+                deleteTarget = nil
+                deleteMeeting(meeting)
+            }
+            Button("Cancel", role: .cancel) { deleteTarget = nil }
+        } message: { _ in
+            Text(MeetingActionCopy.deletionMessage)
+        }
+        .alert(
+            actionAlert?.title ?? "Meeting",
+            isPresented: actionAlertIsPresented
+        ) {
+            Button("OK") { actionAlert = nil }
+        } message: {
+            Text(actionAlert?.message ?? "")
+        }
+    }
+
+    private var newMeetingButton: some View {
+        Menu {
+            Button {
+                selection = .recording
+                let actions = StenoCommandActions(model: model)
+                Task { await actions.start() }
+            } label: {
+                Label("Start Recording", systemImage: "record.circle")
+            }
+            .disabled(!StenoCommandState(model: model, router: router).canStartRecording)
+
+            Button {
+                let destinationRouter = router
+                let actions = StenoCommandActions(model: model)
+                Task { await actions.createDraft(in: destinationRouter) }
+            } label: {
+                Label("New Meeting Notes", systemImage: "note.text.badge.plus")
+            }
+            .disabled(!StenoCommandState(model: model, router: router).canCreateDraft)
+        } label: {
+            Label("New Meeting", systemImage: "plus")
+        }
+        .accessibilityLabel("New Meeting")
+        .accessibilityHint("Choose whether to start recording or create meeting notes.")
+        .accessibilityIdentifier("meeting-new")
     }
 
     private var presentation: IOSMeetingSidebarPresentation {
@@ -213,11 +318,11 @@ struct MeetingSidebarView: View {
         )
     }
 
-    private var emptyMeetingMessage: String {
-        if isSearching {
-            return "No meeting titles match \u{201c}\(query.trimmingCharacters(in: .whitespacesAndNewlines))\u{201d}."
-        }
-        return model.isReady ? "No recordings yet." : "Opening the library\u{2026}"
+    private var emptyMeetingMessage: LocalizedStringResource {
+        IOSMeetingSidebarPresentation.emptyMeetingMessage(
+            isReady: model.isReady,
+            query: query
+        )
     }
 
     // MARK: - Folders
@@ -327,8 +432,20 @@ struct MeetingSidebarView: View {
         font: Font
     ) -> some View {
         let isTargeted = targetedFolderID == node.id
-        return Label(node.folder.name, systemImage: "folder")
-            .font(font)
+        return HStack(spacing: Steno.Space.s) {
+            Label(node.folder.name, systemImage: "folder")
+                .font(font)
+            Spacer(minLength: Steno.Space.s)
+            Menu {
+                folderMenu(node.folder)
+            } label: {
+                Image(systemName: "ellipsis")
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Folder actions for \(node.folder.name)")
+        }
             .foregroundStyle(isTargeted ? Steno.Colors.brand : Color.primary)
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .contentShape(Rectangle())
@@ -442,6 +559,7 @@ struct MeetingSidebarView: View {
                 Text(meeting.title)
                     .font(.body)
                     .lineLimit(2)
+                DemoBadge(meeting: meeting)
                 Text(
                     meeting.createdAt,
                     format: .dateTime.day().month().hour().minute()
@@ -460,13 +578,26 @@ struct MeetingSidebarView: View {
     private func meetingMenu(_ meeting: Meeting) -> some View {
         let policy = presentation.meetingActionPolicy(for: meeting.id)
         Menu("Move to Folder", systemImage: "folder") {
-            ForEach(policy.moveDestinations) { destination in
-                Button(destination.title) {
-                    execute(.moveMeeting(meeting.id, destination.folderID))
-                }
-                .disabled(destination.isCurrent)
+            IOSMeetingMoveActions(policy: policy) { folderID in
+                execute(.moveMeeting(meeting.id, folderID))
             }
         }
+        Divider()
+        Button {
+            retranscribeTarget = meeting
+        } label: {
+            Label("Transcribe Again...", systemImage: "waveform")
+        }
+        .disabled(!MeetingActionPolicy.canRetranscribe(status: meeting.status))
+
+        Divider()
+
+        Button(role: .destructive) {
+            deleteTarget = meeting
+        } label: {
+            Label("Move to Trash...", systemImage: "trash")
+        }
+        .disabled(!MeetingActionPolicy.canDelete(status: meeting.status))
     }
 
     // MARK: - Mutations
@@ -567,6 +698,22 @@ struct MeetingSidebarView: View {
         }
     }
 
+    private func deleteMeeting(_ meeting: Meeting) {
+        Task {
+            do {
+                let outcome = try await model.deleteMeeting(meeting.id)
+                if selection == .meeting(meeting.id) {
+                    selection = .recording
+                }
+                if let warning = outcome.cleanupWarning {
+                    actionAlert = .cleanupWarning(warning)
+                }
+            } catch {
+                actionAlert = .deletionFailure(error.localizedDescription)
+            }
+        }
+    }
+
     private func revealMeeting(_ request: IOSSidebarRevealRequest) {
         IOSSidebarRevealApplication.apply(
             request,
@@ -601,6 +748,27 @@ struct MeetingSidebarView: View {
             set: { if !$0 { folderDeleteTarget = nil } }
         )
     }
+
+    private var retranscribeTargetIsPresented: Binding<Bool> {
+        Binding(
+            get: { retranscribeTarget != nil },
+            set: { if !$0 { retranscribeTarget = nil } }
+        )
+    }
+
+    private var deleteTargetIsPresented: Binding<Bool> {
+        Binding(
+            get: { deleteTarget != nil },
+            set: { if !$0 { deleteTarget = nil } }
+        )
+    }
+
+    private var actionAlertIsPresented: Binding<Bool> {
+        Binding(
+            get: { actionAlert != nil },
+            set: { if !$0 { actionAlert = nil } }
+        )
+    }
 }
 
 private enum FolderNameOperation: Identifiable {
@@ -616,7 +784,7 @@ private enum FolderNameOperation: Identifiable {
         }
     }
 
-    var title: String {
+    var title: LocalizedStringResource {
         switch self {
         case .create(let parentFolderID):
             parentFolderID == nil ? "New Folder" : "New Subfolder"
@@ -625,14 +793,14 @@ private enum FolderNameOperation: Identifiable {
         }
     }
 
-    var actionTitle: String {
+    var actionTitle: LocalizedStringResource {
         switch self {
         case .create: "Create"
         case .rename: "Rename"
         }
     }
 
-    var message: String? {
+    var message: LocalizedStringResource? {
         switch self {
         case .create(let parentFolderID) where parentFolderID != nil:
             "Subfolders can contain meetings but no further folders."

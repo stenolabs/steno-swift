@@ -89,6 +89,14 @@ struct DomainModelTests {
 
     @Test("ProcessingRun round-trips engine, timing, status, and error details")
     func processingRunRoundTrip() throws {
+        let diagnostic = TextModelRunDiagnostic(
+            dialect: "ollama",
+            stage: "reduce",
+            requestIndex: 2,
+            httpStatus: 503,
+            providerCode: "server_error",
+            adaptiveRetryCount: 1
+        )
         let run = ProcessingRun(
             id: RunID(),
             meetingID: MeetingID(),
@@ -102,11 +110,34 @@ struct DomainModelTests {
             createdAt: timestamp,
             startedAt: timestamp.addingTimeInterval(1),
             finishedAt: timestamp.addingTimeInterval(2),
-            errorMessage: "Model unavailable"
+            errorMessage: "Model unavailable",
+            textModelDiagnostic: diagnostic
         )
 
         try expectRoundTrip(run)
         #expect(run.schemaVersion == 1)
+    }
+
+    @Test("schema-one processing runs without diagnostics remain decodable")
+    func legacyProcessingRunDecoding() throws {
+        let data = Data(
+            """
+            {
+              "schemaVersion": 1,
+              "id": "018f22e2-7c00-7000-8000-000000000001",
+              "meetingID": "018f22e2-7c00-7000-8000-000000000002",
+              "kind": "templateRender",
+              "engine": {"name":"Legacy","version":"1"},
+              "status": "failed",
+              "createdAt": 0,
+              "errorMessage": "failed"
+            }
+            """.utf8
+        )
+
+        let run = try JSONDecoder().decode(ProcessingRun.self, from: data)
+
+        #expect(run.textModelDiagnostic == nil)
     }
 
     @Test("TranscriptRevision round-trips nested turns, segments, words, and origin")
@@ -257,6 +288,20 @@ struct DomainModelTests {
 
         try expectRoundTrip(channel)
         try expectRoundTrip(cluster)
+    }
+
+    /// Nur Ollama startet gross, weil Steno ihm die Groesse per `num_ctx`
+    /// wirklich vorgeben kann. Bei jedem anderen Dialekt waere ein grosser
+    /// Startwert eine Behauptung ueber einen Server, der davon nichts weiss.
+    @Test("only the Ollama dialect starts with a working context window")
+    func onlyOllamaStartsWithALargeContextWindow() {
+        #expect(TextModelAPIDialect.ollama.defaultContextWindowTokens == 32_768)
+        for dialect in TextModelAPIDialect.allCases where dialect != .ollama {
+            #expect(
+                dialect.defaultContextWindowTokens == 4_096,
+                "\(dialect) sollte klein starten"
+            )
+        }
     }
 
     private func expectRoundTrip<Value: Codable & Equatable>(_ value: Value) throws {

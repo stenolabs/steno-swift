@@ -22,11 +22,8 @@ final class OperatorProfile {
     /// Versprechen, der Name bleibe unter allen Umstaenden hier. Ueber die
     /// Teilnehmerliste geht er sehr wohl mit - nur eben, weil der Nutzer es
     /// so eingetragen hat.
-    static let fieldNote =
-        "Appears in the header of exported Markdown and stays on this Mac; "
-            + "this field is never sent to a language model. "
-            + "If you took part yourself, add yourself to that meeting's "
-            + "participants - that list does go to the model."
+    static let fieldNote: LocalizedStringResource = "Appears in the header of exported Markdown and stays on this Mac; this field is never sent to a language model. If you took part yourself, add yourself to that meeting's participants - that list does go to the model."
+    static let onboardingFieldNote: LocalizedStringResource = "Appears in the header of exported Markdown and stays on this Mac; this field is never sent to a language model. If you took part yourself, add yourself to that meeting's participants - that list does go to the model. You can skip this and add it later in Settings."
 
     private static let nameKey = "org.steno.operatorName"
     private static let organizationKey = "org.steno.operatorOrganization"

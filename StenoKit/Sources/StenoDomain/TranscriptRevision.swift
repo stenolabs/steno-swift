@@ -63,6 +63,7 @@ public enum TranscriptOrigin: Codable, Equatable, Sendable {
     case userEdit(RevisionID)
     case legacyImport
     case meetingTransfer(sourceMeetingID: MeetingID, sourceRevisionID: RevisionID?)
+    case demo(DemoProvenance)
 }
 
 public struct TranscriptRevision: Codable, Equatable, Sendable {

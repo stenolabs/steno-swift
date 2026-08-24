@@ -1,0 +1,71 @@
+{
+  "fill-specializations" : [
+    {
+      "value" : {
+        "linear-gradient" : [
+          "extended-srgb:0.05098,0.67451,0.74118,1.00000",
+          "extended-srgb:0.00000,0.44314,0.49412,1.00000"
+        ],
+        "orientation" : {
+          "start" : {
+            "x" : 0,
+            "y" : 0
+          },
+          "stop" : {
+            "x" : 0.3,
+            "y" : 1
+          }
+        }
+      }
+    },
+    {
+      "appearance" : "dark",
+      "value" : {
+        "linear-gradient" : [
+          "extended-srgb:0.02353,0.23137,0.26275,1.00000",
+          "extended-srgb:0.00784,0.11765,0.14118,1.00000"
+        ],
+        "orientation" : {
+          "start" : {
+            "x" : 0,
+            "y" : 0
+          },
+          "stop" : {
+            "x" : 0.3,
+            "y" : 1
+          }
+        }
+      }
+    }
+  ],
+  "groups" : [
+    {
+      "blur-material" : 0.05,
+      "layers" : [
+        {
+          "image-name" : "02-steno-dot.svg",
+          "name" : "Terminal Dot"
+        },
+        {
+          "image-name" : "01-steno-s.svg",
+          "name" : "Steno S"
+        }
+      ],
+      "lighting" : "individual",
+      "name" : "Steno Mark",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.25
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.2
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [],
+    "squares" : "shared"
+  }
+}

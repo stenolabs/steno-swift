@@ -21,10 +21,11 @@ extension MeetingProcessingRequestError: LocalizedError {
 /// Shared guard for generic Mac and iOS processing actions that would create
 /// a job without an imported request's pinned generation and locale.
 public enum MeetingProcessingJobRequest {
+    @discardableResult
     public static func requireUnpinnedJobAllowed(
         library: Library,
         meetingID: MeetingID
-    ) async throws {
+    ) async throws -> MeetingTransferGenerationID? {
         try LibraryMutationCoordination.withExclusiveTransaction(
             layout: library.layout
         ) { transaction in
@@ -42,6 +43,7 @@ public enum MeetingProcessingJobRequest {
             if meeting.metadata?.transferReceipt?.importGenerationID != nil {
                 throw MeetingProcessingRequestError.importedRetryRequired(meetingID)
             }
+            return meeting.processingGenerationID
         }
     }
 }

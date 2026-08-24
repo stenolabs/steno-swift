@@ -79,7 +79,7 @@ struct NativeRecordingCompositionTests {
             #expect(try await library.loadMeeting(meeting.id).status == .ready)
 
             try await RecordingFinalizer().finalize(
-                meetingID: meeting.id,
+                meeting: meeting,
                 output: nil,
                 library: library,
                 jobStore: jobStore

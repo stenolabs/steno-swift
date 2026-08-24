@@ -55,13 +55,35 @@ struct SpeakerDisplayTests {
             review: nil
         )
 
-        let details = SpeakerDisplayDetails(presentation: presentation)
+        let details = SpeakerDisplayDetails(
+            presentation: presentation,
+            locale: Locale(identifier: "en")
+        )
 
         #expect(details.label == "Ada")
         #expect(details.marker == nil)
         #expect(
             details.originCue
                 == "Imported text label - not a locally confirmed identity"
+        )
+
+        let germanDetails = SpeakerDisplayDetails(
+            presentation: SpeakerPresentationResolver.presentation(
+                for: .importedTextLabel(
+                    ImportedSpeakerTextLabel(
+                        id: UUID(),
+                        text: "Ada",
+                        wasConfirmedAtSource: false
+                    )
+                ),
+                review: nil
+            ),
+            locale: Locale(identifier: "de")
+        )
+        #expect(germanDetails.label == "Unbekannter Sprecher")
+        #expect(
+            germanDetails.originCue
+                == "Importierte Textbezeichnung - keine lokal bestätigte Identität"
         )
     }
 }

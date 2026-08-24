@@ -4,6 +4,7 @@ import Foundation
 import Observation
 import Speech
 import StenoDomain
+import StenoDemo
 import StenoExchange
 import StenoLibrary
 import StenoAudioCore
@@ -11,11 +12,41 @@ import StenoMacAudio
 import StenoPipeline
 import StenoTranscription
 
-/// Zustand einer laufenden Aufnahme für die Oberfläche.
-struct LiveTranscriptLine: Identifiable, Equatable {
-    let id = UUID()
-    let speaker: String
-    let text: String
+struct RecordingLiveTaskSet {
+    typealias LiveTask = Task<TranscriptOutput?, Never>
+
+    private var tasks: [LiveTask] = []
+
+    var isEmpty: Bool { tasks.isEmpty }
+
+    mutating func append(_ task: LiveTask) {
+        tasks.append(task)
+    }
+
+    mutating func takeForStop() -> [LiveTask] {
+        let currentTasks = tasks
+        tasks = []
+        return currentTasks
+    }
+
+    mutating func cancelAndDiscard() {
+        for task in tasks {
+            task.cancel()
+        }
+        tasks = []
+    }
+}
+
+struct RecordingStopFollowUp: Equatable {
+    let meetingStatusCorrection: Meeting.Status?
+    let jobKinds: [Job.Kind]
+
+    static func make(stopFailed: Bool) -> RecordingStopFollowUp {
+        RecordingStopFollowUp(
+            meetingStatusCorrection: stopFailed ? .interrupted : nil,
+            jobKinds: [.finalASR]
+        )
+    }
 }
 
 private struct MicrophoneDiscoveryLoad: Sendable {
@@ -36,6 +67,22 @@ enum AudioExportProgressStream {
     }
 }
 
+struct DemoDataPublicationContext {
+    let library: Library
+    let folders: FolderStore
+    let token: DemoDataPresentationState.StatusToken
+
+    func isCurrent(
+        library: Library?,
+        folders: FolderStore?,
+        token: DemoDataPresentationState.StatusToken
+    ) -> Bool {
+        library === self.library
+            && folders === self.folders
+            && token == self.token
+    }
+}
+
 @MainActor
 @Observable
 final class AppModel {
@@ -45,11 +92,20 @@ final class AppModel {
         URL,
         @escaping @MainActor @Sendable (StereoM4AExportProgress) -> Void
     ) async throws -> Void
+    private static let baselineModelBundleIDs: Set<ModelBundleID> = [
+        .appleSpeech,
+        .speakerSeparation,
+    ]
 
     private(set) var runtime: PipelineRuntime?
     private(set) var folderStore: FolderStore?
-    private(set) var bootstrapError: String?
+    private(set) var startupState = MacStartupState.opening
+    private(set) var startupWarnings: [MacStartupWarning] = []
+    private(set) var libraryIssues: [MacLibraryIssue] = []
+    private(set) var retryingLibraryIssueIDs: Set<MacLibraryIssue.ID> = []
     private(set) var recoveredMeetingIDs: [MeetingID] = []
+    private(set) var isBootstrappingPipeline = false
+    private(set) var isSwitchingTranscriptionLanguage = false
 
     // Der Dialog besitzt niemals die externe Dokument-URL. Sie lebt nur auf
     // dem Stack des vorbereitenden Tasks, bis StenoKit den privaten Snapshot
@@ -90,6 +146,51 @@ final class AppModel {
     let meetingTransferTemporaryDirectory: @Sendable () -> URL
     @ObservationIgnored
     let stereoAudioExportPerformer: StereoAudioExportPerformer
+    @ObservationIgnored
+    private let languagePreferences: TranscriptionLanguagePreferences
+    @ObservationIgnored
+    private let recordingPermissionClient: MacRecordingPermissionClient
+    @ObservationIgnored
+    private let recordingPermissionDefaults: UserDefaults
+    @ObservationIgnored
+    private let recordingPermissionIdentity: @MainActor () -> String?
+    @ObservationIgnored
+    private let pipelineStarter: MacPipelineStarter
+    @ObservationIgnored
+    private let libraryURLOverride: URL?
+    @ObservationIgnored
+    private let modelCacheDirectoryOverride: URL?
+    @ObservationIgnored
+    private let supportedLocalesLoader: MacSupportedLocalesLoader
+    @ObservationIgnored
+    private let meetingListLoader: MacMeetingListLoader
+    @ObservationIgnored
+    private let folderListLoader: MacFolderListLoader
+    @ObservationIgnored
+    private var runtimeGeneration: UInt64 = 0
+    @ObservationIgnored
+    private var meetingRefreshGeneration: UInt64 = 0
+    @ObservationIgnored
+    private var folderRefreshGeneration: UInt64 = 0
+    @ObservationIgnored
+    private var libraryIssueRetryCounters: [MacLibraryIssue.ID: UInt64] = [:]
+    @ObservationIgnored
+    private var activeLibraryIssueRetryGenerations: [MacLibraryIssue.ID: UInt64] = [:]
+
+    let transcriptionModels: TranscriptionModelSettings
+    private let injectedTranscriptionRegistry: TranscriptionProviderRegistry?
+
+    /// Wird bei jedem Zugriff aus der aktuellen Wahl gebaut, damit ein
+    /// umgelegter Schalter sofort wirkt. Die Registry haelt nur Fabriken,
+    /// keine geladenen Modelle - das ist billig. Beim Aufnahmestart wird sie
+    /// einmal gezogen und gilt dann fuer den ganzen Lauf.
+    var transcriptionRegistry: TranscriptionProviderRegistry {
+        injectedTranscriptionRegistry ?? .standard(
+            modelDirectory: resolvedModelCacheDirectory,
+            experimentalFeatures: transcriptionModels.experimentalFeatures
+        )
+    }
+    let transcriptionCatalog: TranscriptionModelCatalog
 
     init(
         meetingTransferClient: MeetingTransferImportClient? = nil,
@@ -99,8 +200,45 @@ final class AppModel {
         meetingTransferTemporaryDirectory: @escaping @Sendable () -> URL = {
             FileManager.default.temporaryDirectory
         },
-        stereoAudioExportPerformer: StereoAudioExportPerformer? = nil
+        stereoAudioExportPerformer: StereoAudioExportPerformer? = nil,
+        languagePreferences: TranscriptionLanguagePreferences = .init(),
+        transcriptionModels: TranscriptionModelSettings = TranscriptionModelSettings(),
+        transcriptionRegistry: TranscriptionProviderRegistry? = nil,
+        transcriptionCatalog: TranscriptionModelCatalog = .standard,
+        modelCoordinator: ModelInstallationCoordinator? = nil,
+        recordingPermissionClient: MacRecordingPermissionClient = .live,
+        recordingPermissionDefaults: UserDefaults = .standard,
+        recordingPermissionIdentity: @escaping @MainActor () -> String? = {
+            CurrentCodeSigningIdentity.cacheKey()
+        },
+        pipelineStarter: @escaping MacPipelineStarter = { request in
+            try await startPipeline(
+                at: request.libraryURL,
+                transcriptionProviderResolver: request.transcriptionProviderResolver,
+                modelCacheDirectory: request.modelCacheDirectory,
+                textModelProviderResolver: request.textModelProviderResolver,
+                locale: request.locale,
+                activeMeetingIDs: request.activeMeetingIDs
+            )
+        },
+        supportedLocalesLoader: @escaping MacSupportedLocalesLoader = {
+            await SpeechTranscriber.supportedLocales
+        },
+        meetingListLoader: @escaping MacMeetingListLoader = { library in
+            try await library.listMeetings()
+        },
+        folderListLoader: @escaping MacFolderListLoader = { store in
+            try await store.listFolders()
+        },
+        libraryURL: URL? = nil,
+        modelCacheDirectoryOverride: URL? = nil
     ) {
+        self.transcriptionModels = transcriptionModels
+        injectedTranscriptionRegistry = transcriptionRegistry
+        self.transcriptionCatalog = transcriptionCatalog
+        self.modelCoordinator = modelCoordinator
+        self.libraryURLOverride = libraryURL?.standardizedFileURL
+        self.modelCacheDirectoryOverride = modelCacheDirectoryOverride?.standardizedFileURL
         self.meetingTransferClient = meetingTransferClient
         self.meetingTransferDetailClient = meetingTransferDetailClient
         meetingTransferImportClientWasInjected = meetingTransferClient != nil
@@ -108,6 +246,16 @@ final class AppModel {
         self.meetingTransferSecurityScope = meetingTransferSecurityScope
         self.meetingTransferSharing = meetingTransferSharing
         self.meetingTransferTemporaryDirectory = meetingTransferTemporaryDirectory
+        self.languagePreferences = languagePreferences
+        self.recordingPermissionClient = recordingPermissionClient
+        self.recordingPermissionDefaults = recordingPermissionDefaults
+        self.recordingPermissionIdentity = recordingPermissionIdentity
+        self.pipelineStarter = pipelineStarter
+        self.supportedLocalesLoader = supportedLocalesLoader
+        self.meetingListLoader = meetingListLoader
+        self.folderListLoader = folderListLoader
+        selectedLanguageID = languagePreferences.selectedIdentifier
+        languageWasChosenExplicitly = languagePreferences.wasChosenExplicitly
         self.stereoAudioExportPerformer = stereoAudioExportPerformer ?? {
             microphoneURL, systemURL, destinationURL, progress in
             let (updates, continuation) = AudioExportProgressStream.make()
@@ -155,6 +303,13 @@ final class AppModel {
     /// Diarisierung wären dann tote Knöpfe.
     func hasPlayableAudio(_ meetingID: MeetingID) async -> Bool {
         guard let runtime else { return false }
+        return await hasPlayableAudio(meetingID, in: runtime)
+    }
+
+    private func hasPlayableAudio(
+        _ meetingID: MeetingID,
+        in runtime: PipelineRuntime
+    ) async -> Bool {
         let layout = await runtime.library.layout
         let assets = (try? await runtime.library.listMediaAssets(
             meetingID: meetingID
@@ -172,7 +327,14 @@ final class AppModel {
     /// die Detailansicht nach Jobs oder Löschungen nicht auf einem veralteten
     /// Ja sitzenbleibt und tote Knöpfe anbietet.
     func refreshAudioAvailability(_ meetingID: MeetingID) async {
-        if await hasPlayableAudio(meetingID) {
+        guard let runtime else { return }
+        let expectedRuntimeGeneration = runtimeGeneration
+        let isPlayable = await hasPlayableAudio(meetingID, in: runtime)
+        guard runtimeIsCurrent(
+            runtime,
+            generation: expectedRuntimeGeneration
+        ) else { return }
+        if isPlayable {
             meetingsWithAudio.insert(meetingID)
         } else {
             meetingsWithAudio.remove(meetingID)
@@ -211,16 +373,15 @@ final class AppModel {
     private(set) var isRecording = false
     private(set) var recordingMeetingID: MeetingID?
     private(set) var recordingStartedAt: Date?
-    private(set) var liveFinalLines: [LiveTranscriptLine] = []
-    private(set) var liveVolatileText: [AudioTrack: String] = [:]
+    private var liveTranscriptFeed = LiveTranscriptFeed()
+    private(set) var liveTranscriptRows: [LiveTranscriptFeed.Row] = []
     private(set) var levels: [AudioTrack: AudioLevels] = [:]
     private(set) var microphoneStatus: RecordingTrackStatus?
     private(set) var recordingPermissions = RecordingAudioPermissionState()
     private(set) var isResolvingRecordingPermissions = false
-    private var hasResolvedRecordingPermissions = false
-    private static let systemAudioPermissionDefaultsKey =
+    static let systemAudioPermissionDefaultsKey =
         "steno.permissions.systemAudio.lastStatus"
-    private static let systemAudioPermissionIdentityDefaultsKey =
+    static let systemAudioPermissionIdentityDefaultsKey =
         "steno.permissions.systemAudio.codeIdentity"
     private static let legacyProtectedMicrophoneUIDDefaultsKey =
         "steno.permissions.microphone.beforeSystemAudioProbe"
@@ -237,6 +398,30 @@ final class AppModel {
     /// Eigene Meldung fuer die Einstellungen: `notice` haengt am Hauptfenster
     /// und waere im Einstellungsfenster unsichtbar.
     var peopleError: String?
+    private(set) var demoDataPresentationState = DemoDataPresentationState()
+    private(set) var isManagingDemoData = false
+    @ObservationIgnored
+    private var demoDataStatusRefreshTask: Task<Void, Never>?
+
+    var demoDataStatus: DemoLibraryStatus? {
+        demoDataPresentationState.status
+    }
+
+    var isCheckingDemoDataStatus: Bool {
+        demoDataPresentationState.isChecking
+    }
+
+    var demoDataStatusError: String? {
+        demoDataPresentationState.statusError
+    }
+
+    var demoDataError: String? {
+        demoDataPresentationState.lifecycleError
+    }
+
+    var demoDataLastResult: DemoLifecycleResult? {
+        demoDataPresentationState.lifecycleResult
+    }
 
     struct Notice: Equatable, Identifiable {
         let id = UUID()
@@ -244,14 +429,24 @@ final class AppModel {
         let isError: Bool
     }
 
+    struct StartupNoticePresentation: Equatable {
+        let text: String
+        let isError: Bool
+        let autoDismiss: Bool
+    }
+
     /// Fehler bleiben stehen, bis der Benutzer sie bestaetigt - eine
     /// Bestaetigung nicht: Sie hat ihre Arbeit getan, sobald sie gelesen ist,
     /// und stuende sonst noch da, wenn man laengst woanders arbeitet.
-    func report(_ text: String, isError: Bool = true) {
+    func report(
+        _ text: String,
+        isError: Bool = true,
+        autoDismiss: Bool? = nil
+    ) {
         let notice = Notice(text: text, isError: isError)
         self.notice = notice
         noticeDismissTask?.cancel()
-        guard !isError else { return }
+        guard autoDismiss ?? !isError else { return }
         noticeDismissTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(4))
             guard !Task.isCancelled else { return }
@@ -264,10 +459,6 @@ final class AppModel {
     func dismissNotice() {
         noticeDismissTask?.cancel()
         notice = nil
-    }
-
-    func dismissBootstrapError() {
-        bootstrapError = nil
     }
 
     /// Der Dateiwaehler haengt am Fenster, das Menue liegt darueber. Das Flag
@@ -287,13 +478,68 @@ final class AppModel {
     }
 
     nonisolated static func pipelineStartupWarningMessage(
-        for warnings: [PipelineStartupWarning]
+        for warnings: [PipelineStartupWarning],
+        locale: Locale = .current
     ) -> String? {
         guard !warnings.isEmpty else { return nil }
-        if warnings.count == 1 {
-            return "One imported meeting needs attention because its processing could not be resumed. Other meetings and recording remain available."
+        let orphanedMediaCount = warnings.reduce(into: 0) { count, warning in
+            if case .orphanedMedia = warning { count += 1 }
         }
-        return "\(warnings.count) imported meetings need attention because their processing could not be resumed. Other meetings and recording remain available."
+        let importedMeetingCount = warnings.count - orphanedMediaCount
+        var messages: [String] = []
+        if orphanedMediaCount == 1 {
+            messages.append(localized("Steno found an original recording file that could not be safely registered. The file remains stored and needs attention.", locale: locale))
+        } else if orphanedMediaCount > 1 {
+            messages.append(localized("Steno found \(orphanedMediaCount) original recording files that could not be safely registered. The files remain stored and need attention.", locale: locale))
+        }
+        if importedMeetingCount == 1 {
+            messages.append(localized("One imported meeting needs attention because its processing could not be resumed. Other meetings and recording remain available.", locale: locale))
+        } else if importedMeetingCount > 1 {
+            messages.append(localized("\(importedMeetingCount) imported meetings need attention because their processing could not be resumed. Other meetings and recording remain available.", locale: locale))
+        }
+        return messages.joined(separator: " ")
+    }
+
+    nonisolated static func startupNoticePresentation(
+        for warnings: [PipelineStartupWarning],
+        captureRecoveryFailure: String?,
+        locale: Locale = .current
+    ) -> StartupNoticePresentation? {
+        let pipelineWarning = pipelineStartupWarningMessage(
+            for: warnings,
+            locale: locale
+        )
+        let messages = [pipelineWarning, captureRecoveryFailure].compactMap { $0 }
+        guard !messages.isEmpty else { return nil }
+        let containsOrphan = warnings.contains { warning in
+            if case .orphanedMedia = warning { return true }
+            return false
+        }
+        return StartupNoticePresentation(
+            text: messages.joined(separator: " "),
+            isError: captureRecoveryFailure != nil,
+            autoDismiss: captureRecoveryFailure == nil && !containsOrphan
+        )
+    }
+
+    private nonisolated static func localized(
+        _ resource: LocalizedStringResource,
+        locale: Locale
+    ) -> String {
+        var resource = resource
+        resource.locale = locale
+        return String(localized: resource)
+    }
+
+    nonisolated static func captureRecoveryFailureMessage(
+        _ failures: [CaptureRecovery.Failure]
+    ) -> String? {
+        guard let first = failures.first else { return nil }
+        let meetingCount = Set(failures.map(\.meetingID)).count
+        if meetingCount == 1 {
+            return String(localized: "Steno could not finish recovering one interrupted meeting. All recording files remain stored. First error: \(first.error.localizedDescription)")
+        }
+        return String(localized: "Steno could not finish recovering \(meetingCount) interrupted meetings. All recording files remain stored. First error: \(first.error.localizedDescription)")
     }
 
     // Hörproben-Wiedergabe im Sprecher-Review
@@ -316,13 +562,26 @@ final class AppModel {
     }
 
     private var session: RecordingSession?
-    private var liveTasks: [Task<TranscriptOutput?, Never>] = []
+    private var liveTasks = RecordingLiveTaskSet()
     private var levelTask: Task<Void, Never>?
     private var recordingStopTask: Task<Void, Never>?
     private var meetingChangesTask: Task<Void, Never>?
     private var recordingStartState = RecordingStartState()
 
     var isStartingRecording: Bool { recordingStartState.isStarting }
+
+    var canStartRecording: Bool {
+        runtime != nil
+            && startupState == .ready
+            && !isBootstrappingPipeline
+            && !isRecording
+            && !isStartingRecording
+            && !isResolvingRecordingPermissions
+    }
+
+    private var activeRecordingMeetingIDs: Set<MeetingID> {
+        Set([recordingMeetingID, recordingStartState.activeMeetingID].compactMap { $0 })
+    }
 
     private(set) var microphoneDiscovery = MicrophoneDiscoverySnapshot.empty
     private(set) var microphoneDiscoveryError: String?
@@ -361,7 +620,7 @@ final class AppModel {
         }
         microphoneDiscovery = load.snapshot
         if let errorDescription = load.errorDescription {
-            microphoneDiscoveryError = "Steno could not read the available microphones. (\(errorDescription))"
+            microphoneDiscoveryError = String(localized: "Steno could not read the available microphones. (\(errorDescription))")
         } else {
             microphoneDiscoveryError = nil
         }
@@ -380,25 +639,62 @@ final class AppModel {
         MicrophoneSelectionStore().save(recordingMicrophoneMode)
     }
 
-    private let micProvider = SpeechAnalyzerProvider(channel: .microphone)
-    private let systemProvider = SpeechAnalyzerProvider(channel: .system)
-
     // Transkriptionssprache: explizit wählbar und persistiert. Der System-
     // Locale-Default hat sich als Falle erwiesen (englisches macOS ->
     // deutsche Sprache englisch transkribiert).
-    private static let languageDefaultsKey = "steno.transcription.language"
     private(set) var availableLocales: [Locale] = []
     /// Eine leere Liste heisst zweierlei: noch nicht gefragt, oder gefragt und
     /// nichts bekommen. Ohne diese Unterscheidung muesste die Oberflaeche
     /// raten, und der Wizard oeffnet bewusst vor `bootstrap`.
     private(set) var hasLoadedLocales = false
-    private(set) var selectedLanguageID: String = UserDefaults.standard
-        .string(forKey: AppModel.languageDefaultsKey)
-        ?? Locale.current.identifier
-    private var locale: Locale { Locale(identifier: selectedLanguageID) }
+    private(set) var selectedLanguageID: String
+    private(set) var languageWasChosenExplicitly: Bool
+    private var resolvedLanguageFallback: Locale?
+    private var locale: Locale {
+        resolvedLanguageFallback ?? Locale(identifier: selectedLanguageID)
+    }
+    var effectiveTranscriptionLanguageID: String { locale.identifier }
+    var transcriptionLanguageSelection: TranscriptionLanguageSelection {
+        TranscriptionLanguageSelection(
+            selectedIdentifier: selectedLanguageID,
+            wasChosenExplicitly: languageWasChosenExplicitly,
+            resolvedFallback: resolvedLanguageFallback
+        )
+    }
+    var canConfirmTranscriptionLanguage: Bool {
+        transcriptionLanguageSelection.canBeConfirmed(in: availableLocales)
+    }
+    var selectedTranscriptionLanguageName: String {
+        localizedLanguageName(locale)
+    }
 
-    private func provider(for track: AudioTrack) -> SpeechAnalyzerProvider {
-        track == .microphone ? micProvider : systemProvider
+    private static func assetKind(for track: AudioTrack) -> MediaAsset.Kind {
+        track == .microphone ? .micTrack : .systemTrack
+    }
+
+    var canChangeTranscriptionModels: Bool { !isRecording && !isStartingRecording }
+
+    /// Momentaufnahme der aktuell gewaehlten Live- und Final-Provider. Wird
+    /// beim Aufnahmestart einmal gezogen und dann fuer die ganze Aufnahme
+    /// gepinnt - eine spaetere Aenderung in den Einstellungen betrifft nur
+    /// neue Aufnahmen und ausdrueckliche Neu-Transkriptionen.
+    func currentTranscriptionPlan() -> TranscriptionPlan {
+        TranscriptionPlan(
+            liveProviderID: transcriptionModels.liveProviderID,
+            finalProviderID: transcriptionModels.finalProviderID
+        )
+    }
+
+    func transcriptionModelName(_ id: TranscriptionProviderID) -> String {
+        transcriptionCatalog.descriptor(for: id)?.displayName ?? id.rawValue
+    }
+
+    /// Ob ein Modell wirklich installiert ist, nicht nur im Katalog steht.
+    /// Apple braucht keine gesonderte Installation; alles andere haengt an
+    /// `parakeetReadiness`. Falle 4: ein nicht installiertes Modell darf
+    /// nicht als waehlbar erscheinen.
+    func isTranscriptionModelInstalled(_ id: TranscriptionProviderID) -> Bool {
+        id == .apple || parakeetReadiness?.isReady(for: transcriptionLocale) == true
     }
 
     // MARK: - Modelle
@@ -410,9 +706,42 @@ final class AppModel {
     /// Arbeitsfaehigkeit je Sprache, nicht als einzelnes Ja: die
     /// Sprachassets haengen an der Locale, die Antwort kippt beim Wechsel.
     private(set) var modelReadiness: ModelReadiness?
+    /// Bereitschaft des optionalen Parakeet-Modells, getrennt von
+    /// `modelReadiness`: Parakeet ist kein Basismodell, ohne das gar nichts
+    /// transkribiert werden kann, sondern eine ausdrueckliche Zusatzwahl.
+    private(set) var parakeetReadiness: ModelReadiness?
     private(set) var modelInstallProgress: ModelInstallProgress?
     private(set) var isInstallingModels = false
+    private(set) var modelInstallationCancellationState: MacModelInstallCancellationState = .idle
     private(set) var modelError: String?
+    @ObservationIgnored
+    private var activeModelInstallation: ActiveModelInstallation?
+    @ObservationIgnored
+    private var modelInstallationCompletionOwner: ModelInstallationIdentity?
+    @ObservationIgnored
+    private var modelInstallationCompletionWaiters: [CheckedContinuation<Void, Never>] = []
+
+    var modelInstallProgressPresentation: MacModelInstallProgressPresentation? {
+        MacModelInstallProgressPresentation.make(
+            isInstalling: isInstallingModels,
+            cancellationState: modelInstallationCancellationState,
+            progress: modelInstallProgress
+        )
+    }
+
+    var isInstallingBaselineModels: Bool {
+        activeModelInstallation?.target == .baseline
+    }
+
+    var isInstallingParakeet: Bool {
+        activeModelInstallation?.target == .parakeet
+    }
+
+    var showsModelInstallationCancellationAction: Bool {
+        modelInstallationCancellationState == .cancelling
+            || (activeModelInstallation != nil
+                && modelInstallationCompletionOwner == nil)
+    }
     /// Die zuletzt geprueften Modellbytes stimmten nicht mit den
     /// freigegebenen ueberein.
     ///
@@ -450,24 +779,67 @@ final class AppModel {
     /// Koordinator beim ersten Mal auf; das Pruefsummenmanifest kann fehlen,
     /// deshalb kann das scheitern.
     func refreshModelReadiness() async {
-        if modelCoordinator == nil {
-            do {
-                modelCoordinator = try ModelInstallationCoordinator.standard(
-                    modelCacheDirectory: Self.modelCacheURL()
-                )
-            } catch {
-                modelError = Self.message("The model list could not be read.", error)
-                return
-            }
-        }
-        guard let modelCoordinator else { return }
-        modelReadiness = await modelCoordinator.readiness(for: [locale])
+        guard !isInstallingModels, prepareModelCoordinator() else { return }
+        await performBaselineReadinessRefresh(for: locale)
     }
 
     /// Zustimmen und sofort installieren. Der Nutzer soll nach dem Klick
     /// nicht raten muessen, ob noch etwas passieren wird.
     func allowAndInstallModels() async {
         _ = await installModels(for: locale)
+    }
+
+    /// Wird von der Transkriptions-Einstellungsseite gerufen, bevor sie
+    /// Parakeets Status zeigt.
+    func refreshParakeetReadiness() async {
+        guard !isInstallingModels, prepareModelCoordinator() else { return }
+        await performParakeetReadinessRefresh(for: locale)
+    }
+
+    /// Zustimmung und Installation fuer genau das eine optionale Modell,
+    /// getrennt von `allowAndInstallModels()`: Parakeet ist keine
+    /// Voraussetzung fuer die Basis-Arbeitsfaehigkeit, seine Installation
+    /// ist eine eigene, ausdrueckliche Entscheidung.
+    func installParakeet() async {
+        guard !isRecording, !isInstallingModels else { return }
+        isInstallingModels = true
+        modelInstallationCancellationState = .idle
+        modelError = nil
+        modelInstallProgress = nil
+        guard prepareModelCoordinator(), let modelCoordinator else {
+            finishModelInstallationSetup()
+            return
+        }
+        modelConsent.grant(sources: [.huggingFace])
+        _ = await runRetainedModelInstallation(
+            target: .parakeet,
+            bundleIDs: [.parakeetTDTv3],
+            locale: locale,
+            coordinator: modelCoordinator,
+            errorSummary: "Parakeet could not be installed."
+        )
+    }
+
+    /// Das ausdrueckliche Apple-Retry-Angebot: ein fehlgeschlagener
+    /// Parakeet-Lauf schlaegt Apple vor, wechselt aber nie selbst um. Der
+    /// Klick hier ist die Zustimmung.
+    func retryFinalASRWithApple(_ failedJob: Job) async {
+        guard let runtime,
+              failedJob.kind == .finalASR,
+              failedJob.status == .failed
+        else { return }
+        let localeIdentifier = failedJob.localeIdentifier ?? selectedLanguageID
+        do {
+            try await runtime.jobStore.enqueue(Job.finalASR(
+                meetingID: failedJob.meetingID,
+                providerID: .apple,
+                localeIdentifier: localeIdentifier,
+                processingGenerationID: failedJob.processingGenerationID
+            ))
+            noteJobEnqueued(for: failedJob.meetingID)
+        } catch {
+            report(Self.message("The Apple retry could not be queued.", error))
+        }
     }
 
     /// Prüft ausschließlich die lokal ausgewählte Importsprache. Ein Paket
@@ -481,7 +853,10 @@ final class AppModel {
             await refreshModelReadiness()
         }
         guard let modelCoordinator else { return false }
-        let readiness = await modelCoordinator.readiness(for: [locale])
+        let readiness = await modelCoordinator.readiness(
+            for: [locale],
+            bundleIDs: Self.baselineModelBundleIDs
+        )
         return readiness.isReady(for: locale) && !lastCheckFoundWrongBytes
     }
 
@@ -520,10 +895,7 @@ final class AppModel {
             return false
         }
         isInstallingModels = true
-        defer {
-            isInstallingModels = false
-            modelInstallProgress = nil
-        }
+        modelInstallationCancellationState = .idle
         modelError = nil
         // `lastCheckFoundWrongBytes` wird hier bewusst **nicht** geloescht.
         // Es wird nur von einer bestandenen Pruefung widerlegt, nicht von
@@ -531,52 +903,126 @@ final class AppModel {
         // etwa ohne Netz am Dateilisting, wissen wir nichts Neues - die
         // beschaedigten Dateien liegen unveraendert da, und "Ready" waere
         // wieder die Luege, die dieser Zustand verhindern soll.
-        modelInstallProgress = ModelInstallProgress(fraction: 0, title: "Preparing")
-        await refreshModelReadiness()
-        guard let modelCoordinator else { return false }
+        modelInstallProgress = nil
+        guard prepareModelCoordinator(), let modelCoordinator else {
+            finishModelInstallationSetup()
+            return false
+        }
         modelConsent.grant(sources: modelSources())
-        var installationCompleted = false
+        return await runRetainedModelInstallation(
+            target: .baseline,
+            bundleIDs: Self.baselineModelBundleIDs,
+            locale: locale,
+            coordinator: modelCoordinator,
+            errorSummary: "The models could not be installed."
+        )
+    }
+
+    private func prepareModelCoordinator() -> Bool {
+        guard modelCoordinator == nil else { return true }
         do {
-            try await modelCoordinator.installAll(
+            modelCoordinator = try ModelInstallationCoordinator.standard(
+                modelCacheDirectory: resolvedModelCacheDirectory
+            )
+            return true
+        } catch {
+            modelError = Self.message("The model list could not be read.", error)
+            return false
+        }
+    }
+
+    private func runRetainedModelInstallation(
+        target: ModelInstallationTarget,
+        bundleIDs: Set<ModelBundleID>,
+        locale: Locale,
+        coordinator: ModelInstallationCoordinator,
+        errorSummary: String
+    ) async -> Bool {
+        let identity = ModelInstallationIdentity()
+        let consentGranted = modelConsent.isGranted
+        let task = Task { [weak self] in
+            guard let self else { return false }
+            return await self.performModelInstallation(
+                target: target,
+                bundleIDs: bundleIDs,
+                locale: locale,
+                coordinator: coordinator,
+                consentGranted: consentGranted,
+                identity: identity,
+                errorSummary: errorSummary
+            )
+        }
+        let installation = ActiveModelInstallation(
+            identity: identity,
+            target: target,
+            locale: locale,
+            task: task
+        )
+        activeModelInstallation = installation
+        modelInstallationCompletionOwner = nil
+
+        let installationCompleted = await task.value
+        guard isCurrentModelInstallation(installation) else { return false }
+        guard modelInstallationCancellationState == .idle else { return false }
+        guard claimModelInstallationCompletion(installation) else { return false }
+
+        await refreshReadiness(
+            for: installation.target,
+            locale: installation.locale,
+            owner: installation.identity
+        )
+        guard isCurrentModelInstallation(installation) else { return false }
+        let verifiedReady = modelInstallationIsReady(
+            target: installation.target,
+            locale: installation.locale
+        )
+        finishModelInstallation(installation)
+        return installationCompleted && verifiedReady
+    }
+
+    private func performModelInstallation(
+        target: ModelInstallationTarget,
+        bundleIDs: Set<ModelBundleID>,
+        locale: Locale,
+        coordinator: ModelInstallationCoordinator,
+        consentGranted: Bool,
+        identity: ModelInstallationIdentity,
+        errorSummary: String
+    ) async -> Bool {
+        do {
+            try await coordinator.install(
+                bundleIDs: bundleIDs,
                 for: locale,
-                consentGranted: modelConsent.isGranted
-            ) { progress in
-                Task { @MainActor [weak self] in
-                    self?.applyInstallProgress(progress)
+                consentGranted: consentGranted
+            ) { [weak self] progress in
+                Task { @MainActor in
+                    self?.applyInstallProgress(progress, identity: identity)
                 }
             }
-            installationCompleted = true
+            if target == .baseline {
+                // Nur eine vollständig durchgelaufene Prüfung widerlegt einen
+                // früheren Integritätsfehler.
+                lastCheckFoundWrongBytes = false
+            }
+            return true
         } catch is CancellationError {
-            // Widerruf: kein Fehlschlag, ueber den der Nutzer etwas lesen
-            // muss - er hat ihn selbst ausgeloest.
-        } catch let integrity as ModelIntegrityError {
-            // Der einzige Fall, in dem alle Dateien da sind und trotzdem
-            // nichts stimmt. Nur hier darf die Statuszeile ihre Bereitschaft
-            // zuruecknehmen; ein Netzfehler sagt darueber nichts.
-            if modelConsent.isGranted {
-                modelError = Self.message("The models could not be installed.", integrity)
+            return false
+        } catch let integrity as ModelIntegrityError where target == .baseline {
+            if modelConsent.isGranted,
+               modelInstallationCancellationState == .idle {
+                modelError = Self.message(errorSummary, integrity)
                 lastCheckFoundWrongBytes = true
             }
+            return false
         } catch {
-            // Zweiter Filter fuer denselben Fall: ein Widerruf mitten im Lauf
-            // laesst die Installer auch mit einem anderen Fehler
-            // zurueckkommen, weil Apple und URLSession einen abgebrochenen
-            // Transfer als Fehlschlag melden. Ist die Zustimmung weg, war es
-            // der Nutzer selbst, und dann steht hier nichts Rotes.
-            if modelConsent.isGranted {
-                modelError = Self.message("The models could not be installed.", error)
+            // URLSession und Apples Assettransfer koennen einen angeforderten
+            // Abbruch als Transportfehler statt als CancellationError melden.
+            if modelConsent.isGranted,
+               modelInstallationCancellationState == .idle {
+                modelError = Self.message(errorSummary, error)
             }
+            return false
         }
-        if installationCompleted {
-            // Nur eine durchgelaufene Pruefung widerlegt den Befund. Nicht
-            // an `modelError == nil` haengen: ein Widerruf laesst die
-            // Meldung bewusst leer, obwohl `verify` nie durchkam.
-            lastCheckFoundWrongBytes = false
-        }
-        await refreshModelReadiness()
-        guard installationCompleted else { return false }
-        let readiness = await modelCoordinator.readiness(for: [locale])
-        return readiness.isReady(for: locale) && !lastCheckFoundWrongBytes
     }
 
     /// Widerruf stoppt kuenftige Downloads und fordert den Abbruch eines
@@ -586,12 +1032,63 @@ final class AppModel {
     /// da ist, soll weiter benutzbar bleiben.
     func revokeModelConsent() async {
         modelConsent.revoke()
+        guard let installation = activeModelInstallation else {
+            await modelCoordinator?.cancelAll()
+            await performBaselineReadinessRefresh(for: locale)
+            await performParakeetReadinessRefresh(for: locale)
+            return
+        }
+
+        if modelInstallationCancellationState == .cancelling
+            || modelInstallationCompletionOwner != nil {
+            await modelCoordinator?.cancelAll()
+            await waitForModelInstallationCompletion(installation)
+            return
+        }
+
+        modelInstallationCancellationState = .cancelling
+        guard claimModelInstallationCompletion(installation) else {
+            await waitForModelInstallationCompletion(installation)
+            return
+        }
+        await cancelAndFinishModelInstallation(installation)
+    }
+
+    /// Bricht nur den laufenden Transfer ab. Die bereits protokollierte
+    /// Zustimmung bleibt erhalten und ist weiterhin getrennt widerrufbar.
+    @discardableResult
+    func cancelModelInstallation() async -> Bool {
+        guard isInstallingModels,
+              modelInstallationCancellationState == .idle,
+              let installation = activeModelInstallation,
+              modelInstallationCompletionOwner == nil else { return false }
+
+        modelInstallationCancellationState = .cancelling
+        guard claimModelInstallationCompletion(installation) else { return false }
+        await cancelAndFinishModelInstallation(installation)
+        return true
+    }
+
+    private func cancelAndFinishModelInstallation(
+        _ installation: ActiveModelInstallation
+    ) async {
         await modelCoordinator?.cancelAll()
-        // `isInstallingModels` wird hier bewusst nicht zurueckgesetzt: der
-        // laufende Lauf raeumt selbst auf, wenn er wirklich beendet ist. Ein
-        // sofort wieder erscheinender Knopf waere die Behauptung, es laufe
-        // nichts mehr, waehrend der Abbruch noch durchgereicht wird.
-        await refreshModelReadiness()
+        _ = await installation.task.value
+        guard isCurrentModelInstallation(installation) else { return }
+
+        // Keine lokale Vermutung über teilweise geschriebene Bytes. Erst
+        // nachdem genau der abgebrochene Task wirklich beendet ist, werden
+        // beide verifizierten Zustände neu aus den Installern gelesen.
+        await performBaselineReadinessRefresh(
+            for: installation.locale,
+            owner: installation.identity
+        )
+        await performParakeetReadinessRefresh(
+            for: installation.locale,
+            owner: installation.identity
+        )
+        guard isCurrentModelInstallation(installation) else { return }
+        finishModelInstallation(installation)
     }
 
     /// Die Quellen in der Reihenfolge der Bundles, jede genau einmal. Sie
@@ -604,9 +1101,142 @@ final class AppModel {
     /// Die Rueckrufe kommen aus fremden Kontexten und koennen sich beim
     /// Sprung auf den Hauptaktor ueberholen. Innerhalb eines Bundles laeuft
     /// der Balken deshalb nur vorwaerts.
-    private func applyInstallProgress(_ progress: ModelInstallProgress) {
+    private func applyInstallProgress(
+        _ progress: ModelInstallProgress,
+        identity: ModelInstallationIdentity
+    ) {
+        guard activeModelInstallation?.identity === identity else { return }
+        guard progress.fraction.isFinite else { return }
         guard progress.supersedes(modelInstallProgress) else { return }
         modelInstallProgress = progress
+    }
+
+    private func performBaselineReadinessRefresh(
+        for locale: Locale,
+        owner: ModelInstallationIdentity? = nil
+    ) async {
+        guard canApplyModelReadinessRefresh(owner: owner),
+              let modelCoordinator else { return }
+        let result = await modelCoordinator.readiness(
+            for: [locale],
+            bundleIDs: Self.baselineModelBundleIDs
+        )
+        guard canApplyModelReadinessRefresh(owner: owner) else { return }
+        modelReadiness = result
+    }
+
+    private func performParakeetReadinessRefresh(
+        for locale: Locale,
+        owner: ModelInstallationIdentity? = nil
+    ) async {
+        guard canApplyModelReadinessRefresh(owner: owner),
+              let modelCoordinator else { return }
+        let result = await modelCoordinator.readiness(
+            for: [locale],
+            bundleIDs: [.parakeetTDTv3]
+        )
+        guard canApplyModelReadinessRefresh(owner: owner) else { return }
+        parakeetReadiness = result
+    }
+
+    private func refreshReadiness(
+        for target: ModelInstallationTarget,
+        locale: Locale,
+        owner: ModelInstallationIdentity
+    ) async {
+        switch target {
+        case .baseline:
+            await performBaselineReadinessRefresh(for: locale, owner: owner)
+        case .parakeet:
+            await performParakeetReadinessRefresh(for: locale, owner: owner)
+        }
+    }
+
+    private func modelInstallationIsReady(
+        target: ModelInstallationTarget,
+        locale: Locale
+    ) -> Bool {
+        switch target {
+        case .baseline:
+            modelReadiness?.isReady(for: locale) == true
+                && !lastCheckFoundWrongBytes
+        case .parakeet:
+            parakeetReadiness?.isReady(for: locale) == true
+        }
+    }
+
+    private func canApplyModelReadinessRefresh(
+        owner: ModelInstallationIdentity?
+    ) -> Bool {
+        if let owner {
+            return activeModelInstallation?.identity === owner
+        }
+        return activeModelInstallation == nil
+    }
+
+    private func isCurrentModelInstallation(
+        _ installation: ActiveModelInstallation
+    ) -> Bool {
+        activeModelInstallation?.identity === installation.identity
+    }
+
+    private func claimModelInstallationCompletion(
+        _ installation: ActiveModelInstallation
+    ) -> Bool {
+        guard isCurrentModelInstallation(installation),
+              modelInstallationCompletionOwner == nil else { return false }
+        modelInstallationCompletionOwner = installation.identity
+        return true
+    }
+
+    private func waitForModelInstallationCompletion(
+        _ installation: ActiveModelInstallation
+    ) async {
+        guard isCurrentModelInstallation(installation) else { return }
+        await withCheckedContinuation { continuation in
+            guard isCurrentModelInstallation(installation) else {
+                continuation.resume()
+                return
+            }
+            modelInstallationCompletionWaiters.append(continuation)
+        }
+    }
+
+    private func finishModelInstallationSetup() {
+        isInstallingModels = false
+        modelInstallationCancellationState = .idle
+        modelInstallProgress = nil
+    }
+
+    private func finishModelInstallation(
+        _ installation: ActiveModelInstallation
+    ) {
+        guard isCurrentModelInstallation(installation),
+              modelInstallationCompletionOwner === installation.identity else { return }
+        activeModelInstallation = nil
+        modelInstallationCompletionOwner = nil
+        isInstallingModels = false
+        modelInstallationCancellationState = .idle
+        modelInstallProgress = nil
+        let waiters = modelInstallationCompletionWaiters
+        modelInstallationCompletionWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    private enum ModelInstallationTarget: Equatable {
+        case baseline
+        case parakeet
+    }
+
+    private final class ModelInstallationIdentity: @unchecked Sendable {}
+
+    private struct ActiveModelInstallation {
+        let identity: ModelInstallationIdentity
+        let target: ModelInstallationTarget
+        let locale: Locale
+        let task: Task<Bool, Never>
     }
 
     static func libraryURL() -> URL {
@@ -634,28 +1264,55 @@ final class AppModel {
         return URL(fileURLWithPath: override, isDirectory: true)
     }
 
+    /// Diese Werte werden erst beim Zugriff aufgeloest, damit die
+    /// produktiven Umgebungs-Overrides ihren bisherigen Zeitpunkt behalten.
+    /// Tests reichen stattdessen explizite, isolierte Pfade ein.
+    var resolvedLibraryURL: URL {
+        libraryURLOverride ?? Self.libraryURL()
+    }
+
+    var resolvedModelCacheDirectory: URL? {
+        modelCacheDirectoryOverride ?? Self.modelCacheURL()
+    }
+
     // MARK: - Start
 
     func bootstrap() async {
-        guard runtime == nil else { return }
+        guard runtime == nil,
+              !isBootstrappingPipeline,
+              !isSwitchingTranscriptionLanguage else { return }
+        isBootstrappingPipeline = true
+        defer { isBootstrappingPipeline = false }
+        startupState = .opening
+        // Die Pipeline haelt ihre Locale fuer ihre gesamte Lebensdauer.
+        // Deshalb muss die effektive, von Speech tatsaechlich unterstuetzte
+        // Sprache feststehen, bevor der Koordinator entsteht.
+        await loadAvailableLocales()
+        var fatalFailure: MacStartupFailure?
+        var replacementStartupWarnings: [MacStartupWarning] = []
         do {
-            let runtime = try await startPipeline(
-                at: Self.libraryURL(),
-                providers: [
-                    .micTrack: micProvider,
-                    .systemTrack: systemProvider,
-                    // Importe haben keine Kanalsemantik; das System-Label
-                    // "Andere" ist die bewusste M1-Vereinfachung, bis die
-                    // Diarisierung (Meilenstein 3) echte Sprecher liefert.
-                    .imported: systemProvider,
-                ],
-                modelCacheDirectory: Self.modelCacheURL(),
+            let request = MacPipelineStartRequest(
+                libraryURL: resolvedLibraryURL,
+                // Der Provider wird je Job aufgeloest, nicht fest verdrahtet:
+                // ein finalASR-Job traegt seinen gepinnten Provider aus
+                // `meeting.transcriptionPlan`, und die Ausfuehrungsgrenze
+                // lehnt einen nicht registrierten Provider ab, statt still
+                // auf Apple zurueckzufallen (`TranscriptionRegistryError`).
+                transcriptionProviderResolver: { [transcriptionRegistry] providerID, assetKind in
+                    try transcriptionRegistry.resolve(providerID, for: assetKind)
+                },
+                modelCacheDirectory: resolvedModelCacheDirectory,
                 textModelProviderResolver: { selection in
                     try TextModelSettings.resolveProvider(selection: selection)
                 },
-                locale: locale
+                locale: locale,
+                activeMeetingIDs: activeRecordingMeetingIDs
             )
+            let runtime = try await pipelineStarter(request)
+            invalidateRuntimeDependentOperations()
             self.runtime = runtime
+            libraryIssues = []
+            invalidateDemoDataContext()
             if !meetingTransferImportClientWasInjected {
                 meetingTransferClient = MeetingTransferImportClient(
                     service: MeetingTransferImportService(
@@ -674,8 +1331,9 @@ final class AppModel {
                 folderStore = try FolderStore.open(layout: runtime.library.layout)
             } catch {
                 folderStore = nil
-                report(Self.message("The folders could not be loaded.", error))
+                reportLibraryIssue(.folders(error.localizedDescription))
             }
+            invalidateDemoDataContext()
             let meetingChanges = await runtime.library.meetingChanges()
             meetingChangesTask?.cancel()
             meetingChangesTask = Task { [weak self] in
@@ -686,10 +1344,21 @@ final class AppModel {
             }
             // Nach dem Sweep: gestrandete Capture-Dateien harter Abstürze
             // als Originalspuren adoptieren und die Finalisierung einreihen.
-            _ = try? await CaptureRecovery.run(
-                library: runtime.library,
-                jobStore: runtime.jobStore
-            )
+            let captureRecoveryFailure: String?
+            do {
+                let recovery = try await CaptureRecovery.run(
+                    library: runtime.library,
+                    jobStore: runtime.jobStore
+                )
+                captureRecoveryFailure = Self.captureRecoveryFailureMessage(
+                    recovery.failures
+                )
+            } catch {
+                captureRecoveryFailure = Self.message(
+                    "Interrupted recordings could not be inspected. Existing recording files remain stored.",
+                    error
+                )
+            }
             // Einmalig: Ordnernamen aus dem Steno-Altimport in echte Ordner
             // überführen. Scheitert das, fehlen Ordner - die Meetings selbst
             // sind unberührt, deshalb bricht es den Start nicht ab.
@@ -700,38 +1369,50 @@ final class AppModel {
                 )
             }
             await refreshMeetings()
-            if let warning = Self.pipelineStartupWarningMessage(
+            await refreshDemoDataStatus()
+            if let pipelineWarning = Self.pipelineStartupWarningMessage(
                 for: runtime.startupWarnings
             ) {
-                report(warning, isError: false)
+                replacementStartupWarnings.append(.pipeline(pipelineWarning))
+            }
+            if let captureRecoveryFailure {
+                replacementStartupWarnings.append(
+                    .captureRecovery(captureRecoveryFailure)
+                )
             }
         } catch {
-            bootstrapError = Self.message("The library could not be opened.", error)
+            fatalFailure = .runtimeOpening(error.localizedDescription)
         }
-        await loadAvailableLocales()
         // Erst nach der Sprachwahl: die Arbeitsfaehigkeit haengt an der
         // Sprache, die dann wirklich eingestellt ist.
         await refreshModelReadiness()
+        // Failed wird erst nach dem letzten Suspendierungspunkt sichtbar.
+        // Damit kann der sichtbare Retry nicht noch in den auslaufenden
+        // Bootstrap geraten und am In-Flight-Guard wirkungslos abprallen.
+        if let fatalFailure {
+            startupState = .failed(fatalFailure)
+        } else {
+            startupWarnings = replacementStartupWarnings
+            startupState = .ready
+        }
     }
 
     private func loadAvailableLocales() async {
-        let supported = await SpeechTranscriber.supportedLocales
+        let supported = await supportedLocalesLoader()
+        // Gegen dieselbe unformatierte Speech-Liste aufloesen, die auch der
+        // Provider verwendet. Die Sortierung darunter ist reine Anzeige und
+        // darf die Auswahl der tatsaechlichen Erkenner-Locale nicht aendern.
+        let alreadyValid = supported.contains {
+            $0.identifier.caseInsensitiveCompare(selectedLanguageID) == .orderedSame
+        }
+        resolvedLanguageFallback = alreadyValid
+            ? nil
+            : LocaleResolver.select(
+                requested: Locale(identifier: selectedLanguageID),
+                supported: supported
+            )
         availableLocales = supported.sorted {
             localizedLanguageName($0) < localizedLanguageName($1)
-        }
-        // Erste Ausführung ohne gespeicherte Wahl: den System-Locale nur
-        // übernehmen, wenn er wirklich unterstützt wird, sonst bewusst
-        // nichts raten und den ersten unterstützten Eintrag zeigen.
-        if !availableLocales.contains(where: {
-            $0.identifier.caseInsensitiveCompare(selectedLanguageID) == .orderedSame
-        }) {
-            let fallback = LocaleResolver.select(
-                requested: locale,
-                supported: availableLocales
-            )
-            selectedLanguageID = fallback?.identifier
-                ?? availableLocales.first?.identifier
-                ?? selectedLanguageID
         }
         hasLoadedLocales = true
     }
@@ -745,124 +1426,575 @@ final class AppModel {
     /// neue Sprache nutzen. Während einer Aufnahme nicht erlaubt (die UI
     /// sperrt das zusätzlich).
     func setLanguage(_ identifier: String) async {
-        guard !isRecording, identifier != selectedLanguageID else { return }
+        guard !isRecording,
+              !isStartingRecording,
+              !isBootstrappingPipeline,
+              !isSwitchingTranscriptionLanguage,
+              !isManagingDemoData else { return }
+        let requestedSelection = TranscriptionLanguageSelection(
+            selectedIdentifier: identifier,
+            wasChosenExplicitly: true,
+            resolvedFallback: nil
+        )
+        // Nur eine von Speech angebotene konkrete Locale kann der Nutzer als
+        // Tatsache bestaetigen. "auto" und fremde Kennungen bleiben Ableitung.
+        guard requestedSelection.canBeConfirmed(in: availableLocales) else {
+            return
+        }
         guard meetingTransferImportState == nil else {
             report("Close the meeting import before changing the transcription language.")
             return
         }
+        guard TranscriptionLanguageChangePolicy.shouldApply(
+            identifier: identifier,
+            selectedIdentifier: selectedLanguageID,
+            wasChosenExplicitly: languageWasChosenExplicitly
+        ) else { return }
         selectedLanguageID = identifier
-        UserDefaults.standard.set(identifier, forKey: Self.languageDefaultsKey)
+        languageWasChosenExplicitly = true
+        resolvedLanguageFallback = nil
+        languagePreferences.saveExplicitChoice(identifier)
         if let runtime {
+            isSwitchingTranscriptionLanguage = true
             meetingChangesTask?.cancel()
             meetingChangesTask = nil
-            await runtime.coordinator.stop()
+            // Vor dem ersten Suspendierungspunkt synchron abhaengen: Sonst
+            // koennte waehrend `stop()` noch ein Start die alte Runtime
+            // greifen und erst nach dem Active-ID-Snapshot ein Meeting
+            // anlegen, das der neue RecoverySweep fuer gestrandet hielte.
+            invalidateRuntimeDependentOperations()
             self.runtime = nil
             folderStore = nil
+            invalidateDemoDataContext()
+            await runtime.coordinator.stop()
+            // Ohne Suspendierung freigeben und sofort selbst bootstrappen.
+            // Ein fremder Bootstrap kam waehrend des Wechsels nicht hinein.
+            isSwitchingTranscriptionLanguage = false
             await bootstrap()
         }
     }
 
-    func refreshMeetings() async {
-        guard let runtime else { return }
-        do {
-            meetings = try await runtime.library.listMeetings()
-                .sorted { $0.createdAt > $1.createdAt }
-            if let folderStore {
-                do {
-                    folders = try await folderStore.listFolders()
-                } catch {
-                    report(Self.message("The folders could not be loaded.", error))
-                }
-            }
-            var withAudio: Set<MeetingID> = []
-            for meeting in meetings where await hasPlayableAudio(meeting.id) {
-                withAudio.insert(meeting.id)
-            }
-            meetingsWithAudio = withAudio
-            restoreSelection(from: meetings)
-            selectedMeetingIDs = MeetingSidebarSelectionPolicy.pruned(
-                selectedMeetingIDs,
-                to: Set(meetings.map(\.id))
-            )
-        } catch {
-            bootstrapError = Self.message("The meeting list could not be loaded.", error)
+    func refreshMeetings(
+        invalidatingDemoDataStatus: Bool = true
+    ) async {
+        await refreshMeetingList()
+        await refreshFolderList()
+        if invalidatingDemoDataStatus {
+            invalidateDemoDataStatusAfterLibraryChange()
         }
     }
 
+    private struct MeetingRefreshToken {
+        let runtimeGeneration: UInt64
+        let refreshGeneration: UInt64
+        let runtime: PipelineRuntime
+    }
+
+    private struct FolderRefreshToken {
+        let runtimeGeneration: UInt64
+        let refreshGeneration: UInt64
+        let runtime: PipelineRuntime
+        let folderStore: FolderStore
+    }
+
+    private func refreshMeetingList(
+        preservingRetryGeneration retryGeneration: UInt64? = nil
+    ) async {
+        guard let token = beginMeetingRefresh(
+            preservingRetryGeneration: retryGeneration
+        ) else { return }
+        do {
+            let loadedMeetings = try await meetingListLoader(token.runtime.library)
+                .sorted { $0.createdAt > $1.createdAt }
+            var withAudio: Set<MeetingID> = []
+            for meeting in loadedMeetings
+            where await hasPlayableAudio(meeting.id, in: token.runtime) {
+                withAudio.insert(meeting.id)
+            }
+            guard meetingRefreshIsCurrent(token) else { return }
+            meetings = loadedMeetings
+            meetingsWithAudio = withAudio
+            restoreSelection(from: loadedMeetings)
+            selectedMeetingIDs = MeetingSidebarSelectionPolicy.pruned(
+                selectedMeetingIDs,
+                to: Set(loadedMeetings.map(\.id))
+            )
+            clearLibraryIssue(.meetings)
+        } catch {
+            guard meetingRefreshIsCurrent(token) else { return }
+            reportLibraryIssue(.meetings(error.localizedDescription))
+        }
+    }
+
+    private func refreshFolderList(
+        preservingRetryGeneration retryGeneration: UInt64? = nil
+    ) async {
+        guard let token = beginFolderRefresh(
+            preservingRetryGeneration: retryGeneration
+        ) else { return }
+        do {
+            let loadedFolders = try await folderListLoader(token.folderStore)
+            guard folderRefreshIsCurrent(token) else { return }
+            folders = loadedFolders
+            clearLibraryIssue(.folders)
+        } catch {
+            guard folderRefreshIsCurrent(token) else { return }
+            reportLibraryIssue(.folders(error.localizedDescription))
+        }
+    }
+
+    func retryLibraryIssue(_ issue: MacLibraryIssue) async {
+        guard runtime != nil,
+              libraryIssues.contains(where: { $0.id == issue.id }),
+              activeLibraryIssueRetryGenerations[issue.id] == nil
+        else { return }
+        let retryGeneration = beginLibraryIssueRetry(issue.id)
+        defer { finishLibraryIssueRetry(issue.id, generation: retryGeneration) }
+
+        switch issue {
+        case .meetings:
+            await refreshMeetingList(
+                preservingRetryGeneration: retryGeneration
+            )
+        case .folders:
+            guard let retryRuntime = runtime else { return }
+            let retryRuntimeGeneration = runtimeGeneration
+            if folderStore == nil {
+                do {
+                    let openedStore = try FolderStore.open(
+                        layout: retryRuntime.library.layout
+                    )
+                    guard runtimeIsCurrent(
+                        retryRuntime,
+                        generation: retryRuntimeGeneration
+                    ), libraryIssueRetryIsCurrent(
+                        issue.id,
+                        generation: retryGeneration
+                    ) else { return }
+                    folderStore = openedStore
+                    _ = try? await LegacyFolderAdoption.run(
+                        library: retryRuntime.library,
+                        folders: openedStore
+                    )
+                    guard runtimeIsCurrent(
+                        retryRuntime,
+                        generation: retryRuntimeGeneration
+                    ), libraryIssueRetryIsCurrent(
+                        issue.id,
+                        generation: retryGeneration
+                    ) else { return }
+                } catch {
+                    guard runtimeIsCurrent(
+                        retryRuntime,
+                        generation: retryRuntimeGeneration
+                    ), libraryIssueRetryIsCurrent(
+                        issue.id,
+                        generation: retryGeneration
+                    ) else { return }
+                    reportLibraryIssue(.folders(error.localizedDescription))
+                    return
+                }
+            }
+            await refreshFolderList(
+                preservingRetryGeneration: retryGeneration
+            )
+        }
+        invalidateDemoDataStatusAfterLibraryChange()
+    }
+
+    private func beginMeetingRefresh(
+        preservingRetryGeneration retryGeneration: UInt64?
+    ) -> MeetingRefreshToken? {
+        invalidateLibraryIssueRetry(
+            .meetings,
+            preserving: retryGeneration
+        )
+        meetingRefreshGeneration &+= 1
+        guard let runtime else { return nil }
+        return MeetingRefreshToken(
+            runtimeGeneration: runtimeGeneration,
+            refreshGeneration: meetingRefreshGeneration,
+            runtime: runtime
+        )
+    }
+
+    private func beginFolderRefresh(
+        preservingRetryGeneration retryGeneration: UInt64?
+    ) -> FolderRefreshToken? {
+        invalidateLibraryIssueRetry(
+            .folders,
+            preserving: retryGeneration
+        )
+        folderRefreshGeneration &+= 1
+        guard let runtime, let folderStore else { return nil }
+        return FolderRefreshToken(
+            runtimeGeneration: runtimeGeneration,
+            refreshGeneration: folderRefreshGeneration,
+            runtime: runtime,
+            folderStore: folderStore
+        )
+    }
+
+    private func meetingRefreshIsCurrent(_ token: MeetingRefreshToken) -> Bool {
+        guard let currentRuntime = runtime else { return false }
+        return runtimeGeneration == token.runtimeGeneration
+            && meetingRefreshGeneration == token.refreshGeneration
+            && currentRuntime.library === token.runtime.library
+    }
+
+    private func folderRefreshIsCurrent(_ token: FolderRefreshToken) -> Bool {
+        guard let currentRuntime = runtime, let currentStore = folderStore else {
+            return false
+        }
+        return runtimeGeneration == token.runtimeGeneration
+            && folderRefreshGeneration == token.refreshGeneration
+            && currentRuntime.library === token.runtime.library
+            && currentStore === token.folderStore
+    }
+
+    private func runtimeIsCurrent(
+        _ expectedRuntime: PipelineRuntime,
+        generation: UInt64
+    ) -> Bool {
+        guard let currentRuntime = runtime else { return false }
+        return runtimeGeneration == generation
+            && currentRuntime.library === expectedRuntime.library
+    }
+
+    private func beginLibraryIssueRetry(_ id: MacLibraryIssue.ID) -> UInt64 {
+        let generation = (libraryIssueRetryCounters[id] ?? 0) &+ 1
+        libraryIssueRetryCounters[id] = generation
+        activeLibraryIssueRetryGenerations[id] = generation
+        retryingLibraryIssueIDs.insert(id)
+        return generation
+    }
+
+    private func finishLibraryIssueRetry(
+        _ id: MacLibraryIssue.ID,
+        generation: UInt64
+    ) {
+        guard libraryIssueRetryIsCurrent(id, generation: generation) else {
+            return
+        }
+        activeLibraryIssueRetryGenerations[id] = nil
+        retryingLibraryIssueIDs.remove(id)
+    }
+
+    private func libraryIssueRetryIsCurrent(
+        _ id: MacLibraryIssue.ID,
+        generation: UInt64
+    ) -> Bool {
+        activeLibraryIssueRetryGenerations[id] == generation
+    }
+
+    private func invalidateLibraryIssueRetry(
+        _ id: MacLibraryIssue.ID,
+        preserving generation: UInt64?
+    ) {
+        guard activeLibraryIssueRetryGenerations[id] != generation else {
+            return
+        }
+        activeLibraryIssueRetryGenerations[id] = nil
+        retryingLibraryIssueIDs.remove(id)
+    }
+
+    private func invalidateRuntimeDependentOperations() {
+        runtimeGeneration &+= 1
+        meetingRefreshGeneration &+= 1
+        folderRefreshGeneration &+= 1
+        activeLibraryIssueRetryGenerations.removeAll()
+        retryingLibraryIssueIDs.removeAll()
+    }
+
+    func retryStartup() async {
+        guard case .failed = startupState, runtime == nil else { return }
+        await bootstrap()
+    }
+
+    private func reportLibraryIssue(_ issue: MacLibraryIssue) {
+        if let index = libraryIssues.firstIndex(where: { $0.id == issue.id }) {
+            libraryIssues[index] = issue
+        } else {
+            libraryIssues.append(issue)
+        }
+    }
+
+    private func clearLibraryIssue(_ id: MacLibraryIssue.ID) {
+        libraryIssues.removeAll { $0.id == id }
+    }
+
+    // MARK: - Demo data
+
+    func refreshDemoDataStatus() async {
+        guard !isManagingDemoData,
+              !demoDataPresentationState.isChecking else { return }
+        guard var context = currentDemoDataContext() else {
+            _ = demoDataPresentationState.invalidateStatus()
+            return
+        }
+        let token = demoDataPresentationState.beginStatusCheck()
+        context = DemoDataPublicationContext(
+            library: context.library,
+            folders: context.folders,
+            token: token
+        )
+        do {
+            let status = try await DemoLibrarySeeder(
+                library: context.library,
+                folders: context.folders
+            ).status()
+            guard isCurrentDemoDataContext(context) else { return }
+            _ = demoDataPresentationState.publish(status, for: token)
+        } catch {
+            guard isCurrentDemoDataContext(context) else { return }
+            _ = demoDataPresentationState.publishStatusFailure(
+                String(localized: DemoDataPresentation.statusCheckFailedMessage),
+                for: token
+            )
+        }
+    }
+
+    func installDemoData() async {
+        await performDemoData(.install)
+    }
+
+    func replaceDemoData(policy: DemoReplacementPolicy) async {
+        await performDemoData(.replace(policy))
+    }
+
+    func removeDemoData() async {
+        await performDemoData(.remove)
+    }
+
+    private enum DemoDataAction {
+        case install
+        case replace(DemoReplacementPolicy)
+        case remove
+    }
+
+    private func performDemoData(_ action: DemoDataAction) async {
+        guard !isManagingDemoData else { return }
+        _ = demoDataPresentationState.invalidateStatus()
+        demoDataPresentationState.beginLifecycleOperation()
+        guard let context = currentDemoDataContext() else {
+            demoDataPresentationState.publishLifecycleError(
+                String(localized: DemoDataPresentation.unavailableStatus)
+            )
+            return
+        }
+        isManagingDemoData = true
+        defer { isManagingDemoData = false }
+        do {
+            let seeder = try DemoLibrarySeeder(
+                library: context.library,
+                folders: context.folders
+            )
+            switch action {
+            case .install:
+                try await seeder.install()
+            case .replace(let policy):
+                let result = try await seeder.replace(policy: policy)
+                guard isCurrentDemoDataContext(context) else { return }
+                demoDataPresentationState.publishLifecycleResult(result)
+            case .remove:
+                let result = try await seeder.remove()
+                guard isCurrentDemoDataContext(context) else { return }
+                demoDataPresentationState.publishLifecycleResult(result)
+            }
+        } catch {
+            guard isCurrentDemoDataContext(context) else { return }
+            demoDataPresentationState.publishLifecycleError(
+                String(localized: DemoDataPresentation.operationFailedMessage)
+            )
+        }
+        guard isCurrentDemoDataContext(context) else { return }
+        await refreshMeetings(invalidatingDemoDataStatus: false)
+        guard isCurrentDemoDataContext(context) else { return }
+        isManagingDemoData = false
+        _ = demoDataPresentationState.invalidateStatus()
+        await refreshDemoDataStatus()
+    }
+
+    private func currentDemoDataContext() -> DemoDataPublicationContext? {
+        guard let runtime, let folderStore else { return nil }
+        return DemoDataPublicationContext(
+            library: runtime.library,
+            folders: folderStore,
+            token: demoDataPresentationState.currentStatusToken
+        )
+    }
+
+    private func isCurrentDemoDataContext(
+        _ context: DemoDataPublicationContext
+    ) -> Bool {
+        context.isCurrent(
+            library: runtime?.library,
+            folders: folderStore,
+            token: demoDataPresentationState.currentStatusToken
+        )
+    }
+
+    private func invalidateDemoDataContext() {
+        demoDataStatusRefreshTask?.cancel()
+        demoDataStatusRefreshTask = nil
+        _ = demoDataPresentationState.invalidateStatus()
+    }
+
+    private func invalidateDemoDataStatusAfterLibraryChange() {
+        guard !isManagingDemoData else {
+            return
+        }
+        let hadObservedStatus = demoDataPresentationState.status != nil
+            || demoDataPresentationState.isChecking
+            || demoDataPresentationState.statusError != nil
+        _ = demoDataPresentationState.invalidateStatus()
+        guard hadObservedStatus, currentDemoDataContext() != nil else { return }
+        demoDataStatusRefreshTask?.cancel()
+        demoDataStatusRefreshTask = Task { [weak self] in
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            await self?.refreshDemoDataStatus()
+        }
+    }
+
+    /// Inhaltsänderungen an Demo-Meetings erscheinen nicht immer im
+    /// `meetingChanges`-Strom, etwa bei Revisionen, Notizen oder review.json.
+    /// Der explizite Hook hält den Status deshalb ohne Polling aktuell.
+    func demoDataMeetingContentDidChange(_ meetingID: MeetingID) async {
+        guard !isManagingDemoData,
+              let context = currentDemoDataContext()
+        else { return }
+        let meeting: Meeting?
+        if let cached = meetings.first(where: { $0.id == meetingID }) {
+            meeting = cached
+        } else {
+            meeting = try? await context.library.loadMeeting(meetingID)
+        }
+        guard isCurrentDemoDataContext(context), meeting?.isDemo == true else {
+            return
+        }
+        invalidateDemoDataStatusAfterLibraryChange()
+    }
+
+    /// Eine Review-Aktion darf erst nach erfolgreicher Persistenz die
+    /// Demo-Prüfung anstoßen. `keepGeneric` schreibt zwar keine Evidenz,
+    /// verändert aber trotzdem review.json.
+    func demoDataDidPersistSpeakerReview(for meetingID: MeetingID) async {
+        await demoDataMeetingContentDidChange(meetingID)
+    }
+
     private func refreshMeeting(_ meetingID: MeetingID) async {
-        guard let runtime else { return }
+        guard let token = beginMeetingRefresh(
+            preservingRetryGeneration: nil
+        ) else { return }
         guard meetings.contains(where: { $0.id == meetingID }) else {
             await refreshMeetings()
             return
         }
         do {
-            let latest = try await runtime.library.loadMeeting(meetingID)
+            let latest = try await token.runtime.library.loadMeeting(meetingID)
+            let isPlayable = await hasPlayableAudio(
+                meetingID,
+                in: token.runtime
+            )
+            guard meetingRefreshIsCurrent(token) else { return }
             meetings = MeetingListSnapshot.replacing(latest, in: meetings)
+            if isPlayable {
+                meetingsWithAudio.insert(meetingID)
+            } else {
+                meetingsWithAudio.remove(meetingID)
+            }
+            invalidateDemoDataStatusAfterLibraryChange()
         } catch {
+            guard meetingRefreshIsCurrent(token) else { return }
             await refreshMeetings()
         }
     }
 
     // MARK: - Aufnahme
 
-    func resolveRecordingPermissions(forceSystemAudioProbe: Bool = false) async {
+    /// Reads existing decisions only. This path is safe during launch and must
+    /// never cause a TCC prompt or prepare a system-audio source.
+    func refreshRecordingPermissionStatus() {
+        recordingPermissions = RecordingAudioPermissionState(
+            microphone: recordingPermissionClient.microphoneStatus(),
+            systemAudio: reusableCachedSystemAudioPermission()
+                ?? .notDetermined
+        )
+        recordingPermissionDefaults.removeObject(
+            forKey: Self.legacyProtectedMicrophoneUIDDefaultsKey
+        )
+    }
+
+    /// Requests access only after an explicit user action. A reusable
+    /// code-identity-bound system-audio decision avoids probing that source
+    /// again unless the caller deliberately forces a recheck.
+    func requestRecordingPermissions(forceSystemAudioProbe: Bool = false) async {
         guard !isResolvingRecordingPermissions,
               !isRecording,
-              !isStartingRecording,
-              forceSystemAudioProbe || !hasResolvedRecordingPermissions else {
+              !isStartingRecording else {
             return
         }
         isResolvingRecordingPermissions = true
         defer { isResolvingRecordingPermissions = false }
-        let defaults = UserDefaults.standard
-        let currentIdentity = CurrentCodeSigningIdentity.cacheKey()
         if !forceSystemAudioProbe,
-           let cachedSystemStatus = RecordingPermissionCache.reusableStatus(
-               rawStatus: defaults.string(
-                   forKey: Self.systemAudioPermissionDefaultsKey
-               ),
-               cachedIdentity: defaults.string(
-                   forKey: Self.systemAudioPermissionIdentityDefaultsKey
-               ),
-               currentIdentity: currentIdentity
-           ) {
+           let cachedSystemStatus = reusableCachedSystemAudioPermission() {
             recordingPermissions = RecordingAudioPermissionState(
-                microphone: await AudioPermissions.requestMicrophone(),
+                microphone: await recordingPermissionClient.requestMicrophone(),
                 systemAudio: cachedSystemStatus
             )
         } else {
-            recordingPermissions = await AudioPermissions.requestRecordingAccess()
+            recordingPermissions = await recordingPermissionClient
+                .requestRecordingAccess()
             cacheSystemAudioPermission(recordingPermissions.systemAudio)
         }
-        defaults.removeObject(
+        recordingPermissionDefaults.removeObject(
             forKey: Self.legacyProtectedMicrophoneUIDDefaultsKey
         )
-        hasResolvedRecordingPermissions = true
-        await refreshMicrophoneDiscovery()
+    }
+
+    private func reusableCachedSystemAudioPermission() -> AudioPermissionStatus? {
+        RecordingPermissionCache.reusableStatus(
+            rawStatus: recordingPermissionDefaults.string(
+                forKey: Self.systemAudioPermissionDefaultsKey
+            ),
+            cachedIdentity: recordingPermissionDefaults.string(
+                forKey: Self.systemAudioPermissionIdentityDefaultsKey
+            ),
+            currentIdentity: recordingPermissionIdentity()
+        )
     }
 
     private func cacheSystemAudioPermission(_ status: AudioPermissionStatus) {
-        let defaults = UserDefaults.standard
-        defaults.set(status.rawValue, forKey: Self.systemAudioPermissionDefaultsKey)
-        if let identity = CurrentCodeSigningIdentity.cacheKey() {
-            defaults.set(
+        recordingPermissionDefaults.set(
+            status.rawValue,
+            forKey: Self.systemAudioPermissionDefaultsKey
+        )
+        if let identity = recordingPermissionIdentity() {
+            recordingPermissionDefaults.set(
                 identity,
                 forKey: Self.systemAudioPermissionIdentityDefaultsKey
             )
         } else {
-            defaults.removeObject(
+            recordingPermissionDefaults.removeObject(
                 forKey: Self.systemAudioPermissionIdentityDefaultsKey
             )
         }
     }
 
     func startRecording() async {
-        guard let runtime,
-              !isRecording,
+        guard canStartRecording,
+              let runtime,
               recordingStartState.begin() else { return }
+        liveTasks.cancelAndDiscard()
+        let languageSelection = transcriptionLanguageSelection
+        // Fuer die ganze Aufnahme gepinnt: eine spaetere Aenderung in den
+        // Einstellungen (waehrend der Aufnahme ohnehin gesperrt, siehe
+        // `canChangeTranscriptionModels`) darf diesen Lauf nicht mehr treffen.
+        let plan = currentTranscriptionPlan()
         dismissNotice()
 
-        let micStatus = await AudioPermissions.requestMicrophone()
+        let micStatus = await recordingPermissionClient.requestMicrophone()
         recordingPermissions = RecordingAudioPermissionState(
             microphone: micStatus,
             systemAudio: recordingPermissions.systemAudio,
@@ -887,7 +2019,9 @@ final class AppModel {
             let title = Self.defaultMeetingTitle()
             let meeting = try await runtime.library.createMeeting(
                 title: title,
-                status: .recording
+                status: .recording,
+                sourceLocale: try languageSelection.meetingSourceLocale(),
+                transcriptionPlan: plan
             )
             recordingStartState.didCreateMeeting(meeting.id)
             // Capture INNERHALB des Meeting-Ordners: nach kill -9 liegen die
@@ -920,12 +2054,30 @@ final class AppModel {
             selectedMeetingID = meeting.id
             recordingStartedAt = Date()
             isRecording = true
-            liveFinalLines = []
-            liveVolatileText = [:]
+            liveTranscriptFeed = LiveTranscriptFeed()
+            liveTranscriptRows = []
 
             for track in AudioTrack.allCases {
                 let stream = try await session.liveAudioEvents(for: track)
-                liveTasks.append(makeLiveTask(track: track, stream: stream))
+                do {
+                    let provider = try transcriptionRegistry.resolve(
+                        plan.liveProviderID,
+                        for: Self.assetKind(for: track)
+                    )
+                    liveTasks.append(makeLiveTask(
+                        track: track,
+                        stream: stream,
+                        provider: provider
+                    ))
+                } catch {
+                    // Live-Transkription ist ein Komfortpfad: ein nicht
+                    // installiertes oder nicht registriertes Modell darf die
+                    // Aufnahme nicht anhalten, die Originalspur laeuft weiter.
+                    report(
+                        "No live transcript (\(track.rawValue)): \(error.localizedDescription). Audio recording continues.",
+                        isError: false
+                    )
+                }
             }
             startLevelPolling(session: session)
             await refreshMeetings()
@@ -968,10 +2120,16 @@ final class AppModel {
 
     private func performStopRecording() async {
         guard let runtime, let session, let meetingID = recordingMeetingID else { return }
+        let tasks = liveTasks.takeForStop()
+        var stopFailed = false
         do {
             levelTask?.cancel()
             levelTask = nil
-            _ = try await session.stop()
+            let result = try await session.stop()
+            if result.stopReason != .requested,
+               let error = await session.lastError() {
+                report(error.localizedDescription)
+            }
 
             if let notesSession = notesSessions[meetingID] {
                 await notesSession.flush()
@@ -982,12 +2140,11 @@ final class AppModel {
 
             // Live-Ergebnisse einsammeln und als vorläufige Revision sichern.
             var outputs: [TranscriptOutput] = []
-            for task in liveTasks {
+            for task in tasks {
                 if let output = await task.value {
                     outputs.append(output)
                 }
             }
-            liveTasks = []
             if outputs.contains(where: { !$0.blocks.isEmpty }) {
                 let revision = TranscriptMapper.revision(
                     from: outputs,
@@ -997,27 +2154,52 @@ final class AppModel {
                 _ = try await runtime.library.appendRevision(revision)
             }
 
-            try await runtime.jobStore.enqueue(
-                Job(kind: .finalASR, meetingID: meetingID)
-            )
             selectedMeetingID = meetingID
         } catch {
+            stopFailed = true
+            for task in tasks {
+                task.cancel()
+            }
             report(Self.message("The recording could not be stopped cleanly.", error))
+        }
+
+        let followUp = RecordingStopFollowUp.make(stopFailed: stopFailed)
+        if let status = followUp.meetingStatusCorrection {
+            _ = try? await runtime.library.updateMeetingStatus(
+                meetingID,
+                to: status
+            )
+        }
+        for kind in followUp.jobKinds {
+            do {
+                let meeting = try await runtime.library.loadMeeting(meetingID)
+                let job = kind == .finalASR
+                    ? Job.finalASR(for: meeting)
+                    : Job(
+                        kind: kind,
+                        meetingID: meetingID,
+                        importGenerationID: meeting.processingGenerationID
+                    )
+                try await runtime.jobStore.enqueue(job)
+                noteJobEnqueued(for: meetingID)
+            } catch {
+                report(Self.message("Transcription could not be scheduled.", error))
+            }
         }
         self.session = nil
         isRecording = false
         recordingMeetingID = nil
         recordingStartedAt = nil
         microphoneStatus = nil
-        liveVolatileText = [:]
+        liveTranscriptFeed.clearVolatile()
+        liveTranscriptRows = liveTranscriptFeed.rows
         await refreshMeetings()
     }
 
     private func abortRecordingCleanup() async {
         levelTask?.cancel()
         levelTask = nil
-        for task in liveTasks { task.cancel() }
-        liveTasks = []
+        liveTasks.cancelAndDiscard()
         if let session { _ = try? await session.stop() }
         session = nil
         isRecording = false
@@ -1037,9 +2219,9 @@ final class AppModel {
     /// dieser das tatsächliche Format kennt.
     private func makeLiveTask(
         track: AudioTrack,
-        stream: LiveAudioEventStream
+        stream: LiveAudioEventStream,
+        provider: any TranscriptionProvider
     ) -> Task<TranscriptOutput?, Never> {
-        let provider = provider(for: track)
         let locale = self.locale
         // Detached: der Puffer-Konsum darf nicht die MainActor-Isolation des
         // Aufrufers erben, sonst läuft die Audioverarbeitung über den Main
@@ -1103,28 +2285,20 @@ final class AppModel {
     }
 
     private func clearLiveVolatileText(for track: AudioTrack) {
-        liveVolatileText[track] = ""
+        liveTranscriptFeed.clearVolatile(for: Self.channel(for: track))
+        liveTranscriptRows = liveTranscriptFeed.rows
     }
 
-    private func applyLiveEvent(_ event: TranscriptionEvent, track: AudioTrack) {
-        switch event {
-        case .volatile(let output):
-            liveVolatileText[track] = output.blocks.map(\.text).joined(separator: " ")
-        case .final(let output):
-            liveVolatileText[track] = ""
-            for block in output.blocks where !block.text.isEmpty {
-                liveFinalLines.append(
-                    LiveTranscriptLine(
-                        // Ueber den einen Aufloeser, nicht roh: sonst stuende
-                        // "Ich" aus den finalen Zeilen neben "Me" aus den
-                        // volatilen, und das spaetere Bindungs-Paket haette
-                        // eine Stelle, die es nicht erwischt.
-                        speaker: ChannelLabel.speakerLabel(block.channel.speakerLabel),
-                        text: block.text
-                    )
-                )
-            }
+    private static func channel(for track: AudioTrack) -> TranscriptionChannel {
+        switch track {
+        case .microphone: .microphone
+        case .system: .system
         }
+    }
+
+    func applyLiveEvent(_ event: TranscriptionEvent, track: AudioTrack) {
+        liveTranscriptFeed.apply(event, for: Self.channel(for: track))
+        liveTranscriptRows = liveTranscriptFeed.rows
     }
 
     private func reportLiveError(_ error: any Error, track: AudioTrack) {
@@ -1208,8 +2382,9 @@ final class AppModel {
                 duration: duration
             )
             try await runtime.jobStore.enqueue(
-                Job(kind: .finalASR, meetingID: meeting.id)
+                Job.finalASR(for: meeting)
             )
+            noteJobEnqueued(for: meeting.id)
             selectedMeetingID = meeting.id
             await refreshMeetings()
         } catch let LibraryError.duplicateProvenance(_, existingMeetingID) {
@@ -1221,6 +2396,18 @@ final class AppModel {
     }
 
     // MARK: - Detail
+
+    /// Weckt eine offene MeetingDetailView, wenn fuer ihr Meeting ein Job
+    /// eingereiht wird, ohne dass in der Detailansicht selbst geklickt wurde
+    /// - nach Aufnahmestopp, Import, einer erneuten Anforderung aus der
+    /// Seitenleiste oder einem Retry. Kein Dauer-Polling: Die Detailansicht
+    /// liest nur den Zaehler fuer ihr eigenes Meeting und startet ihre
+    /// Beobachtungsschleife gezielt neu, wenn er sich aendert.
+    private(set) var meetingJobActivity: [MeetingID: UInt64] = [:]
+
+    func noteJobEnqueued(for meetingID: MeetingID) {
+        meetingJobActivity[meetingID, default: 0] &+= 1
+    }
 
     func transcript(for meetingID: MeetingID) async -> TranscriptRevision? {
         guard let runtime else { return nil }
@@ -1253,14 +2440,20 @@ final class AppModel {
 
     func jobs(for meetingID: MeetingID) async -> [StenoDomain.Job] {
         guard let runtime else { return [] }
+        guard let meeting = try? await runtime.library.loadMeeting(meetingID) else {
+            return []
+        }
         let all = (try? await runtime.jobStore.list()) ?? []
-        return all.filter { $0.meetingID == meetingID }
+        return all.filter {
+            $0.meetingID == meetingID
+                && $0.processingGenerationID == meeting.processingGenerationID
+        }
     }
 
     private static func defaultMeetingTitle() -> String {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
-        return "Recording \(formatter.string(from: Date()))"
+        return String(localized: "Recording \(formatter.string(from: Date()))")
     }
 }

@@ -27,6 +27,18 @@ public struct Job: Codable, Equatable, Sendable {
     /// Pinnt importierte Jobs an genau eine lokale Transfergeneration.
     /// Normale und vor dieser Erweiterung persistierte Jobs bleiben nil.
     public let importGenerationID: MeetingTransferGenerationID?
+    /// Allgemeiner Name für dieselbe persistierte Generation. Codable nutzt
+    /// weiterhin ausschließlich `importGenerationID`, damit keine Migration
+    /// bestehender Job-Dokumente nötig ist.
+    public var processingGenerationID: MeetingTransferGenerationID? {
+        importGenerationID
+    }
+    /// Pinnt bei finalASR den ausdrücklich gewählten ASR-Provider. Nil
+    /// bezeichnet ein ungepinntes (insbesondere ein altes) Meeting; die
+    /// Ausführungsgrenze liest das als Apple, ein gepinnter, aber nicht
+    /// registrierter Provider führt zum Job-Fehlschlag statt stillem
+    /// Zurückfallen auf Apple.
+    public let transcriptionProviderID: TranscriptionProviderID?
     public var status: Status
     public var attemptCount: Int
     public let createdAt: Date
@@ -48,6 +60,7 @@ public struct Job: Codable, Equatable, Sendable {
         templateRenderInputFingerprint: String? = nil,
         localeIdentifier: String? = nil,
         importGenerationID: MeetingTransferGenerationID? = nil,
+        transcriptionProviderID: TranscriptionProviderID? = nil,
         status: Status = .queued,
         attemptCount: Int = 0,
         createdAt: Date = Date(),
@@ -66,6 +79,7 @@ public struct Job: Codable, Equatable, Sendable {
         self.templateRenderInputFingerprint = templateRenderInputFingerprint
         self.localeIdentifier = localeIdentifier
         self.importGenerationID = importGenerationID
+        self.transcriptionProviderID = transcriptionProviderID
         self.status = status
         self.attemptCount = attemptCount
         self.createdAt = createdAt
@@ -93,5 +107,46 @@ public struct Job: Codable, Equatable, Sendable {
         case diarizationModelsNotInstalled
         case templateRenderInputChanged
         case templateRenderPinsRequired
+        case textModelEndpointConfigurationIncomplete
+    }
+}
+
+public extension Job {
+    /// Reiht einen Final-ASR-Job für dieses Meeting ein und übernimmt dabei
+    /// dessen gepinnte Wahl: den Provider aus `transcriptionPlan`, und die
+    /// Sprache aus `sourceLocale`, aber nur, wenn diese ausdrücklich gewählt
+    /// wurde (`origin == .explicit`). Eine nur geschätzte Sprache bleibt
+    /// ungepinnt und fällt auf den Koordinator-Fallback zurück.
+    static func finalASR(for meeting: Meeting) -> Job {
+        let localeIdentifier: String? = if meeting.sourceLocale?.origin == .explicit {
+            meeting.sourceLocale?.localeIdentifier
+        } else {
+            nil
+        }
+        return Job(
+            kind: .finalASR,
+            meetingID: meeting.id,
+            localeIdentifier: localeIdentifier,
+            importGenerationID: meeting.processingGenerationID,
+            transcriptionProviderID: meeting.transcriptionPlan?.finalProviderID
+        )
+    }
+
+    /// Für bewusste Wiederholungsläufe mit ausdrücklich angegebenem Provider
+    /// und ausdrücklich angegebener Sprache, unabhängig vom gepinnten Plan
+    /// des Meetings.
+    static func finalASR(
+        meetingID: MeetingID,
+        providerID: TranscriptionProviderID,
+        localeIdentifier: String,
+        processingGenerationID: MeetingTransferGenerationID? = nil
+    ) -> Job {
+        Job(
+            kind: .finalASR,
+            meetingID: meetingID,
+            localeIdentifier: localeIdentifier,
+            importGenerationID: processingGenerationID,
+            transcriptionProviderID: providerID
+        )
     }
 }

@@ -12,6 +12,15 @@ enum SpeakerProcessingJobSelection {
         }
     }
 
+    static func hasActiveJob(
+        in jobs: [Job],
+        processingGenerationID: MeetingTransferGenerationID?
+    ) -> Bool {
+        hasActiveJob(in: jobs.filter {
+            $0.processingGenerationID == processingGenerationID
+        })
+    }
+
     static func retryJob(in jobs: [Job]) -> Job? {
         guard let terminal = unresolvedTerminal(in: jobs) else { return nil }
         return Job(
@@ -19,8 +28,17 @@ enum SpeakerProcessingJobSelection {
             meetingID: terminal.meetingID,
             sourceRunID: terminal.sourceRunID,
             localeIdentifier: terminal.localeIdentifier,
-            importGenerationID: terminal.importGenerationID
+            importGenerationID: terminal.processingGenerationID
         )
+    }
+
+    static func retryJob(
+        in jobs: [Job],
+        processingGenerationID: MeetingTransferGenerationID?
+    ) -> Job? {
+        retryJob(in: jobs.filter {
+            $0.processingGenerationID == processingGenerationID
+        })
     }
 
     static func unresolvedFailure(in jobs: [Job]) -> Job? {

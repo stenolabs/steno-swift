@@ -38,7 +38,7 @@ enum Steno {
     }
 
     static let cardRadius: CGFloat = 10
-    /// 13 pt war im Einsatz zu klein; Transkript und Protokoll teilen sich die Groesse.
+    /// 13 pt war im Nutzungstest zu klein; Transkript und Protokoll teilen sich die Groesse.
     static let readingBody = Font.system(size: 14)
 }
 

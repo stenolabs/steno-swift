@@ -30,7 +30,7 @@ struct LegacySummaryFileTests {
         ])
         #expect(file.body.keyPoints == ["Erster Punkt", "Zweiter Punkt"])
         #expect(file.body.actionItems == ["Import prüfen"])
-        #expect(file.body.participants == ["Alex", "Ada"])
+        #expect(file.body.participants == ["Grace", "Ada"])
         #expect(file.body.transcript == "[00:05] [You] Guten Morgen.")
         #expect(file.body.userNotes == "Eigene Notiz.\n\nMit zweitem Absatz.")
     }

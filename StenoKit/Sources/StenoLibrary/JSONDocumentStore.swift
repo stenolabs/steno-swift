@@ -6,9 +6,20 @@ enum JSONDocumentStore {
     }
 
     static func write<Value: Encodable>(_ value: Value, to url: URL) throws {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        try AtomicFile.write(try encoder.encode(value), to: url)
+        try AtomicFile.write(try encode(value), to: url)
+    }
+
+    static func writeWithoutReplacing<Value: Encodable>(
+        _ value: Value,
+        to url: URL
+    ) throws -> Bool {
+        let prepared = try AtomicFile.prepare(try encode(value), to: url)
+        do {
+            return try prepared.commitWithoutReplacing()
+        } catch {
+            try? FileManager.default.removeItem(at: prepared.temporaryURL)
+            throw error
+        }
     }
 
     static func read<Value: Decodable>(
@@ -103,6 +114,12 @@ enum JSONDocumentStore {
             original: url,
             quarantined: try quarantine(url)
         )
+    }
+
+    private static func encode<Value: Encodable>(_ value: Value) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        return try encoder.encode(value)
     }
 
     private static func quarantine(_ url: URL) throws -> URL {

@@ -12,6 +12,14 @@
 # anderen Nutzer. Der verlaessliche Weg ist ein leeres Verzeichnis, auf das
 # STENO_MODEL_DIR zeigt, und ein Download ueber die App.
 #
+# Das Skript schreibt NUR das Diarisierungs-Manifest. Parakeet hat ein
+# eigenes unter StenoTranscription/Resources/parakeet-model-checksums.json,
+# und genau dort ist der Fehler schon einmal passiert: es entstand aus einem
+# gewachsenen Ordner und verlangte danach config.json und parakeet_vocab.json,
+# die FluidAudio fuer v3 nie laedt. Auf jedem frischen Geraet brach die
+# Installation ab. Ein Test in ParakeetModelInstallerTests haelt jetzt fest,
+# was das Manifest enthalten darf.
+#
 # Nutzung: scripts/generate-model-checksums.sh <modellverzeichnis>
 set -euo pipefail
 

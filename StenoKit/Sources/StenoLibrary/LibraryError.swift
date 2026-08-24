@@ -18,6 +18,7 @@ public enum LibraryError: Error, Sendable {
     case invalidPersonEmail
     case personNotFound(PersonID)
     case personAlreadyExists(PersonID)
+    case identityDocumentRevisionConflict
     case speakerEvidenceNotFound(SpeakerEvidenceID)
     case cannotMergePersonIntoItself
     case folderNotFound(FolderID)
@@ -87,6 +88,8 @@ extension LibraryError: LocalizedError {
             "Person \(id) does not exist."
         case .personAlreadyExists(let id):
             "Person \(id) already exists and was not restored."
+        case .identityDocumentRevisionConflict:
+            "The people and voice evidence changed after this review was loaded."
         case .speakerEvidenceNotFound(let id):
             "Voice evidence \(id) does not exist."
         case .cannotMergePersonIntoItself:

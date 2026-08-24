@@ -12,6 +12,42 @@ struct MeetingTransferImportPresentationTests {
     )
     private let sessionID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
 
+    private func english(_ resource: LocalizedStringResource) -> String {
+        var resource = resource
+        resource.locale = Locale(identifier: "en")
+        return String(localized: resource)
+    }
+
+    @Test("Unknown import totals stay indeterminate and known totals clamp")
+    func importProgressPresentation() {
+        #expect(MeetingTransferProgressPresentation.make(nil) == .indeterminate)
+        #expect(
+            MeetingTransferProgressPresentation.make(
+                .init(phase: .enumerating, processedBytes: 1, totalBytes: 0)
+            ) == .indeterminate
+        )
+        #expect(
+            MeetingTransferProgressPresentation.make(
+                .init(phase: .hashing, processedBytes: 1, totalBytes: -1)
+            ) == .indeterminate
+        )
+        #expect(
+            MeetingTransferProgressPresentation.make(
+                .init(phase: .writing, processedBytes: -1, totalBytes: 10)
+            ) == .determinate(0)
+        )
+        #expect(
+            MeetingTransferProgressPresentation.make(
+                .init(phase: .writing, processedBytes: 5, totalBytes: 10)
+            ) == .determinate(0.5)
+        )
+        #expect(
+            MeetingTransferProgressPresentation.make(
+                .init(phase: .writing, processedBytes: 11, totalBytes: 10)
+            ) == .determinate(1)
+        )
+    }
+
     @Test("Startup reconciliation warning is generic and nonblocking")
     func startupWarningDoesNotExposeMeetingDetails() throws {
         let warning = PipelineStartupWarning.importedMeetingProcessing(
@@ -19,11 +55,57 @@ struct MeetingTransferImportPresentationTests {
             issue: .jobIdentityConflict
         )
 
-        let message = try #require(AppModel.pipelineStartupWarningMessage(for: [warning]))
+        let message = try #require(AppModel.pipelineStartupWarningMessage(
+            for: [warning],
+            locale: Locale(identifier: "en")
+        ))
 
         #expect(message == "One imported meeting needs attention because its processing could not be resumed. Other meetings and recording remain available.")
         #expect(!message.contains(meetingID.description))
-        #expect(AppModel.pipelineStartupWarningMessage(for: []) == nil)
+        #expect(AppModel.pipelineStartupWarningMessage(
+            for: [],
+            locale: Locale(identifier: "en")
+        ) == nil)
+    }
+
+    @Test("Unreconstructable media warning says the original remains stored")
+    func orphanedMediaWarningIsExplicitAndPrivate() throws {
+        let fileName = "11111111-2222-3333-4444-555555555555.caf"
+        let warning = PipelineStartupWarning.orphanedMedia(
+            meetingID: meetingID,
+            fileName: fileName
+        )
+
+        let message = try #require(AppModel.pipelineStartupWarningMessage(
+            for: [warning],
+            locale: Locale(identifier: "en")
+        ))
+
+        #expect(message == "Steno found an original recording file that could not be safely registered. The file remains stored and needs attention.")
+        #expect(!message.contains(meetingID.description))
+        #expect(!message.contains(fileName))
+    }
+
+    @Test("Orphan warning remains visible beside a capture recovery error")
+    func orphanedMediaWarningIsPersistentAndAggregated() throws {
+        let warning = PipelineStartupWarning.orphanedMedia(
+            meetingID: meetingID,
+            fileName: "recording.caf"
+        )
+        let captureFailure = "Capture recovery failed."
+
+        let presentation = try #require(AppModel.startupNoticePresentation(
+            for: [warning],
+            captureRecoveryFailure: captureFailure,
+            locale: Locale(identifier: "en")
+        ))
+
+        #expect(presentation.text.contains(
+            "original recording file that could not be safely registered"
+        ))
+        #expect(presentation.text.contains(captureFailure))
+        #expect(presentation.isError)
+        #expect(!presentation.autoDismiss)
     }
 
     @Test("Preview keeps safe metadata and makes cleartext boundaries explicit")
@@ -40,16 +122,16 @@ struct MeetingTransferImportPresentationTests {
         #expect(presentation.title == "Budget review")
         #expect(presentation.sourceMeetingID == meetingID)
         #expect(presentation.technicalOriginID == "11111111")
-        #expect(presentation.capabilityLabels == ["Notes", "Transcript", "Audio"])
+        #expect(presentation.capabilityLabels.map(english) == ["Notes", "Transcript", "Audio"])
         #expect(presentation.visibleSpeakerLabels == ["Alex", "Sam"])
         #expect(presentation.containsPersonalSpeakerLabels)
         #expect(presentation.audioTrackCount == 2)
         #expect(presentation.totalAudioBytes == 4_000_000)
         #expect(presentation.containsRawRecording)
-        #expect(presentation.cleartextWarning.contains("unencrypted"))
-        #expect(presentation.downloadsWarning.contains("Downloads"))
-        #expect(presentation.downloadsWarning.contains("search indexing"))
-        #expect(presentation.downloadsWarning.contains("backup"))
+        #expect(english(presentation.cleartextWarning).contains("unencrypted"))
+        #expect(english(presentation.downloadsWarning).contains("Downloads"))
+        #expect(english(presentation.downloadsWarning).contains("search indexing"))
+        #expect(english(presentation.downloadsWarning).contains("backup"))
     }
 
     @Test("Conflict has no mutating action")
@@ -434,6 +516,41 @@ struct MeetingTransferDetailActionTests {
                 reason: "Processing failed before a transcript existed."
             )
         ))
+    }
+
+    @Test("A programmatically enqueued job restarts observation without a manual click")
+    func programmaticJobEnqueueRestartsObservationWithoutManualClick() {
+        let model = AppModel()
+        let meetingID = MeetingID()
+        let observation = MeetingDetailObservationState()
+        let initialKey = observation.key(
+            for: meetingID,
+            jobActivity: model.meetingJobActivity[meetingID] ?? 0
+        )
+
+        // Kein Klick in der Detailansicht: das ist genau der Weg, auf dem
+        // Aufnahmestopp, Import oder ein erneuter Lauf aus der Seitenleiste
+        // einen Job einreihen.
+        model.noteJobEnqueued(for: meetingID)
+
+        let keyAfterProgrammaticEnqueue = observation.key(
+            for: meetingID,
+            jobActivity: model.meetingJobActivity[meetingID] ?? 0
+        )
+        #expect(keyAfterProgrammaticEnqueue != initialKey)
+
+        // Ein anderes Meeting bleibt unberuehrt: die Beobachtung wacht nur
+        // fuer das Meeting auf, das tatsaechlich einen neuen Job bekam.
+        let otherMeetingID = MeetingID()
+        let otherKeyBefore = observation.key(
+            for: otherMeetingID,
+            jobActivity: model.meetingJobActivity[otherMeetingID] ?? 0
+        )
+        let otherKeyAfter = observation.key(
+            for: otherMeetingID,
+            jobActivity: model.meetingJobActivity[otherMeetingID] ?? 0
+        )
+        #expect(otherKeyBefore == otherKeyAfter)
     }
 }
 

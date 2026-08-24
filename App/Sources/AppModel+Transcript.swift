@@ -37,6 +37,7 @@ extension AppModel {
                 with: text
             )
             _ = try await runtime.library.appendRevision(edited)
+            await demoDataMeetingContentDidChange(meetingID)
             return edited
         } catch TranscriptEdit.Failure.unchanged {
             // Kein Fehler und keine Meldung: nichts zu tun ist nichts zu tun.
@@ -73,6 +74,7 @@ extension AppModel {
             guard try await runtime.library.adoptPendingRevision(
                 meetingID: meetingID
             ) != nil else { return false }
+            await demoDataMeetingContentDidChange(meetingID)
             report("Switched to the new transcription.", isError: false)
             return true
         } catch {

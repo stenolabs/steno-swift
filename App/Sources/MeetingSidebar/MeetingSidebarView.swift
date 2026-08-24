@@ -91,10 +91,19 @@ struct MeetingSidebarView: View {
         }
         .listStyle(.sidebar)
         .contextMenu(forSelectionType: MeetingID.self) { meetingIDs in
-            meetingSelectionMenu(for: meetingIDs)
+            if let context = meetingCommandContext(for: meetingIDs) {
+                meetingSelectionMenu(context)
+            }
         }
-        .toolbar {
-            ToolbarItem {
+        .focusedSceneValue(
+            \.stenoMeetingCommandContext,
+            meetingCommandContext(for: selection)
+        )
+        .toolbar(id: MacToolbarID.sidebar.rawValue) {
+            ToolbarItem(
+                id: MacToolbarItemID.newFolder.rawValue,
+                placement: .primaryAction
+            ) {
                 Button {
                     beginCreatingFolder(parentFolderID: nil)
                 } label: {
@@ -103,9 +112,19 @@ struct MeetingSidebarView: View {
                 .help("Create a folder")
                 .disabled(model.runtime == nil)
             }
+            .defaultCustomization(
+                MacToolbarPresentation.defaultCustomization(
+                    for: .newFolder,
+                    in: .sidebar
+                )
+            )
         }
-        .navigationTitle("Steno")
-        .safeAreaInset(edge: .top) { searchBar }
+        .navigationTitle(MacWindowPresentation.meetingsTitle)
+        .searchable(
+            text: $query,
+            placement: .sidebar,
+            prompt: "Search titles"
+        )
         .overlay {
             if model.meetings.isEmpty, model.folders.isEmpty {
                 ContentUnavailableView(
@@ -230,7 +249,14 @@ struct MeetingSidebarView: View {
             .padding(.vertical, 2)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
-            .contextMenu { folderMenu(node) }
+            .contextMenu {
+                folderMenu(folderCommandContext(node))
+            }
+            .focusable()
+            .focusedValue(
+                \.stenoFolderCommandContext,
+                folderCommandContext(node)
+            )
             .accessibilityValue(
                 "\(node.meetings.count) direct meetings, \(node.children.count) subfolders"
             )
@@ -312,6 +338,9 @@ struct MeetingSidebarView: View {
                 if meeting.status != .ready {
                     StatusBadge(status: meeting.status)
                 }
+                if DemoBadge.isVisible(for: meeting) {
+                    DemoBadge()
+                }
                 if model.meetingsWithAudio.contains(meeting.id) {
                     Image(systemName: "waveform")
                         .help("Audio available - voice samples and speaker naming possible")
@@ -333,46 +362,166 @@ struct MeetingSidebarView: View {
     }
 
     @ViewBuilder
-    private func meetingSelectionMenu(for meetingIDs: Set<MeetingID>) -> some View {
-        if meetingIDs.count > 1 {
-            Menu("Move \(meetingIDs.count) Meetings") {
-                meetingDestinationMenu(for: meetingIDs)
+    private func meetingSelectionMenu(
+        _ context: MacMeetingCommandContext
+    ) -> some View {
+        if context.meetingIDs.count > 1 {
+            Menu("Move \(context.meetingIDs.count) Meetings") {
+                meetingDestinationMenu(context)
             }
-        } else if let meetingID = meetingIDs.first,
-                  let meeting = model.meetings.first(where: { $0.id == meetingID }) {
-            Button("Rename…") {
+            .disabled(!context.availability.canMove)
+        } else if context.meetingIDs.count == 1 {
+            Button("Rename…", action: context.rename)
+                .disabled(!context.availability.canRename)
+            Menu("Move to Folder") {
+                meetingDestinationMenu(context)
+                Divider()
+                Button("New Folder…", action: context.createFolder)
+            }
+            .disabled(!context.availability.canMove)
+            Divider()
+            Button("Transcribe Again…", action: context.retranscribe)
+                .disabled(!context.availability.canRetranscribe)
+            Button("Export as Markdown…", action: context.exportMarkdown)
+                .disabled(!context.availability.canExportMarkdown)
+            Button("Export Audio…", action: context.exportAudio)
+                .disabled(!context.availability.canExportAudio)
+            Divider()
+            Button(
+                "Move to Trash…",
+                role: .destructive,
+                action: context.moveToTrash
+            )
+            .disabled(!context.availability.canMoveToTrash)
+        }
+    }
+
+    private func meetingCommandContext(
+        for meetingIDs: Set<MeetingID>
+    ) -> MacMeetingCommandContext? {
+        guard !meetingIDs.isEmpty else { return nil }
+        let selectedMeetings = model.meetings.filter {
+            meetingIDs.contains($0.id)
+        }
+        guard selectedMeetings.count == meetingIDs.count else { return nil }
+        let meeting = selectedMeetings.count == 1
+            ? selectedMeetings[0]
+            : nil
+        let capturedMeetingIDs = meetingIDs
+        let destinations = model.folders.map {
+            MacMeetingFolderDestination(
+                id: $0.id,
+                name: $0.name,
+                parentFolderID: $0.parentFolderID
+            )
+        }
+        let availability = MacMeetingCommandAvailability(
+            meetings: model.meetings,
+            selectedMeetingIDs: capturedMeetingIDs,
+            meetingsWithAudio: model.meetingsWithAudio,
+            isRecording: model.isRecording,
+            hasRuntime: model.runtime != nil
+        )
+
+        return MacMeetingCommandContext(
+            meetingIDs: capturedMeetingIDs,
+            availability: availability,
+            folderDestinations: destinations,
+            rename: {
+                guard let meeting else { return }
                 renameTitle = meeting.title
                 renameTarget = meeting
-            }
-            Menu("Move to Folder") {
-                meetingDestinationMenu(for: meetingIDs)
-                Divider()
-                Button("New Folder…") {
-                    beginCreatingFolder(parentFolderID: nil)
-                }
-            }
-            Divider()
-            Button("Transcribe Again…") {
+            },
+            moveToFolder: { destinationID in
+                moveMeetings(capturedMeetingIDs, to: destinationID)
+            },
+            createFolder: {
+                beginCreatingFolder(parentFolderID: nil)
+            },
+            retranscribe: {
+                guard let meeting else { return }
                 retranscribeTarget = meeting
-            }
-            .disabled(
-                meeting.status == .recording
-                    || !model.meetingsWithAudio.contains(meeting.id)
-            )
-            Button("Export as Markdown…") {
-                Task { await model.exportMeetingToFile(meeting.id) }
-            }
-            if model.meetingsWithAudio.contains(meeting.id) {
-                Button("Export Audio…") {
-                    beginAudioExport(for: meeting)
+            },
+            exportMarkdown: {
+                guard let meeting else { return }
+                let action = MacFocusedAsyncAction(target: meeting.id) {
+                    await model.exportMeetingToFile($0)
                 }
-            }
-            Divider()
-            Button("Move to Trash…", role: .destructive) {
+                Task { await action() }
+            },
+            exportAudio: {
+                guard let meeting else { return }
+                beginAudioExport(for: meeting)
+            },
+            moveToTrash: {
+                guard let meeting else { return }
                 deleteTarget = meeting
             }
-            .disabled(meeting.status == .recording)
+        )
+    }
+
+    private func folderCommandContext(
+        _ node: MeetingFolderNode
+    ) -> MacFolderCommandContext {
+        let folder = node.folder
+        let siblings = model.folders.filter {
+            $0.parentFolderID == folder.parentFolderID
         }
+        let siblingIndex = siblings.firstIndex { $0.id == folder.id }
+        let destinations = MeetingSidebarFolderMenuPolicy
+            .nestingDestinations(for: folder, folders: model.folders)
+            .map {
+                MacMeetingFolderDestination(
+                    id: $0.id,
+                    name: $0.name,
+                    parentFolderID: $0.parentFolderID
+                )
+            }
+        let hasRuntime = model.runtime != nil
+        let availability = MacFolderCommandAvailability(
+            canCreateSubfolder: hasRuntime && folder.parentFolderID == nil,
+            canRename: hasRuntime,
+            canMoveUp: hasRuntime && (siblingIndex ?? 0) > 0,
+            canMoveDown: hasRuntime
+                && siblingIndex.map { siblings.indices.contains($0 + 1) } == true,
+            canMoveToTopLevel: hasRuntime && folder.parentFolderID != nil,
+            canDelete: hasRuntime
+        )
+
+        return MacFolderCommandContext(
+            folderID: folder.id,
+            folderName: folder.name,
+            availability: availability,
+            nestingDestinations: destinations,
+            createSubfolder: {
+                beginCreatingFolder(parentFolderID: folder.id)
+            },
+            rename: {
+                folderName = folder.name
+                folderRenameTarget = folder
+            },
+            moveUp: {
+                let action = MacFocusedAsyncAction(target: folder.id) {
+                    await model.moveFolder($0, up: true)
+                }
+                Task { await action() }
+            },
+            moveDown: {
+                let action = MacFocusedAsyncAction(target: folder.id) {
+                    await model.moveFolder($0, up: false)
+                }
+                Task { await action() }
+            },
+            moveIntoFolder: { destinationID in
+                moveFolder(folder.id, to: destinationID)
+            },
+            moveToTopLevel: {
+                moveFolder(folder.id, to: nil)
+            },
+            delete: {
+                folderDeleteTarget = folder
+            }
+        )
     }
 
     private func beginAudioExport(for meeting: Meeting) {
@@ -393,15 +542,15 @@ struct MeetingSidebarView: View {
     }
 
     @ViewBuilder
-    private func meetingDestinationMenu(for meetingIDs: Set<MeetingID>) -> some View {
+    private func meetingDestinationMenu(
+        _ context: MacMeetingCommandContext
+    ) -> some View {
         ForEach(normalTree.folderNodes) { root in
             Menu(root.folder.name) {
-                Button("Move Here") {
-                    moveMeetings(meetingIDs, to: root.id)
-                }
+                Button("Move Here") { context.moveToFolder(root.id) }
                 ForEach(root.children) { child in
                     Button(child.folder.name) {
-                        moveMeetings(meetingIDs, to: child.id)
+                        context.moveToFolder(child.id)
                     }
                 }
             }
@@ -409,74 +558,40 @@ struct MeetingSidebarView: View {
         if !normalTree.folderNodes.isEmpty {
             Divider()
         }
-        Button("None") {
-            moveMeetings(meetingIDs, to: nil)
-        }
+        Button("None") { context.moveToFolder(nil) }
     }
 
     @ViewBuilder
-    private func folderMenu(_ node: MeetingFolderNode) -> some View {
-        if node.folder.parentFolderID == nil {
-            Button("New Subfolder…") {
-                beginCreatingFolder(parentFolderID: node.id)
-            }
+    private func folderMenu(_ context: MacFolderCommandContext) -> some View {
+        if context.availability.canCreateSubfolder {
+            Button("New Subfolder…", action: context.createSubfolder)
         }
-        Button("Rename…") {
-            folderName = node.folder.name
-            folderRenameTarget = node.folder
-        }
+        Button("Rename…", action: context.rename)
+            .disabled(!context.availability.canRename)
         Divider()
-        Button("Move Up") {
-            Task { await model.moveFolder(node.id, up: true) }
-        }
-        .disabled(!canMoveSibling(node.folder, offset: -1))
-        Button("Move Down") {
-            Task { await model.moveFolder(node.id, up: false) }
-        }
-        .disabled(!canMoveSibling(node.folder, offset: 1))
-        let nestingDestinations = MeetingSidebarFolderMenuPolicy
-            .nestingDestinations(for: node.folder, folders: model.folders)
-        if !nestingDestinations.isEmpty {
+        Button("Move Up", action: context.moveUp)
+            .disabled(!context.availability.canMoveUp)
+        Button("Move Down", action: context.moveDown)
+            .disabled(!context.availability.canMoveDown)
+        if !context.nestingDestinations.isEmpty {
             Menu("Move into Folder") {
-                ForEach(nestingDestinations) { destination in
+                ForEach(context.nestingDestinations) { destination in
                     Button(destination.name) {
-                        moveFolder(node.id, to: destination.id)
+                        context.moveIntoFolder(destination.id)
                     }
                 }
             }
         }
-        if node.folder.parentFolderID != nil {
-            Button("Move to Top Level") {
-                moveFolder(node.id, to: nil)
-            }
+        if context.availability.canMoveToTopLevel {
+            Button("Move to Top Level", action: context.moveToTopLevel)
         }
         Divider()
-        Button("Delete Folder…", role: .destructive) {
-            folderDeleteTarget = node.folder
-        }
-    }
-
-    private var searchBar: some View {
-        HStack(spacing: Steno.Space.s) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-            TextField("Search titles", text: $query)
-                .textFieldStyle(.plain)
-            if isSearching {
-                Button {
-                    query = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.tertiary)
-                }
-                .buttonStyle(.plain)
-                .help("Clear the search")
-            }
-        }
-        .padding(.horizontal, Steno.Space.m)
-        .padding(.vertical, Steno.Space.s)
-        .background(.bar)
-        .overlay(alignment: .bottom) { Divider() }
+        Button(
+            "Delete Folder…",
+            role: .destructive,
+            action: context.delete
+        )
+        .disabled(!context.availability.canDelete)
     }
 
     private var isSearching: Bool {
@@ -664,6 +779,19 @@ private struct FolderDialogs: ViewModifier {
     let disclosureStore: FolderDisclosureStore
 
     func body(content: Content) -> some View {
+        let createValidation = SidebarNameValidation.evaluate(
+            name: folderName,
+            parentFolderID: newFolderParentID,
+            currentFolderID: nil,
+            folders: model.folders
+        )
+        let renameValidation = SidebarNameValidation.evaluate(
+            name: folderName,
+            parentFolderID: renameTarget?.parentFolderID,
+            currentFolderID: renameTarget?.id,
+            folders: model.folders
+        )
+
         content
             .alert(
                 newFolderParentID == nil ? "New folder" : "New subfolder",
@@ -671,7 +799,9 @@ private struct FolderDialogs: ViewModifier {
             ) {
                 TextField("Name", text: $folderName)
                 Button("Create") {
-                    let name = folderName
+                    guard let name = createValidation.normalizedName else {
+                        return
+                    }
                     let parentFolderID = newFolderParentID
                     isCreating = false
                     Task {
@@ -681,7 +811,12 @@ private struct FolderDialogs: ViewModifier {
                         )
                     }
                 }
+                .disabled(!createValidation.canSubmit)
                 Button("Cancel", role: .cancel) { isCreating = false }
+            } message: {
+                if let message = createValidation.message {
+                    Text(message)
+                }
             }
             .alert(
                 "Rename folder",
@@ -693,12 +828,19 @@ private struct FolderDialogs: ViewModifier {
             ) { folder in
                 TextField("Name", text: $folderName)
                 Button("Rename") {
+                    guard let name = renameValidation.normalizedName else {
+                        return
+                    }
                     let target = folder.id
-                    let name = folderName
                     renameTarget = nil
                     Task { await model.renameFolder(target, to: name) }
                 }
+                .disabled(!renameValidation.canSubmit)
                 Button("Cancel", role: .cancel) { renameTarget = nil }
+            } message: { _ in
+                if let message = renameValidation.message {
+                    Text(message)
+                }
             }
             .confirmationDialog(
                 deleteTarget.map { "Delete the folder \u{201C}\($0.name)\u{201D}?" } ?? "",
@@ -739,6 +881,8 @@ private struct MeetingDialogs: ViewModifier {
     @Binding var retranscribeTarget: Meeting?
 
     func body(content: Content) -> some View {
+        let renameValidation = MeetingTitleValidation.evaluate(title: renameTitle)
+
         content
             .confirmationDialog(
                 retranscribeTarget.map { "Transcribe \u{201C}\($0.title)\u{201D} again?" } ?? "",
@@ -768,14 +912,21 @@ private struct MeetingDialogs: ViewModifier {
             ) { meeting in
                 TextField("Title", text: $renameTitle)
                 Button("Rename") {
+                    guard let title = renameValidation.normalizedTitle else {
+                        return
+                    }
                     let target = meeting.id
-                    let title = renameTitle
                     renameTarget = nil
                     Task { await model.renameMeeting(target, to: title) }
                 }
+                .disabled(!renameValidation.canSubmit)
                 Button("Cancel", role: .cancel) { renameTarget = nil }
             } message: { _ in
-                Text("The new title only affects how the meeting is displayed; the originals stay unchanged.")
+                if let message = renameValidation.message {
+                    Text(message)
+                } else {
+                    Text("The new title only affects how the meeting is displayed; the originals stay unchanged.")
+                }
             }
             .confirmationDialog(
                 deleteTarget.map { "Move \u{201C}\($0.title)\u{201D} to the Trash?" } ?? "",

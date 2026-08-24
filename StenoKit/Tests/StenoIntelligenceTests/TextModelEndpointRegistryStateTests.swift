@@ -1,9 +1,27 @@
 import Foundation
+import StenoDomain
 import Testing
 @testable import StenoIntelligence
 
 @Suite("Text model endpoint registry recovery")
 struct TextModelEndpointRegistryStateTests {
+    @Test("known endpoint slots are current-first and deduplicate legacy endpoints")
+    func knownEndpointSlotsAreCurrentFirst() {
+        let current = endpoint(host: "current.example.test", revision: UUID())
+        let legacy = endpoint(host: "legacy.example.test", revision: nil)
+
+        #expect(TextModelSecretSlot.allKnownSlots(for: current) == [
+            TextModelSecretSlot(endpoint: current),
+            TextModelSecretSlot(
+                endpointID: current.id,
+                configurationRevision: nil
+            ),
+        ])
+        #expect(TextModelSecretSlot.allKnownSlots(for: legacy) == [
+            TextModelSecretSlot(endpoint: legacy),
+        ])
+    }
+
     @Test("prepared upsert rolls back and removes the orphan slot idempotently")
     func preparedUpsertRollsBack() throws {
         let old = endpoint(host: "old.example.test", revision: UUID())
@@ -13,7 +31,11 @@ struct TextModelEndpointRegistryStateTests {
             previous: old,
             next: new
         )
-        let registry = RegistryFake(.init(endpoints: [old], journal: journal))
+        let registry = RegistryFake(.init(
+            schemaVersion: 2,
+            endpoints: [old],
+            journal: journal
+        ))
         let secrets = SecretFake([
             TextModelSecretSlot(endpoint: old): "OLD_KEY",
             TextModelSecretSlot(endpoint: new): "NEW_KEY",
@@ -76,15 +98,38 @@ struct TextModelEndpointRegistryStateTests {
         #expect(try secrets.value(for: TextModelSecretSlot(endpoint: new)) == "NEW_KEY")
     }
 
-    @Test("prepared delete deterministically completes deletion after a crash")
-    func preparedDeleteCompletes() throws {
+    @Test("a legacy prepared delete journal still completes deletion")
+    func legacyPreparedDeleteCompletes() throws {
         let old = endpoint(host: "delete.example.test", revision: UUID())
+        let currentSlot = TextModelSecretSlot(endpoint: old)
+        let legacySlot = TextModelSecretSlot(
+            endpointID: old.id,
+            configurationRevision: nil
+        )
         let journal = TextModelEndpointMutationJournal.delete(
             phase: .prepared,
             previous: old
         )
-        let registry = RegistryFake(.init(endpoints: [old], journal: journal))
-        let secrets = SecretFake([TextModelSecretSlot(endpoint: old): "OLD_KEY"])
+        let encodedJournal = try JSONEncoder().encode(journal)
+        #expect(
+            !String(decoding: encodedJournal, as: UTF8.self)
+                .contains("deleteCurrentSecretWasPresent")
+        )
+        #expect(
+            try JSONDecoder().decode(
+                TextModelEndpointMutationJournal.self,
+                from: encodedJournal
+            ).deleteCurrentSecretWasPresent == nil
+        )
+        let registry = RegistryFake(.init(
+            schemaVersion: 2,
+            endpoints: [old],
+            journal: journal
+        ))
+        let secrets = SecretFake([
+            currentSlot: "CURRENT_KEY",
+            legacySlot: "LEGACY_KEY",
+        ])
 
         let recovered = try TextModelEndpointRegistryRecovery.recover(
             registry: registry,
@@ -97,20 +142,88 @@ struct TextModelEndpointRegistryStateTests {
 
         #expect(recovered == .init())
         #expect(repeated == recovered)
-        #expect(try secrets.value(for: TextModelSecretSlot(endpoint: old)) == nil)
+        #expect(try secrets.value(for: currentSlot) == nil)
+        #expect(try secrets.value(for: legacySlot) == nil)
         #expect(registry.persistedStates.contains {
             $0.endpoints.isEmpty && $0.journal?.phase == .committed
         })
     }
 
+    @Test("prepared delete rolls back when its current secret is still present")
+    func preparedDeleteWithUntouchedSecretRollsBack() throws {
+        let old = endpoint(host: "delete.example.test", revision: UUID())
+        let currentSlot = TextModelSecretSlot(endpoint: old)
+        let legacySlot = TextModelSecretSlot(
+            endpointID: old.id,
+            configurationRevision: nil
+        )
+        let registry = RegistryFake(.init(
+            endpoints: [old],
+            journal: .delete(
+                phase: .prepared,
+                previous: old,
+                currentSecretWasPresent: true
+            )
+        ))
+        let secrets = SecretFake([
+            currentSlot: "CURRENT_KEY",
+            legacySlot: "LEGACY_KEY",
+        ])
+
+        let recovered = try TextModelEndpointRegistryRecovery.recover(
+            registry: registry,
+            secrets: secrets
+        )
+
+        #expect(recovered == .init(endpoints: [old]))
+        #expect(try secrets.value(for: currentSlot) == "CURRENT_KEY")
+        #expect(try secrets.value(for: legacySlot) == "LEGACY_KEY")
+    }
+
+    @Test("prepared delete without a prior current secret rolls back safely")
+    func preparedDeleteWithoutCurrentSecretRollsBack() throws {
+        let old = endpoint(host: "delete.example.test", revision: UUID())
+        let currentSlot = TextModelSecretSlot(endpoint: old)
+        let legacySlot = TextModelSecretSlot(
+            endpointID: old.id,
+            configurationRevision: nil
+        )
+        let registry = RegistryFake(.init(
+            endpoints: [old],
+            journal: .delete(
+                phase: .prepared,
+                previous: old,
+                currentSecretWasPresent: false
+            )
+        ))
+        let secrets = SecretFake([legacySlot: "LEGACY_KEY"])
+
+        let recovered = try TextModelEndpointRegistryRecovery.recover(
+            registry: registry,
+            secrets: secrets
+        )
+
+        #expect(recovered == .init(endpoints: [old]))
+        #expect(try secrets.value(for: currentSlot) == nil)
+        #expect(try secrets.value(for: legacySlot) == "LEGACY_KEY")
+    }
+
     @Test("committed delete completes cleanup idempotently")
     func committedDeleteCompletes() throws {
         let old = endpoint(host: "delete.example.test", revision: UUID())
+        let currentSlot = TextModelSecretSlot(endpoint: old)
+        let legacySlot = TextModelSecretSlot(
+            endpointID: old.id,
+            configurationRevision: nil
+        )
         let registry = RegistryFake(.init(
-            endpoints: [],
+            endpoints: [old],
             journal: .delete(phase: .committed, previous: old)
         ))
-        let secrets = SecretFake([TextModelSecretSlot(endpoint: old): "OLD_KEY"])
+        let secrets = SecretFake([
+            currentSlot: "CURRENT_KEY",
+            legacySlot: "LEGACY_KEY",
+        ])
 
         let recovered = try TextModelEndpointRegistryRecovery.recover(
             registry: registry,
@@ -118,7 +231,52 @@ struct TextModelEndpointRegistryStateTests {
         )
 
         #expect(recovered == .init())
-        #expect(try secrets.value(for: TextModelSecretSlot(endpoint: old)) == nil)
+        #expect(try secrets.value(for: currentSlot) == nil)
+        #expect(try secrets.value(for: legacySlot) == nil)
+    }
+
+    @Test("prepared delete detects a removed current slot and finishes deletion")
+    func preparedDeleteFinishesAfterCurrentSlotRemoval() throws {
+        let old = endpoint(host: "delete.example.test", revision: UUID())
+        let currentSlot = TextModelSecretSlot(endpoint: old)
+        let legacySlot = TextModelSecretSlot(
+            endpointID: old.id,
+            configurationRevision: nil
+        )
+        let initial = TextModelEndpointRegistryState(
+            endpoints: [old],
+            journal: .delete(
+                phase: .prepared,
+                previous: old,
+                currentSecretWasPresent: true
+            )
+        )
+        let registry = RegistryFake(initial)
+        let secrets = SecretFake([
+            legacySlot: "LEGACY_KEY",
+        ])
+        secrets.removeErrors[legacySlot] = RegistryTestError.injected
+
+        #expect(throws: RegistryTestError.injected) {
+            _ = try TextModelEndpointRegistryRecovery.recover(
+                registry: registry,
+                secrets: secrets
+            )
+        }
+
+        #expect(try secrets.value(for: currentSlot) == nil)
+        #expect(try secrets.value(for: legacySlot) == "LEGACY_KEY")
+        #expect(try registry.load() == initial)
+
+        secrets.removeErrors[legacySlot] = nil
+        let recovered = try TextModelEndpointRegistryRecovery.recover(
+            registry: registry,
+            secrets: secrets
+        )
+
+        #expect(recovered == .init())
+        #expect(try secrets.value(for: currentSlot) == nil)
+        #expect(try secrets.value(for: legacySlot) == nil)
     }
 
     @Test("failed prepared-upsert cleanup stays journaled and fail closed")
@@ -158,6 +316,183 @@ struct TextModelEndpointRegistryStateTests {
         #expect(!text.contains("OLD_KEY"))
         #expect(!text.contains("NEW_KEY"))
         #expect(!text.localizedCaseInsensitiveContains("secretValue"))
+    }
+
+    @Test("delete reconciliation records only secret presence, never its value")
+    func deleteJournalContainsOnlySecretPresence() throws {
+        let old = endpoint(host: "delete.example.test", revision: UUID())
+        let state = TextModelEndpointRegistryState(
+            endpoints: [old],
+            journal: .delete(
+                phase: .prepared,
+                previous: old,
+                currentSecretWasPresent: true
+            )
+        )
+
+        let text = String(decoding: try JSONEncoder().encode(state), as: UTF8.self)
+
+        #expect(text.contains("\"deleteCurrentSecretWasPresent\":true"))
+        #expect(!text.contains("CURRENT_KEY"))
+        #expect(!text.contains("LEGACY_KEY"))
+    }
+
+    @Test("missing endpoint revisions migrate once without replacing existing revisions")
+    func missingRevisionsMigrateIdempotently() throws {
+        let legacy = endpoint(host: "legacy.example.test", revision: nil)
+        let existingRevision = UUID()
+        let current = endpoint(
+            host: "current.example.test",
+            revision: existingRevision
+        )
+        let registry = RegistryFake(.init(endpoints: [legacy, current]))
+        let secrets = SecretFake()
+
+        let migrated = try TextModelEndpointRegistryRecovery.recover(
+            registry: registry,
+            secrets: secrets
+        )
+        let coldLoaded = try TextModelEndpointRegistryRecovery.recover(
+            registry: registry,
+            secrets: secrets
+        )
+
+        let migratedLegacy = try #require(
+            migrated.endpoints.first { $0.id == legacy.id }
+        )
+        let migratedCurrent = try #require(
+            migrated.endpoints.first { $0.id == current.id }
+        )
+        #expect(migratedLegacy.configurationRevision != nil)
+        #expect(migratedCurrent.configurationRevision == existingRevision)
+        #expect(coldLoaded == migrated)
+        #expect(registry.persistedStates.contains { $0.journal != nil })
+        #expect(registry.state.journal == nil)
+    }
+
+    @Test("schema version 2 is decoded tolerantly and persisted back as version 3")
+    func schemaVersionTwoMigratesToCurrent() throws {
+        let legacy = endpoint(host: "legacy.example.test", revision: UUID())
+        let registry = RegistryFake(.init(
+            schemaVersion: 2,
+            endpoints: [legacy],
+            journal: nil
+        ))
+        let secrets = SecretFake()
+
+        let recovered = try TextModelEndpointRegistryRecovery.recover(
+            registry: registry,
+            secrets: secrets
+        )
+
+        #expect(TextModelEndpointRegistryState.currentSchemaVersion == 3)
+        #expect(recovered.schemaVersion == TextModelEndpointRegistryState.currentSchemaVersion)
+        #expect(recovered.endpoints == [legacy])
+        #expect(registry.state.schemaVersion == TextModelEndpointRegistryState.currentSchemaVersion)
+    }
+
+    @Test("a schema version newer than this build knows fails closed")
+    func newerSchemaVersionFailsClosed() throws {
+        let legacy = endpoint(host: "future.example.test", revision: UUID())
+        let futureVersion = TextModelEndpointRegistryState.currentSchemaVersion + 1
+        let registry = RegistryFake(.init(
+            schemaVersion: futureVersion,
+            endpoints: [legacy],
+            journal: nil
+        ))
+        let secrets = SecretFake()
+
+        #expect(throws: TextModelEndpointRegistryError.unsupportedSchemaVersion(futureVersion)) {
+            try TextModelEndpointRegistryRecovery.recover(
+                registry: registry,
+                secrets: secrets
+            )
+        }
+    }
+
+    @Test("revision migration copies and verifies a key without removing its legacy slot")
+    func revisionMigrationPreservesKey() throws {
+        let legacy = endpoint(host: "keyed.example.test", revision: nil)
+        let legacySlot = TextModelSecretSlot(endpoint: legacy)
+        let registry = RegistryFake(.init(endpoints: [legacy]))
+        let secrets = SecretFake([legacySlot: "IRREPLACEABLE_KEY"])
+
+        let migrated = try TextModelEndpointRegistryRecovery.recover(
+            registry: registry,
+            secrets: secrets
+        )
+
+        let migratedEndpoint = try #require(migrated.endpoints.first)
+        let migratedSlot = TextModelSecretSlot(endpoint: migratedEndpoint)
+        #expect(migratedEndpoint.configurationRevision != nil)
+        #expect(try secrets.value(for: migratedSlot) == "IRREPLACEABLE_KEY")
+        #expect(try secrets.value(for: legacySlot) == "IRREPLACEABLE_KEY")
+    }
+
+    @Test("a key-copy failure leaves the endpoint and key unchanged")
+    func revisionMigrationKeyFailureRollsBack() throws {
+        let legacy = endpoint(host: "keyed.example.test", revision: nil)
+        let legacySlot = TextModelSecretSlot(endpoint: legacy)
+        let initial = TextModelEndpointRegistryState(endpoints: [legacy])
+        let registry = RegistryFake(initial)
+        let secrets = SecretFake([legacySlot: "IRREPLACEABLE_KEY"])
+        secrets.corruptRevisionedReadAfterSet = true
+
+        let recovered = try TextModelEndpointRegistryRecovery.recover(
+            registry: registry,
+            secrets: secrets
+        )
+
+        #expect(secrets.setAttempts == 1)
+        #expect(recovered == initial)
+        #expect(registry.state == initial)
+        #expect(try secrets.value(for: legacySlot) == "IRREPLACEABLE_KEY")
+        #expect(secrets.storedSlots == [legacySlot])
+    }
+
+    @Test("a failed key-copy cleanup keeps the recovery journal and legacy key")
+    func revisionMigrationCleanupFailureStaysRecoverable() throws {
+        let legacy = endpoint(host: "keyed.example.test", revision: nil)
+        let legacySlot = TextModelSecretSlot(endpoint: legacy)
+        let initial = TextModelEndpointRegistryState(endpoints: [legacy])
+        let registry = RegistryFake(initial)
+        let secrets = SecretFake([legacySlot: "IRREPLACEABLE_KEY"])
+        secrets.corruptRevisionedReadAfterSet = true
+        secrets.removeError = RegistryTestError.injected
+
+        #expect(throws: RegistryTestError.injected) {
+            _ = try TextModelEndpointRegistryRecovery.recover(
+                registry: registry,
+                secrets: secrets
+            )
+        }
+
+        #expect(registry.state.endpoints == initial.endpoints)
+        #expect(registry.state.journal?.operation == .revisionMigration)
+        #expect(registry.state.journal?.phase == .prepared)
+        #expect(try secrets.value(for: legacySlot) == "IRREPLACEABLE_KEY")
+    }
+
+    @Test("a legacy-key read failure leaves registry and key unchanged")
+    func revisionMigrationLegacyKeyReadFailureDoesNotMutate() throws {
+        let legacy = endpoint(host: "keyed.example.test", revision: nil)
+        let legacySlot = TextModelSecretSlot(endpoint: legacy)
+        let initial = TextModelEndpointRegistryState(endpoints: [legacy])
+        let registry = RegistryFake(initial)
+        let secrets = SecretFake([legacySlot: "IRREPLACEABLE_KEY"])
+        secrets.legacyReadError = RegistryTestError.injected
+
+        #expect(throws: RegistryTestError.injected) {
+            _ = try TextModelEndpointRegistryRecovery.recover(
+                registry: registry,
+                secrets: secrets
+            )
+        }
+
+        secrets.legacyReadError = nil
+        #expect(registry.state == initial)
+        #expect(secrets.setAttempts == 0)
+        #expect(try secrets.value(for: legacySlot) == "IRREPLACEABLE_KEY")
     }
 
     @Test("UserDefaults registry migrates the legacy endpoint array")
@@ -462,7 +797,7 @@ private func endpoint(
     host: String,
     revision: UUID?
 ) -> TextModelEndpoint {
-    TextModelEndpoint(
+    makeTextModelEndpoint(
         id: id,
         name: host,
         baseURL: URL(string: "https://\(host)/v1")!,
@@ -496,21 +831,43 @@ private final class RegistryFake: TextModelEndpointRegistryStoring, @unchecked S
 
 private final class SecretFake: TextModelSecretStoring, @unchecked Sendable {
     private var values: [TextModelSecretSlot: String]
+    private var writtenSlots: Set<TextModelSecretSlot> = []
     var removeError: (any Error)?
+    var removeErrors: [TextModelSecretSlot: RegistryTestError] = [:]
+    var legacyReadError: (any Error)?
+    var corruptRevisionedReadAfterSet = false
+    private(set) var setAttempts = 0
+
+    var storedSlots: Set<TextModelSecretSlot> {
+        Set(values.keys)
+    }
 
     init(_ values: [TextModelSecretSlot: String] = [:]) {
         self.values = values
     }
 
     func value(for slot: TextModelSecretSlot) throws -> String? {
-        values[slot]
+        if slot.configurationRevision == nil,
+           let legacyReadError {
+            throw legacyReadError
+        }
+        if corruptRevisionedReadAfterSet,
+           slot.configurationRevision != nil,
+           writtenSlots.contains(slot),
+           values[slot] != nil {
+            return "CORRUPTED_COPY"
+        }
+        return values[slot]
     }
 
     func setValue(_ value: String, for slot: TextModelSecretSlot) throws {
+        setAttempts += 1
         values[slot] = value
+        writtenSlots.insert(slot)
     }
 
     func removeValue(for slot: TextModelSecretSlot) throws {
+        if let removeError = removeErrors[slot] { throw removeError }
         if let removeError { throw removeError }
         values[slot] = nil
     }

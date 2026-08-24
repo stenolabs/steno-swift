@@ -82,6 +82,11 @@ struct RecordingStartState {
     private(set) var isStarting = false
     private var createdMeetingID: MeetingID?
 
+    /// Ein bereits angelegtes Meeting ist auch vor `isRecording = true`
+    /// aktiv. Pipeline-Recovery darf es in diesem Fenster nicht als
+    /// gestrandete Aufnahme behandeln.
+    var activeMeetingID: MeetingID? { createdMeetingID }
+
     mutating func begin() -> Bool {
         guard !isStarting else { return false }
         isStarting = true

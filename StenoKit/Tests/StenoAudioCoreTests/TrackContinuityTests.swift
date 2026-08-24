@@ -186,6 +186,78 @@ struct TrackContinuityTests {
         #expect(writer.frameCount == 16_000)
         #expect(writer.bufferLengths.last == 3_200)
     }
+
+    @Test("a clock jump drops excess silence without overflowing or advancing time")
+    func clockJumpDropsSilenceWithoutStopping() async throws {
+        let writerPair = AsyncStream.makeStream(
+            of: AVAudioPCMBuffer.self,
+            bufferingPolicy: .bufferingOldest(1)
+        )
+        let livePair = AsyncStream.makeStream(of: LiveAudioEvent.self)
+        let overflow = OverflowCounter()
+        let start = ContinuousClock.now
+        let timeline = TrackContinuity(
+            format: syntheticBuffer().format,
+            sessionStart: start,
+            writerContinuation: writerPair.continuation,
+            liveContinuation: livePair.continuation,
+            stallTimeout: .seconds(300),
+            maximumSilenceDuration: .milliseconds(250),
+            writerOverflowHandler: { overflow.increment() }
+        )
+        let afterSleep = start.advanced(by: .seconds(120))
+
+        await timeline.setUserPaused(true, at: start)
+        await timeline.tick(at: afterSleep)
+        await timeline.setUserPaused(false, at: afterSleep)
+        await timeline.finish(at: afterSleep)
+
+        let writer = await captureWriter(writerPair.stream)
+        let live = await captureLive(livePair.stream)
+        #expect(overflow.value == 0)
+        #expect(writer.frameCount == 2_000)
+        #expect(live.gapEndTimes == [0.25])
+    }
+
+    @Test("dropped real audio still overflows without advancing writer time")
+    func droppedRealAudioStillOverflows() async throws {
+        let writerPair = AsyncStream.makeStream(
+            of: AVAudioPCMBuffer.self,
+            bufferingPolicy: .bufferingOldest(1)
+        )
+        let livePair = AsyncStream.makeStream(of: LiveAudioEvent.self)
+        let overflow = OverflowCounter()
+        let start = ContinuousClock.now
+        let timeline = TrackContinuity(
+            format: syntheticBuffer().format,
+            sessionStart: start,
+            writerContinuation: writerPair.continuation,
+            liveContinuation: livePair.continuation,
+            writerOverflowHandler: { overflow.increment() }
+        )
+
+        await timeline.receive(syntheticBuffer(), at: start)
+        await timeline.receive(
+            syntheticBuffer(),
+            at: start.advanced(by: .milliseconds(500))
+        )
+        await timeline.setUserPaused(
+            true,
+            at: start.advanced(by: .milliseconds(500))
+        )
+        await timeline.setUserPaused(
+            false,
+            at: start.advanced(by: .milliseconds(500))
+        )
+        await timeline.finish(at: start.advanced(by: .milliseconds(500)))
+
+        let writer = await captureWriter(writerPair.stream)
+        let live = await captureLive(livePair.stream)
+        #expect(overflow.value == 1)
+        #expect(writer.frameCount == 4_000)
+        #expect(live.gapStartTimes == [0.5])
+        #expect(live.gapEndTimes == [0.5])
+    }
 }
 
 private struct ContinuityFixture: Sendable {
@@ -206,6 +278,8 @@ private struct LiveCapture: Sendable {
     let bufferCount: Int
     let gapReasons: [TrackGapReason]
     let gapEndCount: Int
+    let gapStartTimes: [TimeInterval]
+    let gapEndTimes: [TimeInterval]
 }
 
 private func makeFixture(
@@ -252,24 +326,7 @@ private func makeFixture(
     }
     let liveStream = livePair.stream
     let live = Task {
-        var bufferCount = 0
-        var gapReasons: [TrackGapReason] = []
-        var gapEndCount = 0
-        for await event in liveStream {
-            switch event {
-            case .buffer:
-                bufferCount += 1
-            case let .gapStarted(_, reason):
-                gapReasons.append(reason)
-            case .gapEnded:
-                gapEndCount += 1
-            }
-        }
-        return LiveCapture(
-            bufferCount: bufferCount,
-            gapReasons: gapReasons,
-            gapEndCount: gapEndCount
-        )
+        await captureLive(liveStream)
     }
     return ContinuityFixture(
         start: start,
@@ -277,4 +334,68 @@ private func makeFixture(
         writer: writer,
         live: live
     )
+}
+
+private func captureWriter(
+    _ stream: sending AsyncStream<AVAudioPCMBuffer>
+) async -> WriterCapture {
+    var frameCount = 0
+    var nonSilentBufferCount = 0
+    var bufferLengths: [Int] = []
+    var leadingSilentFrames = 0
+    var receivedNonSilence = false
+    for await buffer in stream {
+        frameCount += Int(buffer.frameLength)
+        bufferLengths.append(Int(buffer.frameLength))
+        if AudioLevelMeter.measure(buffer).peak > 0 {
+            nonSilentBufferCount += 1
+            receivedNonSilence = true
+        } else if !receivedNonSilence {
+            leadingSilentFrames += Int(buffer.frameLength)
+        }
+    }
+    return WriterCapture(
+        frameCount: frameCount,
+        nonSilentBufferCount: nonSilentBufferCount,
+        bufferLengths: bufferLengths,
+        leadingSilentFrames: leadingSilentFrames
+    )
+}
+
+private func captureLive(
+    _ stream: sending AsyncStream<LiveAudioEvent>
+) async -> LiveCapture {
+    var bufferCount = 0
+    var gapReasons: [TrackGapReason] = []
+    var gapStartTimes: [TimeInterval] = []
+    var gapEndTimes: [TimeInterval] = []
+    for await event in stream {
+        switch event {
+        case .buffer:
+            bufferCount += 1
+        case let .gapStarted(at, reason):
+            gapReasons.append(reason)
+            gapStartTimes.append(at)
+        case let .gapEnded(at):
+            gapEndTimes.append(at)
+        }
+    }
+    return LiveCapture(
+        bufferCount: bufferCount,
+        gapReasons: gapReasons,
+        gapEndCount: gapEndTimes.count,
+        gapStartTimes: gapStartTimes,
+        gapEndTimes: gapEndTimes
+    )
+}
+
+private final class OverflowCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int { lock.withLock { count } }
+
+    func increment() {
+        lock.withLock { count += 1 }
+    }
 }

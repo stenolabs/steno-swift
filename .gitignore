@@ -1,6 +1,12 @@
 # Handoffs sind Sessionartefakte, nie versionieren
 HANDOFF.md
 HANDOFF-*.md
+PLAN-INTEGRATION.md
+PLAN-S*.md
+UEBERGABE*.md
+
+# Lokaler Laufzeitzustand der Superpowers-Skills (PID, Port, Token)
+.superpowers/
 
 # Swift / SwiftPM (Package.resolved wird bewusst versioniert, um Abhängigkeiten zu pinnen)
 .build/
@@ -15,6 +21,7 @@ DerivedData/
 xcuserdata/
 *.xcuserstate
 *.xcresult
+.steno-signing.xcconfig
 
 # macOS
 .DS_Store

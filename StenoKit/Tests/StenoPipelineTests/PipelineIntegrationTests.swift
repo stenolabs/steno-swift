@@ -117,7 +117,7 @@ struct PipelineIntegrationTests {
             let diarization = FakeDiarizationProvider(behavior: .succeed)
             let personID = PersonID()
             let identityStore = try IdentityStore(layout: fixture.library.layout)
-            try await identityStore.replacePersons([
+            try await replacePersonsForTest([
                 Person(
                     id: personID,
                     displayName: "Ada",
@@ -126,7 +126,7 @@ struct PipelineIntegrationTests {
                         prototype(personID: personID, meetingID: MeetingID()),
                     ]
                 ),
-            ])
+            ], in: identityStore)
             let coordinator = PipelineCoordinator(
                 library: fixture.library,
                 jobStore: fixture.jobStore,
@@ -228,11 +228,15 @@ struct PipelineIntegrationTests {
                 return jobs.contains { $0.kind == .diarization && $0.status == .running }
                     && callCount == 1
             }
-            await interrupted.stop()
-
             let interruptedJob = try #require(try await fixture.jobStore.list().first {
                 $0.kind == .diarization
             })
+            try await simulateAbruptExit(
+                of: interrupted,
+                whileRunning: interruptedJob.id,
+                jobStore: fixture.jobStore,
+                library: fixture.library
+            )
             #expect(interruptedJob.status == .running)
             #expect(try temporaryRunDirectories(
                 library: fixture.library,

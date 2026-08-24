@@ -56,16 +56,46 @@ func prepareLegacyMeeting(
         )
     )
 
-    let speakers = try entry.speakers.map(LegacySpeakersFile.read(from:))
-    let diarization = try speakers.map {
-        try makeDiarizationImport(file: $0, meetingID: meetingID)
+    var speakers: LegacySpeakersFile?
+    var diarization: PreparedLegacyDiarization?
+    if let speakersURL = entry.speakers {
+        do {
+            let file = try LegacySpeakersFile.read(from: speakersURL)
+            let preparedDiarization = try makeDiarizationImport(
+                file: file,
+                meetingID: meetingID
+            )
+            speakers = file
+            diarization = preparedDiarization
+        } catch {
+            warnings.append(
+                "Stem \(entry.stem) speakers \(speakersURL.lastPathComponent) "
+                    + "was ignored: \(error)"
+            )
+        }
     }
-    let turns = try makeTranscriptTurns(
-        transcript.body,
-        duration: summary.durationSeconds,
-        speakers: speakers,
-        runID: diarization?.run.id
-    )
+    let turns: [TranscriptTurn]
+    do {
+        turns = try makeTranscriptTurns(
+            transcript.body,
+            duration: summary.durationSeconds,
+            speakers: speakers,
+            runID: diarization?.run.id
+        )
+    } catch {
+        warnings.append(
+            "Stem \(entry.stem) speakers \(entry.speakers?.lastPathComponent ?? "") "
+                + "was ignored: \(error)"
+        )
+        speakers = nil
+        diarization = nil
+        turns = try makeTranscriptTurns(
+            transcript.body,
+            duration: summary.durationSeconds,
+            speakers: nil,
+            runID: nil
+        )
+    }
     let revision = TranscriptRevision(
         meetingID: meetingID,
         createdAt: createdAt,
@@ -106,12 +136,40 @@ func prepareLegacyMeeting(
         }
     }
 
-    let overrides = try entry.overrides.map {
-        try LegacyOverrides.read(from: $0, timestampParser: timestampParser)
+    let overrides: LegacyOverrides?
+    if let overridesURL = entry.overrides {
+        do {
+            overrides = try LegacyOverrides.read(
+                from: overridesURL,
+                timestampParser: timestampParser
+            )
+        } catch {
+            overrides = nil
+            warnings.append(
+                "Stem \(entry.stem) overrides \(overridesURL.lastPathComponent) "
+                    + "was ignored: \(error)"
+            )
+        }
+    } else {
+        overrides = nil
     }
-    let reports = try entry.reports.map {
-        try LegacyReportsFile.read(from: $0, timestampParser: timestampParser)
-    } ?? LegacyReportsFile(reports: [], activeReport: nil)
+    let reports: LegacyReportsFile
+    if let reportsURL = entry.reports {
+        do {
+            reports = try LegacyReportsFile.read(
+                from: reportsURL,
+                timestampParser: timestampParser
+            )
+        } catch {
+            reports = LegacyReportsFile(reports: [], activeReport: nil)
+            warnings.append(
+                "Stem \(entry.stem) reports \(reportsURL.lastPathComponent) "
+                    + "was ignored: \(error)"
+            )
+        }
+    } else {
+        reports = LegacyReportsFile(reports: [], activeReport: nil)
+    }
     let templateResults = makeTemplateResults(
         summary: summary,
         overrides: overrides,
@@ -154,6 +212,35 @@ private struct PreparedLegacyDiarization {
     let reviewData: Data
 }
 
+struct LegacyClusterKey: Hashable, Sendable {
+    let channel: String
+    let speakerID: String
+
+    var clusterID: String {
+        "\(encodedLegacyClusterComponent(channel))/"
+            + encodedLegacyClusterComponent(speakerID)
+    }
+}
+
+func legacySegmentsByClusterID(
+    _ values: [(key: LegacyClusterKey, segments: [LegacySpeakerSegment])]
+) -> [String: [LegacySpeakerSegment]] {
+    let segmentsByKey = Dictionary(
+        values.map { ($0.key, $0.segments) },
+        uniquingKeysWith: { first, _ in first }
+    )
+    return Dictionary(
+        segmentsByKey.map { ($0.key.clusterID, $0.value) },
+        uniquingKeysWith: { first, _ in first }
+    )
+}
+
+private func encodedLegacyClusterComponent(_ value: String) -> String {
+    value
+        .replacingOccurrences(of: "%", with: "%25")
+        .replacingOccurrences(of: "/", with: "%2F")
+}
+
 private func makeDiarizationImport(
     file: LegacySpeakersFile,
     meetingID: MeetingID
@@ -172,11 +259,12 @@ private func makeDiarizationImport(
     )
     let clusters = file.channels.sorted { $0.key < $1.key }.flatMap { channel, value in
         value.clusters.sorted { $0.key < $1.key }.map { speakerID, cluster in
-            IdentityCluster(
+            let key = LegacyClusterKey(channel: channel, speakerID: speakerID)
+            return IdentityCluster(
                 meetingID: meetingID,
                 runID: runID,
                 channel: channel,
-                clusterID: "\(channel)/\(speakerID)",
+                clusterID: key.clusterID,
                 recordingType: value.recordingType,
                 embedding: cluster.embedding,
                 speechDurationSeconds: cluster.speechDurationSeconds,
@@ -187,10 +275,13 @@ private func makeDiarizationImport(
             )
         }
     }
-    let segmentsByClusterID = Dictionary(uniqueKeysWithValues:
+    let segmentsByClusterID = legacySegmentsByClusterID(
         file.channels.flatMap { channel, value in
             value.clusters.map { speakerID, cluster in
-                ("\(channel)/\(speakerID)", cluster.segments)
+                (
+                    key: LegacyClusterKey(channel: channel, speakerID: speakerID),
+                    segments: cluster.segments
+                )
             }
         }
     )
@@ -246,7 +337,10 @@ private func makeTranscriptTurns(
                let runID {
                 speaker = .cluster(
                     runID: runID,
-                    clusterID: "\(line.channel)/\(speakerID)"
+                    clusterID: LegacyClusterKey(
+                        channel: line.channel,
+                        speakerID: speakerID
+                    ).clusterID
                 )
             } else if let line = lines?[index], !line.originalLabel.isEmpty {
                 speaker = .channel(line.originalLabel)

@@ -1,0 +1,96 @@
+{
+  "sourceLanguage":  "en",
+  "strings":  {
+    "CFBundleDisplayName":  {
+      "comment":  "Bundle display name",
+      "extractionState":  "extracted_with_value",
+      "localizations":  {
+        "en":  {
+          "stringUnit":  {
+            "state":  "new",
+            "value":  "steno-macos"
+          }
+        },
+        "de":  {
+          "stringUnit":  {
+            "state":  "translated",
+            "value":  "Steno"
+          }
+        }
+      }
+    },
+    "CFBundleName":  {
+      "comment":  "Bundle name",
+      "extractionState":  "extracted_with_value",
+      "localizations":  {
+        "en":  {
+          "stringUnit":  {
+            "state":  "new",
+            "value":  "steno-macos"
+          }
+        },
+        "de":  {
+          "stringUnit":  {
+            "state":  "translated",
+            "value":  "Steno"
+          }
+        }
+      }
+    },
+    "NSAudioCaptureUsageDescription":  {
+      "extractionState":  "manual",
+      "localizations":  {
+        "de":  {
+          "stringUnit":  {
+            "state":  "translated",
+            "value":  "Steno zeichnet Systemaudio auf, um die Personen in deinen Gesprächen lokal auf diesem Mac zu transkribieren."
+          }
+        },
+        "en":  {
+          "stringUnit":  {
+            "state":  "translated",
+            "value":  "Steno records system audio so it can transcribe the people you talk to in calls, locally on this Mac."
+          }
+        }
+      }
+    },
+    "NSMicrophoneUsageDescription":  {
+      "extractionState":  "manual",
+      "localizations":  {
+        "de":  {
+          "stringUnit":  {
+            "state":  "translated",
+            "value":  "Steno verwendet dein Mikrofon, um Gespräche lokal auf diesem Mac zu transkribieren."
+          }
+        },
+        "en":  {
+          "stringUnit":  {
+            "state":  "translated",
+            "value":  "Steno records your microphone so it can transcribe conversations locally on this Mac."
+          }
+        }
+      }
+    },
+    "Steno Meeting":  {
+      "localizations":  {
+        "de":  {
+          "stringUnit":  {
+            "state":  "translated",
+            "value":  "Steno-Meeting"
+          }
+        }
+      }
+    },
+    "Steno Sidebar Item":  {
+      "localizations":  {
+        "de":  {
+          "stringUnit":  {
+            "state":  "translated",
+            "value":  "Steno-Seitenleistenelement"
+          }
+        }
+      }
+    }
+  },
+  "version":  "1.0"
+}

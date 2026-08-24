@@ -23,11 +23,11 @@ public enum LocaleResolver {
     ) -> Locale? {
         guard !supported.isEmpty else { return nil }
 
-        if requested.identifier.caseInsensitiveCompare(
+        let isAutomatic = requested.identifier.caseInsensitiveCompare(
             Locale.transcriptionAutomatic.identifier
-        ) != .orderedSame,
-           let requestedMatch = equivalent(to: requested, in: supported) {
-            return requestedMatch
+        ) == .orderedSame
+        if !isAutomatic {
+            return equivalent(to: requested, in: supported)
         }
 
         for candidate in automaticCandidates {
@@ -42,7 +42,11 @@ public enum LocaleResolver {
         ) {
             return english
         }
-        return supported.first
+        // Ohne Treffer aus der ausdruecklichen Automatik-Kette gibt es keine
+        // fachliche Grundlage, eine beliebige Sprache aus der von Speech
+        // gelieferten Reihenfolge zu nehmen. Kein Transkript ist ehrlicher
+        // als ein plausibel aussehendes Transkript in der falschen Sprache.
+        return nil
     }
 
     private static func equivalent(
@@ -62,16 +66,67 @@ public enum LocaleResolver {
         guard let requestedLanguage = requested.language.languageCode else {
             return nil
         }
-        if let sameRegion = supported.first(where: {
+        let sameLanguage = supported.filter {
             $0.language.languageCode == requestedLanguage
-                && $0.region != nil
-                && $0.region == requested.region
-        }) {
+        }
+        guard !sameLanguage.isEmpty else { return nil }
+
+        // Die Reihenfolge ist fachlich, nicht die Reihenfolge des Arrays:
+        // 1. exakt wurde oben geprueft;
+        // 2. dieselbe vom Aufrufer genannte Region;
+        // 3. eine regionslose Sprachkennung als neutraler Kandidat;
+        // 4. die von Foundations CLDR-Likely-Subtags bestimmte Standardregion
+        //    der Sprache, zum Beispiel DE fuer Deutsch und US fuer Englisch;
+        // 5. genau ein verbleibender Sprachkandidat.
+        // Bleiben in einer Stufe mehrere Varianten uebrig, darf nur ein
+        // passendes Schriftsystem entscheiden. Sonst ist die Wahl mehrdeutig
+        // und liefert nil, statt `supported.first` zur vermeintlichen
+        // Sprachentscheidung zu machen.
+        if let requestedRegion = requested.region,
+           let sameRegion = uniqueCandidate(
+               in: sameLanguage.filter { $0.region == requestedRegion },
+               requestedScript: requested.language.script
+           ) {
             return sameRegion
         }
-        return supported.first {
-            $0.language.languageCode == requestedLanguage
+
+        if let regionless = uniqueCandidate(
+            in: sameLanguage.filter { $0.region == nil },
+            requestedScript: requested.language.script
+        ) {
+            return regionless
         }
+
+        let languageAndScript = [
+            requestedLanguage.identifier,
+            requested.language.script?.identifier,
+        ].compactMap { $0 }.joined(separator: "-")
+        let maximized = Locale.Language(identifier: languageAndScript).maximalIdentifier
+        let defaultRegion = Locale.Language(identifier: maximized).region
+        if let defaultRegion,
+           let defaultRegional = uniqueCandidate(
+               in: sameLanguage.filter { $0.region == defaultRegion },
+               requestedScript: requested.language.script
+           ) {
+            return defaultRegional
+        }
+
+        return uniqueCandidate(
+            in: sameLanguage,
+            requestedScript: requested.language.script
+        )
+    }
+
+    private static func uniqueCandidate(
+        in candidates: [Locale],
+        requestedScript: Locale.Script?
+    ) -> Locale? {
+        guard candidates.count != 1 else { return candidates[0] }
+        guard let requestedScript else { return nil }
+        let sameScript = candidates.filter {
+            $0.language.script == requestedScript
+        }
+        return sameScript.count == 1 ? sameScript[0] : nil
     }
 
     private static func normalizedIdentifier(_ locale: Locale) -> String {

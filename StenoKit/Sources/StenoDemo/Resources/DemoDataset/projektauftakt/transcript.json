@@ -1,0 +1,227 @@
+{
+  "schemaVersion": 1,
+  "id": "00000000-0000-7000-8000-000000000101",
+  "meetingID": "00000000-0000-7000-8000-000000000001",
+  "createdAt": 809006460,
+  "origin": {
+    "demo": {
+      "_0": {
+        "datasetID": "synthetic-demo",
+        "datasetVersion": "2026-08-23",
+        "itemID": "projektauftakt"
+      }
+    }
+  },
+  "turns": [
+    {
+      "speaker": {
+        "importedTextLabel": {
+          "_0": {
+            "id": "00000000-0000-7000-8000-00000000aa01",
+            "text": "Sprecherin A",
+            "wasConfirmedAtSource": false
+          }
+        }
+      },
+      "start": 0.0,
+      "end": 10.512290249433107,
+      "segments": [
+        {
+          "text": "Willkommen zum fiktiven Projektauftakt für die Musterstadt. Wir testen heute nur einen erfundenen Ablauf.",
+          "start": 0.0,
+          "end": 10.512290249433107,
+          "words": []
+        }
+      ]
+    },
+    {
+      "speaker": {
+        "importedTextLabel": {
+          "_0": {
+            "id": "00000000-0000-7000-8000-00000000aa02",
+            "text": "Sprecher B",
+            "wasConfirmedAtSource": false
+          }
+        }
+      },
+      "start": 11.3,
+      "end": 17.57201814058957,
+      "segments": [
+        {
+          "text": "Das Ziel ist ein klarer Plan für einen kleinen, vollständig synthetischen Beispielservice.",
+          "start": 11.3,
+          "end": 17.57201814058957,
+          "words": []
+        }
+      ]
+    },
+    {
+      "speaker": {
+        "importedTextLabel": {
+          "_0": {
+            "id": "00000000-0000-7000-8000-00000000aa03",
+            "text": "Sprecherin C",
+            "wasConfirmedAtSource": false
+          }
+        }
+      },
+      "start": 18.0,
+      "end": 22.33315192743764,
+      "segments": [
+        {
+          "text": "Ich übernehme die Skizze der Startseite und notiere offene Fragen für die nächste Runde.",
+          "start": 18.0,
+          "end": 22.33315192743764,
+          "words": []
+        }
+      ]
+    },
+    {
+      "speaker": {
+        "importedTextLabel": {
+          "_0": {
+            "id": "00000000-0000-7000-8000-00000000aa03",
+            "text": "Sprecherin C",
+            "wasConfirmedAtSource": false
+          }
+        }
+      },
+      "start": 23.0,
+      "end": 27.008072562358276,
+      "segments": [
+        {
+          "text": "Ich schlage vor, die Hinweise direkt neben den Eingabefeldern zu platzieren.",
+          "start": 23.0,
+          "end": 27.008072562358276,
+          "words": []
+        }
+      ]
+    },
+    {
+      "speaker": {
+        "importedTextLabel": {
+          "_0": {
+            "id": "00000000-0000-7000-8000-00000000aa01",
+            "text": "Sprecherin A",
+            "wasConfirmedAtSource": false
+          }
+        }
+      },
+      "start": 27.5,
+      "end": 36.16367346938775,
+      "segments": [
+        {
+          "text": "Einverstanden, dann kann die zweite Probe die Beschriftungen und die Reihenfolge prüfen.",
+          "start": 27.5,
+          "end": 36.16367346938775,
+          "words": []
+        }
+      ]
+    },
+    {
+      "speaker": {
+        "importedTextLabel": {
+          "_0": {
+            "id": "00000000-0000-7000-8000-00000000aa03",
+            "text": "Sprecherin C",
+            "wasConfirmedAtSource": false
+          }
+        }
+      },
+      "start": 36.7,
+      "end": 41.45111111111111,
+      "segments": [
+        {
+          "text": "Für die Darstellung nutze ich neutrale Farben und eine gut lesbare, kurze Beispielsprache.",
+          "start": 36.7,
+          "end": 41.45111111111111,
+          "words": []
+        }
+      ]
+    },
+    {
+      "speaker": {
+        "importedTextLabel": {
+          "_0": {
+            "id": "00000000-0000-7000-8000-00000000aa02",
+            "text": "Sprecher B",
+            "wasConfirmedAtSource": false
+          }
+        }
+      },
+      "start": 42.5,
+      "end": 48.48176870748299,
+      "segments": [
+        {
+          "text": "Ich ergänze einen Prüfpunkt für die Audiodauer und für die Zuordnung der drei Kunststimmen.",
+          "start": 42.5,
+          "end": 48.48176870748299,
+          "words": []
+        }
+      ]
+    },
+    {
+      "speaker": {
+        "importedTextLabel": {
+          "_0": {
+            "id": "00000000-0000-7000-8000-00000000aa03",
+            "text": "Sprecherin C",
+            "wasConfirmedAtSource": false
+          }
+        }
+      },
+      "start": 48.4,
+      "end": 52.547392290249434,
+      "segments": [
+        {
+          "text": "Danach können wir den Entwurf in Ruhe gegen die fiktiven Anforderungen vergleichen.",
+          "start": 48.4,
+          "end": 52.547392290249434,
+          "words": []
+        }
+      ]
+    },
+    {
+      "speaker": {
+        "importedTextLabel": {
+          "_0": {
+            "id": "00000000-0000-7000-8000-00000000aa01",
+            "text": "Sprecherin A",
+            "wasConfirmedAtSource": false
+          }
+        }
+      },
+      "start": 52.3,
+      "end": 59.802675736961454,
+      "segments": [
+        {
+          "text": "Zum Abschluss sammeln wir nur noch die nächsten Schritte und beenden diese Musterbesprechung.",
+          "start": 52.3,
+          "end": 59.802675736961454,
+          "words": []
+        }
+      ]
+    },
+    {
+      "speaker": {
+        "importedTextLabel": {
+          "_0": {
+            "id": "00000000-0000-7000-8000-00000000aa02",
+            "text": "Sprecher B",
+            "wasConfirmedAtSource": false
+          }
+        }
+      },
+      "start": 60.6,
+      "end": 67.45251700680272,
+      "segments": [
+        {
+          "text": "Der nächste Termin ist ebenfalls erfunden und dient ausschließlich diesem gebündelten Demo-Datensatz.",
+          "start": 60.6,
+          "end": 67.45251700680272,
+          "words": []
+        }
+      ]
+    }
+  ]
+}

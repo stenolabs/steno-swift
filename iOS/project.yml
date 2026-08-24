@@ -1,6 +1,10 @@
 name: StenoiOS
 options:
   bundleIdPrefix: org.steno
+  developmentLanguage: en
+  knownRegions:
+    - en
+    - de
   deploymentTarget:
     iOS: "26.0"
   createIntermediateGroups: true
@@ -24,10 +28,15 @@ targets:
   Steno:
     type: application
     platform: iOS
+    configFiles:
+      Debug: ../Config/Signing.xcconfig
+      Release: ../Config/Signing.xcconfig
     supportedDestinations: [iOS, iPadOS]
     sources:
       - App/Sources
+      - ../Shared/Sources
       - App/Resources
+      - ../Shared/Resources/AppIcon.icon
     dependencies:
       - package: StenoKit
         product: StenoDomain
@@ -47,6 +56,8 @@ targets:
         product: StenoExchange
       - package: StenoKit
         product: StenoPipeline
+      - package: StenoKit
+        product: StenoDemo
       - package: StenoiOSKit
         product: StenoiOSAudio
     info:
@@ -70,6 +81,15 @@ targets:
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        "UISupportedInterfaceOrientations~ipad":
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         LSApplicationCategoryType: public.app-category.productivity
         UTExportedTypeDeclarations:
           - UTTypeIdentifier: org.steno.meeting-transfer
@@ -88,18 +108,21 @@ targets:
             CFBundleTypeRole: Editor
     settings:
       base:
+        ARCHS: arm64
         PRODUCT_NAME: Steno
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        STRING_CATALOG_GENERATE_SYMBOLS: true
+        SWIFT_EMIT_LOC_STRINGS: true
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
         TARGETED_DEVICE_FAMILY: "1,2"
         IPHONEOS_DEPLOYMENT_TARGET: "26.0"
         GENERATE_INFOPLIST_FILE: false
-        # Signing lives here rather than in Xcode: xcodegen rewrites the
-        # project on every run, so anything set in the Signing tab is gone the
-        # next time. Automatic signing covers both the simulator and a real
-        # device; the team is filled in below once it is known.
+        # The team comes through Config/Signing.xcconfig from the ignored
+        # local .steno-signing.xcconfig.
+        # Anything set in Xcode's Signing tab would be lost on the next
+        # xcodegen run.
         CODE_SIGN_STYLE: Automatic
-        # Set DEVELOPMENT_TEAM locally when signing for a physical device.
         PRODUCT_BUNDLE_IDENTIFIER: org.steno.Steno
   StenoTests:
     type: bundle.unit-test
@@ -111,6 +134,7 @@ targets:
       - target: Steno
     settings:
       base:
+        ARCHS: arm64
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
         TARGETED_DEVICE_FAMILY: "1,2"

@@ -1,3 +1,4 @@
+import Foundation
 import StenoAudioCore
 import Testing
 @testable import steno_macos
@@ -10,7 +11,7 @@ struct RecordingTrackPresentationTests {
             status: RecordingTrackStatus(deviceName: "AirPods")
         )
 
-        #expect(presentation.actionTitle == "Pause microphone")
+        #expect(presentation.actionTitle.map(english) == "Pause microphone")
         #expect(presentation.warning == nil)
     }
 
@@ -23,9 +24,9 @@ struct RecordingTrackPresentationTests {
             )
         )
 
-        #expect(presentation.actionTitle == "Resume microphone")
+        #expect(presentation.actionTitle.map(english) == "Resume microphone")
         #expect(
-            presentation.warning
+            presentation.warning.map(english)
                 == "Microphone paused. System audio continues."
         )
     }
@@ -41,7 +42,7 @@ struct RecordingTrackPresentationTests {
 
         #expect(presentation.actionTitle == nil)
         #expect(
-            presentation.warning
+            presentation.warning.map(english)
                 == "AirPods disconnected. The microphone track is paused; system audio continues."
         )
     }
@@ -56,7 +57,13 @@ struct RecordingTrackPresentationTests {
             )
         )
 
-        #expect(presentation.actionTitle == "Resume microphone")
+        #expect(presentation.actionTitle.map(english) == "Resume microphone")
         #expect(presentation.isPaused)
+    }
+
+    private func english(_ resource: LocalizedStringResource) -> String {
+        var resource = resource
+        resource.locale = Locale(identifier: "en")
+        return String(localized: resource)
     }
 }

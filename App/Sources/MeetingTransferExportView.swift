@@ -5,13 +5,15 @@ import SwiftUI
 
 enum MeetingTransferExportPresentation {
     static let initialAudioSelection: Set<MediaAssetID> = []
-    static let airDropInstruction = "The system may open AirDrop directly or show the Share menu. If the menu appears, choose AirDrop."
-    static let shareActionLabel = "Share meeting"
-    static let sharingStatusText =
-        "The system sharing interface is open. The temporary package stays available until the system reports that sharing finished or was cancelled."
+    static let airDropInstruction: LocalizedStringResource = "The system may open AirDrop directly or show the Share menu. If the menu appears, choose AirDrop."
+    static let shareActionLabel: LocalizedStringResource = "Share meeting"
+    static let shareSymbolName = "square.and.arrow.up"
+    static let sharingStatusText: LocalizedStringResource = "The system sharing interface is open. The temporary package stays available until the system reports that sharing finished or was cancelled."
 
-    static func textContent(for preview: MeetingTransferExportPreview) -> [String] {
-        var content: [String] = []
+    static func textContent(
+        for preview: MeetingTransferExportPreview
+    ) -> [LocalizedStringResource] {
+        var content: [LocalizedStringResource] = []
         if preview.includesNotes {
             content.append("Notes, including any time markers")
         }
@@ -31,7 +33,7 @@ enum MeetingTransferExportPresentation {
     static func audioSummary(
         for preview: MeetingTransferExportPreview,
         selectedAudioAssetIDs: Set<MediaAssetID>
-    ) -> String {
+    ) -> LocalizedStringResource {
         let tracks = selectedAudioTracks(
             for: preview,
             selectedAudioAssetIDs: selectedAudioAssetIDs
@@ -39,24 +41,24 @@ enum MeetingTransferExportPresentation {
         guard !tracks.isEmpty else {
             return "Audio off - 0 tracks selected"
         }
-        let noun = tracks.count == 1 ? "track" : "tracks"
         let total = tracks.reduce(Int64(0)) { $0 + $1.byteCount }
-        return "\(tracks.count) \(noun) selected, \(byteSize(total)) total"
+        if tracks.count == 1 {
+            return "1 track selected, \(byteSize(total)) total"
+        }
+        return "\(tracks.count) tracks selected, \(byteSize(total)) total"
     }
 
     static func audioWarning(
         for preview: MeetingTransferExportPreview,
         selectedAudioAssetIDs: Set<MediaAssetID>
-    ) -> String? {
+    ) -> LocalizedStringResource? {
         let tracks = selectedAudioTracks(
             for: preview,
             selectedAudioAssetIDs: selectedAudioAssetIDs
         )
         guard !tracks.isEmpty else { return nil }
         let total = tracks.reduce(Int64(0)) { $0 + $1.byteCount }
-        return "Adding \(byteSize(total)) sends an unencrypted raw recording. "
-            + "Microphone tracks may contain other voices in the room. "
-            + "The package may remain as a cleartext file on the receiving device."
+        return "Adding \(byteSize(total)) sends an unencrypted raw recording. Microphone tracks may contain other voices in the room. The package may remain as a cleartext file on the receiving device."
     }
 
     static func canShare(
@@ -68,11 +70,15 @@ enum MeetingTransferExportPresentation {
         return !selectedAudioAssetIDs.intersection(offered).isEmpty
     }
 
-    static func shareAccessibilityValue(isPreparing: Bool) -> String {
+    static func shareAccessibilityValue(
+        isPreparing: Bool
+    ) -> LocalizedStringResource {
         isPreparing ? "Preparing package" : ""
     }
 
-    static func shareAccessibilityHint(isPreparing: Bool) -> String {
+    static func shareAccessibilityHint(
+        isPreparing: Bool
+    ) -> LocalizedStringResource {
         isPreparing
             ? "The meeting package is being created."
             : "Creates the package, then opens system sharing. If a Share menu appears, choose AirDrop."
@@ -80,23 +86,30 @@ enum MeetingTransferExportPresentation {
 
     static func cleanupActionLabel(
         for state: MeetingTransferSharingState?
-    ) -> String? {
+    ) -> LocalizedStringResource? {
         guard case .cleanupRequired = state else { return nil }
         return "Retry cleanup"
     }
 
-    static func errorMessage(_ error: Error) -> String {
+    static func errorMessage(
+        _ error: Error,
+        locale: Locale = .current
+    ) -> String {
         if let exportError = error as? MeetingTransferExportError {
+            let resource: LocalizedStringResource
             switch exportError {
             case .audioNotEligible:
-                return "The selected recording is no longer eligible for export. Reload the preview and select it again."
+                resource = "The selected recording is no longer eligible for export. Reload the preview and select it again."
             case .emptyPayload:
-                return "This meeting currently has no notes, transcript or selected recording to share."
+                resource = "This meeting currently has no notes, transcript or selected recording to share."
             case .invalidSourceLocale:
-                return "The meeting contains inconsistent source-language information and cannot be shared."
+                resource = "The meeting contains inconsistent source-language information and cannot be shared."
             case .sourceChangedDuringNativeSnapshot:
-                return "The meeting changed while Steno prepared it. Try sharing it again."
+                resource = "The meeting changed while Steno prepared it. Try sharing it again."
             }
+            var localizedResource = resource
+            localizedResource.locale = locale
+            return String(localized: localizedResource)
         }
         return error.localizedDescription
     }
@@ -237,7 +250,7 @@ struct MeetingTransferExportView: View {
                     Text("No notes or transcript")
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(content, id: \.self) { label in
+                    ForEach(Array(content.enumerated()), id: \.offset) { _, label in
                         Label(label, systemImage: "checkmark.circle")
                     }
                 }
@@ -302,7 +315,7 @@ struct MeetingTransferExportView: View {
                         } else {
                             Label(
                                 MeetingTransferExportPresentation.shareActionLabel,
-                                systemImage: "airplayaudio"
+                                systemImage: MeetingTransferExportPresentation.shareSymbolName
                             )
                         }
                     }
@@ -337,7 +350,7 @@ struct MeetingTransferExportView: View {
                 if sharingSession?.state == .sharing {
                     Label(
                         MeetingTransferExportPresentation.sharingStatusText,
-                        systemImage: "airplayaudio"
+                        systemImage: MeetingTransferExportPresentation.shareSymbolName
                     )
                     .font(.footnote)
                     .foregroundStyle(.secondary)

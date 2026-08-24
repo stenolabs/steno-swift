@@ -119,6 +119,7 @@ struct ExcludedEvidenceTests {
         var state = IdentityReviewState(
             meetingID: meetingID,
             currentRunID: runID,
+            voiceEvidenceMutationPolicy: .allowed,
             clusters: [clusterA, clusterB, clusterC],
             persons: [ada, grace]
         )
@@ -159,5 +160,102 @@ struct ExcludedEvidenceTests {
         #expect(adaAfter.hardNegatives.count == 1)
         #expect(adaAfter.hardNegatives[0].clusterID == "B")
         #expect(adaAfter.hardNegatives[0].isActive == false)
+    }
+
+    @Test("confirming another person preserves excluded evidence without reporting an owner")
+    func confirmationPreservesExcludedEvidence() throws {
+        let meetingID = MeetingID()
+        let runID = RunID()
+        var ada = Person(displayName: "Ada")
+        let grace = Person(displayName: "Grace")
+        let excludedAt = Date(timeIntervalSince1970: 123)
+        var excluded = makePrototype(
+            personID: ada.id,
+            meetingID: meetingID,
+            runID: runID,
+            clusterID: "A"
+        )
+        excluded.excludedAt = excludedAt
+        ada.prototypes = [excluded]
+        let state = IdentityReviewState(
+            meetingID: meetingID,
+            currentRunID: runID,
+            voiceEvidenceMutationPolicy: .allowed,
+            clusters: [makeCluster(
+                meetingID: meetingID,
+                runID: runID,
+                clusterID: "A"
+            )],
+            persons: [ada, grace]
+        )
+
+        let result = try engine.confirm(
+            clusterID: "A",
+            channel: "system",
+            runID: runID,
+            as: grace.id,
+            in: state
+        )
+
+        let adaAfter = try #require(person(ada.id, in: result.state))
+        let graceAfter = try #require(person(grace.id, in: result.state))
+        #expect(adaAfter.prototypes == [excluded])
+        #expect(adaAfter.prototypes.first?.excludedAt == excludedAt)
+        #expect(result.status == .confirmed)
+        #expect(result.reassignedFrom.isEmpty)
+        #expect(graceAfter.prototypes.last?.source == .userConfirmed)
+    }
+
+    @Test("excluded prototypes neither retain participants nor create hard negatives")
+    func excludedPrototypesDoNotDriveReviewState() throws {
+        let meetingID = MeetingID()
+        let runID = RunID()
+        var ada = Person(displayName: "Ada")
+        let grace = Person(displayName: "Grace")
+        let active = makePrototype(
+            personID: ada.id,
+            meetingID: meetingID,
+            runID: runID,
+            clusterID: "A"
+        )
+        var alreadyExcluded = makePrototype(
+            personID: ada.id,
+            meetingID: meetingID,
+            runID: runID,
+            clusterID: "B"
+        )
+        alreadyExcluded.excludedAt = Date(timeIntervalSince1970: 456)
+        ada.prototypes = [active, alreadyExcluded]
+        let state = IdentityReviewState(
+            meetingID: meetingID,
+            currentRunID: runID,
+            voiceEvidenceMutationPolicy: .allowed,
+            clusters: [
+                makeCluster(meetingID: meetingID, runID: runID, clusterID: "A"),
+                makeCluster(
+                    meetingID: meetingID,
+                    runID: runID,
+                    clusterID: "B",
+                    distance: 0.8
+                ),
+            ],
+            persons: [ada, grace],
+            participantIDs: [ada.id]
+        )
+
+        let result = try engine.reassign(
+            clusterID: "A",
+            channel: "system",
+            runID: runID,
+            to: grace.id,
+            in: state
+        )
+
+        let adaAfter = try #require(person(ada.id, in: result.state))
+        let graceAfter = try #require(person(grace.id, in: result.state))
+        #expect(adaAfter.prototypes.count == 2)
+        #expect(adaAfter.prototypes.allSatisfy { !$0.isActive })
+        #expect(!result.state.participantIDs.contains(ada.id))
+        #expect(graceAfter.hardNegatives.isEmpty)
     }
 }

@@ -12,18 +12,32 @@ public protocol TextModelEndpointRegistryStoring: AnyObject, Sendable {
     func persist(_ state: TextModelEndpointRegistryState) throws
 }
 
+public extension TextModelSecretSlot {
+    /// Every keychain slot owned by an endpoint, ordered so the endpoint's
+    /// current revision is removed before its UUID-only legacy slot.
+    static func allKnownSlots(for endpoint: TextModelEndpoint) -> [Self] {
+        let current = Self(endpoint: endpoint)
+        let legacy = Self(
+            endpointID: endpoint.id,
+            configurationRevision: nil
+        )
+        return current == legacy ? [current] : [current, legacy]
+    }
+}
+
 public enum TextModelEndpointMutationCheckpoint: Equatable, Sendable {
     case upsertJournalPersisted
     case upsertSecretWritten
     case upsertRegistryCommitted
     case upsertOldSecretRemoved
     case deleteJournalPersisted
+    case deleteCurrentSecretRemoved
     case deleteSecretRemoved
     case deleteRegistryCommitted
 }
 
 public struct TextModelEndpointRegistryState: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = 1
+    public static let currentSchemaVersion = 3
 
     public let schemaVersion: Int
     public var endpoints: [TextModelEndpoint]
@@ -44,6 +58,7 @@ public struct TextModelEndpointMutationJournal: Codable, Equatable, Sendable {
     public enum Operation: String, Codable, Sendable {
         case upsert
         case delete
+        case revisionMigration
     }
 
     public enum Phase: String, Codable, Sendable {
@@ -55,17 +70,21 @@ public struct TextModelEndpointMutationJournal: Codable, Equatable, Sendable {
     public let phase: Phase
     public let previousEndpoint: TextModelEndpoint?
     public let nextEndpoint: TextModelEndpoint?
+    /// Reconciliation fact only. This never contains secret material.
+    public let deleteCurrentSecretWasPresent: Bool?
 
     public init(
         operation: Operation,
         phase: Phase,
         previousEndpoint: TextModelEndpoint?,
-        nextEndpoint: TextModelEndpoint?
+        nextEndpoint: TextModelEndpoint?,
+        deleteCurrentSecretWasPresent: Bool? = nil
     ) {
         self.operation = operation
         self.phase = phase
         self.previousEndpoint = previousEndpoint
         self.nextEndpoint = nextEndpoint
+        self.deleteCurrentSecretWasPresent = deleteCurrentSecretWasPresent
     }
 
     public static func upsert(
@@ -83,13 +102,28 @@ public struct TextModelEndpointMutationJournal: Codable, Equatable, Sendable {
 
     public static func delete(
         phase: Phase,
-        previous: TextModelEndpoint
+        previous: TextModelEndpoint,
+        currentSecretWasPresent: Bool? = nil
     ) -> Self {
         Self(
             operation: .delete,
             phase: phase,
             previousEndpoint: previous,
-            nextEndpoint: nil
+            nextEndpoint: nil,
+            deleteCurrentSecretWasPresent: currentSecretWasPresent
+        )
+    }
+
+    public static func revisionMigration(
+        phase: Phase,
+        previous: TextModelEndpoint,
+        next: TextModelEndpoint
+    ) -> Self {
+        Self(
+            operation: .revisionMigration,
+            phase: phase,
+            previousEndpoint: previous,
+            nextEndpoint: next
         )
     }
 }
@@ -115,13 +149,50 @@ public enum TextModelEndpointRegistryRecovery {
         secrets: any TextModelSecretStoring
     ) throws -> TextModelEndpointRegistryState {
         var state = try registry.load()
-        guard state.schemaVersion == TextModelEndpointRegistryState.currentSchemaVersion else {
+        guard state.schemaVersion <= TextModelEndpointRegistryState.currentSchemaVersion else {
             throw TextModelEndpointRegistryError.unsupportedSchemaVersion(
                 state.schemaVersion
             )
         }
-        guard let journal = state.journal else { return state }
+        // Ein aelterer Build lehnt den neuen Zustand ab, statt hosting und
+        // dialect beim naechsten Persist still zu verwerfen; das Decoding
+        // von TextModelEndpoint ist ohnehin tolerant, hier wird nur der
+        // Versionsstempel nachgezogen und sofort zurueckgeschrieben.
+        if state.schemaVersion < TextModelEndpointRegistryState.currentSchemaVersion {
+            state = TextModelEndpointRegistryState(
+                schemaVersion: TextModelEndpointRegistryState.currentSchemaVersion,
+                endpoints: state.endpoints,
+                journal: state.journal
+            )
+            try registry.persist(state)
+        }
+        if let journal = state.journal {
+            state = try recover(
+                state: state,
+                journal: journal,
+                registry: registry,
+                secrets: secrets
+            )
+        }
 
+        for endpoint in state.endpoints where endpoint.configurationRevision == nil {
+            state = try migrateRevision(
+                for: endpoint,
+                in: state,
+                registry: registry,
+                secrets: secrets
+            )
+        }
+        return state
+    }
+
+    private static func recover(
+        state initialState: TextModelEndpointRegistryState,
+        journal: TextModelEndpointMutationJournal,
+        registry: any TextModelEndpointRegistryStoring,
+        secrets: any TextModelSecretStoring
+    ) throws -> TextModelEndpointRegistryState {
+        var state = initialState
         switch (journal.operation, journal.phase) {
         case (.upsert, .prepared):
             guard let next = journal.nextEndpoint else {
@@ -154,9 +225,22 @@ public enum TextModelEndpointRegistryRecovery {
             else {
                 throw TextModelEndpointRegistryError.invalidMutationJournal
             }
-            try secrets.removeValue(for: TextModelSecretSlot(endpoint: previous))
+            if let currentSecretWasPresent = journal.deleteCurrentSecretWasPresent {
+                let currentSlot = TextModelSecretSlot.allKnownSlots(for: previous)[0]
+                let currentSecretIsPresent = try secrets.value(for: currentSlot) != nil
+                if !currentSecretWasPresent || currentSecretIsPresent {
+                    state.journal = nil
+                    try registry.persist(state)
+                    break
+                }
+            }
+            try removeAllKnownSecrets(for: previous, from: secrets)
             state.endpoints.removeAll { $0.id == previous.id }
-            state.journal = .delete(phase: .committed, previous: previous)
+            state.journal = .delete(
+                phase: .committed,
+                previous: previous,
+                currentSecretWasPresent: journal.deleteCurrentSecretWasPresent
+            )
             try registry.persist(state)
             state.journal = nil
             try registry.persist(state)
@@ -167,12 +251,145 @@ public enum TextModelEndpointRegistryRecovery {
             else {
                 throw TextModelEndpointRegistryError.invalidMutationJournal
             }
-            try secrets.removeValue(for: TextModelSecretSlot(endpoint: previous))
+            try removeAllKnownSecrets(for: previous, from: secrets)
             state.endpoints.removeAll { $0.id == previous.id }
+            state.journal = nil
+            try registry.persist(state)
+
+        case (.revisionMigration, .prepared):
+            guard let previous = journal.previousEndpoint,
+                  let next = journal.nextEndpoint,
+                  isValidRevisionMigration(previous: previous, next: next)
+            else {
+                throw TextModelEndpointRegistryError.invalidMutationJournal
+            }
+            if previous.requiresAPIKey {
+                try secrets.removeValue(for: TextModelSecretSlot(endpoint: next))
+            }
+            state.endpoints = replacing(next, with: previous, in: state.endpoints)
+            state.journal = nil
+            try registry.persist(state)
+
+        case (.revisionMigration, .committed):
+            guard let previous = journal.previousEndpoint,
+                  let next = journal.nextEndpoint,
+                  isValidRevisionMigration(previous: previous, next: next)
+            else {
+                throw TextModelEndpointRegistryError.invalidMutationJournal
+            }
+            if previous.requiresAPIKey,
+               let legacySecret = try secrets.value(
+                    for: TextModelSecretSlot(endpoint: previous)
+               ),
+               try secrets.value(for: TextModelSecretSlot(endpoint: next))
+                    != legacySecret {
+                state.endpoints = replacing(next, with: previous, in: state.endpoints)
+                state.journal = .revisionMigration(
+                    phase: .prepared,
+                    previous: previous,
+                    next: next
+                )
+                try registry.persist(state)
+                try secrets.removeValue(for: TextModelSecretSlot(endpoint: next))
+            }
             state.journal = nil
             try registry.persist(state)
         }
         return state
+    }
+
+    private static func migrateRevision(
+        for previous: TextModelEndpoint,
+        in initialState: TextModelEndpointRegistryState,
+        registry: any TextModelEndpointRegistryStoring,
+        secrets: any TextModelSecretStoring
+    ) throws -> TextModelEndpointRegistryState {
+        let next = TextModelEndpoint(
+            id: previous.id,
+            name: previous.name,
+            baseURL: previous.baseURL,
+            modelID: previous.modelID,
+            requiresAPIKey: previous.requiresAPIKey,
+            configurationRevision: UUID(),
+            hosting: previous.hosting,
+            dialect: previous.dialect,
+            contextWindowTokens: previous.contextWindowTokens,
+            bedrock: previous.bedrock
+        )
+        let legacySecret = previous.requiresAPIKey
+            ? try secrets.value(for: TextModelSecretSlot(endpoint: previous))
+            : nil
+
+        var prepared = initialState
+        prepared.journal = .revisionMigration(
+            phase: .prepared,
+            previous: previous,
+            next: next
+        )
+        try registry.persist(prepared)
+
+        if let legacySecret {
+            do {
+                let nextSlot = TextModelSecretSlot(endpoint: next)
+                try secrets.setValue(legacySecret, for: nextSlot)
+                guard try secrets.value(for: nextSlot) == legacySecret else {
+                    throw TextModelEndpointRegistryFileError.verificationFailed
+                }
+            } catch {
+                try secrets.removeValue(for: TextModelSecretSlot(endpoint: next))
+                var rolledBack = initialState
+                rolledBack.journal = nil
+                try registry.persist(rolledBack)
+                return rolledBack
+            }
+        }
+
+        var committed = TextModelEndpointRegistryState(
+            endpoints: replacing(previous, with: next, in: initialState.endpoints),
+            journal: .revisionMigration(
+                phase: .committed,
+                previous: previous,
+                next: next
+            )
+        )
+        try registry.persist(committed)
+        committed.journal = nil
+        try registry.persist(committed)
+        return committed
+    }
+
+    private static func removeAllKnownSecrets(
+        for endpoint: TextModelEndpoint,
+        from secrets: any TextModelSecretStoring
+    ) throws {
+        for slot in TextModelSecretSlot.allKnownSlots(for: endpoint) {
+            try secrets.removeValue(for: slot)
+        }
+    }
+
+    private static func replacing(
+        _ old: TextModelEndpoint,
+        with new: TextModelEndpoint,
+        in endpoints: [TextModelEndpoint]
+    ) -> [TextModelEndpoint] {
+        endpoints.map { $0.id == old.id ? new : $0 }
+    }
+
+    private static func isValidRevisionMigration(
+        previous: TextModelEndpoint,
+        next: TextModelEndpoint
+    ) -> Bool {
+        previous.configurationRevision == nil
+            && next.configurationRevision != nil
+            && previous.id == next.id
+            && previous.name == next.name
+            && previous.baseURL == next.baseURL
+            && previous.modelID == next.modelID
+            && previous.requiresAPIKey == next.requiresAPIKey
+            && previous.hosting == next.hosting
+            && previous.dialect == next.dialect
+            && previous.contextWindowTokens == next.contextWindowTokens
+            && previous.bedrock == next.bedrock
     }
 }
 

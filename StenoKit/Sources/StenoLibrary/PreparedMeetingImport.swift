@@ -11,6 +11,11 @@ public struct PreparedMediaImport: Sendable {
         sourceDisposition = .copy(sourceURL)
     }
 
+    public init(asset: MediaAsset, data: Data) {
+        self.asset = asset
+        sourceDisposition = .data(data)
+    }
+
     public init(
         asset: MediaAsset,
         sourceDisposition: PreparedMediaSourceDisposition
@@ -114,6 +119,32 @@ public extension Library {
         _ prepared: PreparedMeetingImport
     ) throws -> PreparedMeetingCommitResult {
         try commitPreparedMeeting(prepared, checkpoint: { _, _ in })
+    }
+
+    /// Variante für zusammengesetzte Bibliotheksoperationen. Der Aufrufer
+    /// besitzt bereits die exklusive Transaktion; diese Methode nimmt keinen
+    /// zweiten Lock und darf daher nur innerhalb derselben benutzt werden.
+    @discardableResult
+    package func commitPreparedMeeting(
+        _ prepared: PreparedMeetingImport,
+        transaction: LibraryMutationTransaction
+    ) throws -> PreparedMeetingCommitResult {
+        try transaction.validate(layout: layout)
+        return try commitPreparedMeetingWithoutMutationLock(
+            prepared,
+            checkpoint: { _, _ in },
+            nativeSnapshotCheckpoint: { _ in },
+            parentDirectorySynchronizer: { descriptor in
+                guard Darwin.fsync(descriptor) == 0 else {
+                    throw POSIXFailure(operation: "fsync meetings directory after import", code: errno)
+                }
+            },
+            rollbackDirectorySynchronizer: { descriptor in
+                guard Darwin.fsync(descriptor) == 0 else {
+                    throw POSIXFailure(operation: "fsync meetings directory after import rollback", code: errno)
+                }
+            }
+        )
     }
 
     @discardableResult
@@ -504,6 +535,7 @@ public extension Library {
             }
             guard prepared.media.allSatisfy({
                 if case .copy = $0.sourceDisposition { return true }
+                if case .data = $0.sourceDisposition { return true }
                 return false
             }) else {
                 throw LibraryError.invalidPreparedMeetingImport(
@@ -575,6 +607,11 @@ public extension Library {
             case .copy(let sourceURL):
                 try FileManager.default.copyItem(
                     at: sourceURL,
+                    to: mediaDirectory.appendingPathComponent(media.asset.fileName)
+                )
+            case .data(let data):
+                try AtomicFile.write(
+                    data,
                     to: mediaDirectory.appendingPathComponent(media.asset.fileName)
                 )
             case .cloneValidatedDescriptor(let source):

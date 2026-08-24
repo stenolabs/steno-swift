@@ -28,7 +28,7 @@ struct LegacyImporterTests {
             library: library,
             folders: folders,
             timestampParser: berlin
-        ).performImport()
+        ).performImport().report
 
         #expect(report.meetingsCreated == 2)
         #expect(report.audioCopied == 1)
@@ -145,6 +145,66 @@ struct LegacyImporterTests {
         #expect(queuedJobs.isEmpty)
     }
 
+    @Test("ignores missing and duplicate legacy ids with visible warnings")
+    func invalidLegacyIDsAreReported() {
+        let folders = legacyNamesByID(
+            [
+                (id: "", name: "First"),
+                (id: "", name: "Second"),
+            ],
+            itemDescription: "folder"
+        )
+        let templates = legacyNamesByID(
+            [
+                (id: "template", name: "First"),
+                (id: "template", name: "Second"),
+            ],
+            itemDescription: "custom template"
+        )
+
+        #expect(folders.names.isEmpty)
+        #expect(folders.warnings.count == 2)
+        #expect(folders.warnings.allSatisfy { $0.contains("missing id") })
+        #expect(templates.names == ["template": "First"])
+        #expect(templates.warnings.count == 1)
+        #expect(templates.warnings[0].contains("duplicate id template"))
+    }
+
+    @Test("continues after corrupt legacy sidecars and reports every omission")
+    func corruptSidecarsDoNotAbortImport() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appending(path: "Legacy", directoryHint: .isDirectory)
+        try makeLegacyTextInstallation(at: source, stem: "A Broken Summary")
+        try Data("missing frontmatter".utf8).write(
+            to: source.appending(path: "output/A Broken Summary_summary.md")
+        )
+        try makeLegacyTextInstallation(at: source, stem: "B Broken Reports")
+        try Data("not json".utf8).write(
+            to: source.appending(path: "output/B Broken Reports_reports.json")
+        )
+        try makeLegacyTextInstallation(at: source, stem: "C Valid")
+        let library = try Library.open(at: root.appending(path: "Library"))
+
+        let report = try await LegacyImporter(
+            sourceRoot: source,
+            library: library,
+            folders: try FolderStore.open(layout: library.layout),
+            timestampParser: berlin
+        ).performImport().report
+
+        #expect(report.meetingsCreated == 2)
+        #expect(report.reportsCreated == 2)
+        #expect(report.warnings.contains {
+            $0.contains("A Broken Summary") && $0.contains("could not be imported")
+        })
+        #expect(report.warnings.contains {
+            $0.contains("B Broken Reports") && $0.contains("reports")
+                && $0.contains("was ignored")
+        })
+        #expect(try await library.listMeetings().count == 2)
+    }
+
     @Test("keeps transcript labels as channels when the speaker manifest is absent")
     func diarizedTranscriptWithoutManifest() async throws {
         let root = try makeTemporaryDirectory()
@@ -173,7 +233,7 @@ struct LegacyImporterTests {
             library: library,
             folders: try FolderStore.open(layout: library.layout),
             timestampParser: berlin
-        ).performImport()
+        ).performImport().report
 
         let meeting = try #require(try await library.listMeetings().first)
         let revision = try await library.loadCurrentRevision(meetingID: meeting.id)
@@ -201,7 +261,7 @@ struct LegacyImporterTests {
             library: library,
             folders: try FolderStore.open(layout: library.layout),
             timestampParser: berlin
-        ).performImport()
+        ).performImport().report
 
         let meeting = try #require(try await library.listMeetings().first {
             $0.title == "Import Planung"
@@ -233,7 +293,7 @@ struct LegacyImporterTests {
             library: library,
             folders: try FolderStore.open(layout: library.layout),
             timestampParser: berlin
-        ).performImport()
+        ).performImport().report
 
         let meeting = try #require(try await library.listMeetings().first)
         let asset = try #require(try await library.listMediaAssets(meetingID: meeting.id).first)
@@ -265,7 +325,7 @@ struct LegacyImporterTests {
             library: library,
             folders: try FolderStore.open(layout: library.layout),
             timestampParser: berlin
-        ).performImport()
+        ).performImport().report
 
         let meeting = try #require(try await library.listMeetings().first)
         #expect(report.meetingsCreated == 1)
@@ -291,7 +351,7 @@ struct LegacyImporterTests {
             library: scenario.library,
             folders: try FolderStore.open(layout: scenario.library.layout),
             timestampParser: berlin
-        ).performImport()
+        ).performImport().report
 
         let assets = try await scenario.library.listMediaAssets(
             meetingID: scenario.meetingID
@@ -326,7 +386,7 @@ struct LegacyImporterTests {
             folders: try FolderStore.open(layout: scenario.library.layout),
             timestampParser: berlin
         )
-        let first = try await importer.performImport()
+        let first = try await importer.performImport().report
         let firstAsset = try #require(try await scenario.library.listMediaAssets(
             meetingID: scenario.meetingID
         ).first)
@@ -336,7 +396,7 @@ struct LegacyImporterTests {
         )
         let firstBytes = try Data(contentsOf: firstURL)
 
-        let second = try await importer.performImport()
+        let second = try await importer.performImport().report
 
         let secondAsset = try #require(try await scenario.library.listMediaAssets(
             meetingID: scenario.meetingID
@@ -347,6 +407,48 @@ struct LegacyImporterTests {
         #expect(second.meetingsCreated == 0)
         #expect(secondAsset == firstAsset)
         #expect(try Data(contentsOf: firstURL) == firstBytes)
+    }
+
+    @Test("cancellation during duplicate audio repair waits for the complete repair unit")
+    func cancellationDuringDuplicateRepairWaitsForCompletion() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let stem = "Geschuetzte Reparatur"
+        let scenario = try await makeLegacyRepairScenario(root: root, stem: stem)
+        let gate = LegacyRepairCancellationGate()
+        let importer = LegacyImporter(
+            sourceRoot: scenario.source,
+            library: scenario.library,
+            folders: try FolderStore.open(layout: scenario.library.layout),
+            timestampParser: berlin,
+            repairUnitStarted: { await gate.enter() }
+        )
+        let importTask = Task { try await importer.performImport() }
+        await gate.waitUntilEntered()
+
+        importTask.cancel()
+        await gate.release()
+        let outcome = try await importTask.value
+
+        guard case .cancelled(let partial) = outcome else {
+            Issue.record("expected cancellation after the repair unit")
+            return
+        }
+        let asset = try #require(try await scenario.library.listMediaAssets(
+            meetingID: scenario.meetingID
+        ).first)
+        let repairedURL = scenario.library.layout.mediaFile(
+            scenario.meetingID,
+            fileName: asset.fileName
+        )
+        #expect(partial.duplicates == [stem])
+        #expect(partial.audioRepaired == 1)
+        #expect(partial.audioMissing == 0)
+        #expect(!partial.warnings.contains { $0.contains("could not be repaired") })
+        #expect(asset.fileName == "\(scenario.assetID).caf")
+        #expect(asset.conversion == .webMOpusRepackagedToCAF)
+        #expect(try await AVURLAsset(url: repairedURL).load(.isReadable))
+        #expect(!FileManager.default.fileExists(atPath: scenario.oldMediaURL.path))
     }
 
     @Test("a repeated import skips every known stem and adds no identity evidence")
@@ -365,7 +467,7 @@ struct LegacyImporterTests {
         )
         _ = try await importer.performImport()
 
-        let repeated = try await importer.performImport()
+        let repeated = try await importer.performImport().report
 
         #expect(repeated.meetingsCreated == 0)
         #expect(repeated.audioCopied == 0)
@@ -377,6 +479,192 @@ struct LegacyImporterTests {
         let people = try await IdentityStore(layout: library.layout).listPersons()
         #expect(people.first?.prototypes.count == 2)
         #expect(people.first?.hardNegatives.count == 1)
+    }
+
+    @Test("cancellation before scanning mutates nothing")
+    func cancellationBeforeScanningMutatesNothing() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appending(path: "Legacy", directoryHint: .isDirectory)
+        try makeLegacyTextInstallation(at: source, stem: "Unberuehrt")
+        let library = try Library.open(at: root.appending(path: "Library"))
+        let importer = LegacyImporter(
+            sourceRoot: source,
+            library: library,
+            folders: try FolderStore.open(layout: library.layout),
+            timestampParser: berlin
+        )
+
+        let outcome = try await Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await importer.performImport()
+        }.value
+
+        #expect(outcome == .cancelled(ImportReport()))
+        #expect(try await library.listMeetings().isEmpty)
+        #expect(try await IdentityStore(layout: library.layout).listPersons().isEmpty)
+    }
+
+    @Test("cancellation after preparation publishes no partial meeting")
+    func cancellationAfterPreparationPublishesNothing() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appending(path: "Legacy", directoryHint: .isDirectory)
+        try makeLegacyTextInstallation(at: source, stem: "Vor Commit")
+        let library = try Library.open(at: root.appending(path: "Library"))
+        let importer = LegacyImporter(
+            sourceRoot: source,
+            library: library,
+            folders: try FolderStore.open(layout: library.layout),
+            timestampParser: berlin,
+            prepareMeeting: { entry, folders, templates, parser, workspace in
+                let prepared = try await prepareLegacyMeeting(
+                    entry: entry,
+                    folderNames: folders,
+                    customTemplateNames: templates,
+                    timestampParser: parser,
+                    audioWorkspaceDirectory: workspace
+                )
+                withUnsafeCurrentTask { $0?.cancel() }
+                return prepared
+            }
+        )
+
+        let outcome = try await Task {
+            try await importer.performImport()
+        }.value
+
+        #expect(outcome == .cancelled(ImportReport()))
+        #expect(try await library.listMeetings().isEmpty)
+    }
+
+    @Test("cancellation after a commit finishes filing and resumes without duplicates")
+    func cancellationAfterCommitResumesIdempotently() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appending(path: "Legacy", directoryHint: .isDirectory)
+        try makeLegacyTextInstallation(at: source, stem: "A First")
+        try makeLegacyTextInstallation(at: source, stem: "B Second")
+        try Data(try Fixture.text("import_summary", extension: "md").utf8).write(
+            to: source.appending(path: "output/A First_summary.md")
+        )
+        try writeFixture(
+            "legacy_folders",
+            extension: "json",
+            to: source.appending(path: "folders.json")
+        )
+        let library = try Library.open(at: root.appending(path: "Library"))
+        let folders = try FolderStore.open(layout: library.layout)
+        let commits = Mutex(0)
+        let importer = LegacyImporter(
+            sourceRoot: source,
+            library: library,
+            folders: folders,
+            timestampParser: berlin,
+            commitPreparedMeeting: { library, prepared in
+                let result = try await library.commitPreparedMeeting(prepared)
+                let commitNumber = commits.withLock { value in
+                    value += 1
+                    return value
+                }
+                if commitNumber == 1 {
+                    withUnsafeCurrentTask { $0?.cancel() }
+                }
+                return result
+            }
+        )
+
+        let first = try await Task {
+            try await importer.performImport()
+        }.value
+
+        guard case .cancelled(let partial) = first else {
+            Issue.record("expected a cancelled partial import")
+            return
+        }
+        #expect(partial.meetingsCreated == 1)
+        #expect(partial.revisionsCreated == 1)
+        let firstMeeting = try #require(try await library.listMeetings().first)
+        #expect(firstMeeting.folderID != nil)
+
+        let resumed = try await LegacyImporter(
+            sourceRoot: source,
+            library: library,
+            folders: folders,
+            timestampParser: berlin
+        ).performImport()
+
+        guard case .finished(let report) = resumed else {
+            Issue.record("expected the resumed import to finish")
+            return
+        }
+        #expect(report.meetingsCreated == 1)
+        #expect(report.duplicates == ["A First"])
+        #expect(try await library.listMeetings().count == 2)
+    }
+
+    @Test("CancellationError from preparation reaches only the outer boundary")
+    func preparationCancellationIsNotAWarning() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appending(path: "Legacy", directoryHint: .isDirectory)
+        try makeLegacyTextInstallation(at: source, stem: "Abbruch")
+        let library = try Library.open(at: root.appending(path: "Library"))
+
+        let outcome = try await LegacyImporter(
+            sourceRoot: source,
+            library: library,
+            folders: try FolderStore.open(layout: library.layout),
+            timestampParser: berlin,
+            prepareMeeting: { _, _, _, _, _ in throw CancellationError() }
+        ).performImport()
+
+        #expect(outcome == .cancelled(ImportReport()))
+        #expect(try await library.listMeetings().isEmpty)
+    }
+
+    @Test("cancellation after an already-present commit completes duplicate bookkeeping")
+    func cancellationCompletesDuplicatePostcommitWork() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appending(path: "Legacy", directoryHint: .isDirectory)
+        let stem = "Paralleles Duplikat"
+        try makeLegacyTextInstallation(at: source, stem: stem)
+        let library = try Library.open(at: root.appending(path: "Library"))
+        let existing = Meeting(title: "Existing", status: .ready)
+        _ = try await library.commitPreparedMeeting(PreparedMeetingImport(
+            meeting: existing,
+            media: [],
+            revision: TranscriptRevision(
+                meetingID: existing.id,
+                origin: .legacyImport,
+                turns: []
+            )
+        ))
+        let updates = Mutex<[LegacyImportProgress]>([])
+
+        let outcome = try await Task {
+            try await LegacyImporter(
+                sourceRoot: source,
+                library: library,
+                folders: try FolderStore.open(layout: library.layout),
+                timestampParser: berlin,
+                commitPreparedMeeting: { _, _ in
+                    withUnsafeCurrentTask { $0?.cancel() }
+                    return .alreadyPresent(existing.id)
+                }
+            ).performImport { update in
+                updates.withLock { $0.append(update) }
+            }
+        }.value
+
+        guard case .cancelled(let partial) = outcome else {
+            Issue.record("expected cancellation after duplicate bookkeeping")
+            return
+        }
+        #expect(partial.duplicates == [stem])
+        #expect(updates.withLock { $0 }.map(\.stem) == [stem])
+        #expect(try await library.listMeetings().map(\.id) == [existing.id])
     }
 
     @Test("an uncertain library commit aborts without reporting legacy success")
@@ -438,7 +726,7 @@ struct LegacyImporterTests {
             folders: try FolderStore.open(layout: library.layout),
             timestampParser: berlin,
             commitPreparedMeeting: { _, _ in .alreadyPresent(existing.id) }
-        ).performImport()
+        ).performImport().report
 
         #expect(report.meetingsCreated == 0)
         #expect(report.audioCopied == 0)
@@ -459,7 +747,8 @@ struct LegacyImporterTests {
         let duplicateEvidenceID = SpeakerEvidenceID(
             rawValue: UUID(uuidString: "22222222-2222-4222-8222-222222222222")!
         )
-        try await store.replacePersons([
+        let identitySnapshot = try await store.snapshot()
+        _ = try await store.replacePersons([
             Person(
                 id: existingID,
                 displayName: "ADA",
@@ -477,14 +766,14 @@ struct LegacyImporterTests {
                     source: .userConfirmed
                 )]
             ),
-        ])
+        ], expectedRevision: identitySnapshot.revision)
 
         let report = try await LegacyImporter(
             sourceRoot: source,
             library: library,
             folders: try FolderStore.open(layout: library.layout),
             timestampParser: berlin
-        ).performImport()
+        ).performImport().report
 
         let people = try await store.listPersons()
         #expect(report.personsCreated == 0)
@@ -578,6 +867,29 @@ struct LegacyImporterTests {
             from: JSONSerialization.data(withJSONObject: oldAssetObject)
         )
         #expect(decodedOldAsset.conversion == nil)
+    }
+}
+
+private actor LegacyRepairCancellationGate {
+    private var entered = false
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func enter() async {
+        entered = true
+        await withCheckedContinuation { continuation in
+            releaseContinuation = continuation
+        }
+    }
+
+    func waitUntilEntered() async {
+        while !entered {
+            await Task.yield()
+        }
+    }
+
+    func release() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
     }
 }
 

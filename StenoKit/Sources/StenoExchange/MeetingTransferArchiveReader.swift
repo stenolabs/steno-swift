@@ -390,7 +390,10 @@ public struct MeetingTransferArchiveReader: Sendable {
             do {
                 try session.cleanup()
             } catch {
-                throw error
+                throw MeetingTransferCleanupRequired(
+                    originalError: validationError,
+                    session: session
+                )
             }
             throw validationError
         }

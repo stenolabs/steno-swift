@@ -1,0 +1,3 @@
+// Copy this file to .steno-signing.xcconfig and insert your Apple team ID.
+// The local file is ignored so account metadata is never committed.
+DEVELOPMENT_TEAM = YOUR_TEAM_ID

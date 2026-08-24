@@ -14,7 +14,11 @@ enum MeetingTransferExportCleanupError: LocalizedError, Equatable {
     case cleanupFailed
 
     var errorDescription: String? {
-        switch self {
+        message()
+    }
+
+    func message(locale: Locale = .current) -> String {
+        let resource: LocalizedStringResource = switch self {
         case .runtimeUnavailable:
             "Steno is not ready to share this meeting."
         case .invalidTemporaryExport:
@@ -26,7 +30,11 @@ enum MeetingTransferExportCleanupError: LocalizedError, Equatable {
         case .cleanupFailed:
             "Steno could not remove its temporary meeting export. Retry cleanup."
         }
+        var localizedResource = resource
+        localizedResource.locale = locale
+        return String(localized: localizedResource)
     }
+
 }
 
 struct MeetingTransferExportSelection: Codable, Equatable, Sendable {
@@ -989,7 +997,11 @@ enum MeetingTransferSharingError: LocalizedError, Equatable {
     case cleanupRequired
 
     var errorDescription: String? {
-        switch self {
+        message()
+    }
+
+    func message(locale: Locale = .current) -> String {
+        let resource: LocalizedStringResource = switch self {
         case .serviceUnavailable:
             "AirDrop could not be opened directly. Activate Share meeting again to open the system Share menu, then choose AirDrop."
         case .sharingStillActive:
@@ -999,6 +1011,9 @@ enum MeetingTransferSharingError: LocalizedError, Equatable {
         case .cleanupRequired:
             "An earlier temporary meeting export needs cleanup before another meeting can be shared."
         }
+        var localizedResource = resource
+        localizedResource.locale = locale
+        return String(localized: localizedResource)
     }
 }
 
@@ -1325,8 +1340,7 @@ final class MeetingTransferSharing {
         return (recovered, Array(Set(warnings)))
     }
 
-    private static let manualCleanupWarning =
-        "A temporary meeting export could not be verified and was preserved for manual cleanup."
+    static let manualCleanupWarning = String(localized: "A temporary meeting export could not be verified and was preserved for manual cleanup.")
 
     private func markerRootMatches(
         _ marker: MeetingTransferExportOwnershipMarker,

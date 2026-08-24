@@ -43,6 +43,104 @@ enum MeetingSidebarActionPolicy {
             [.moveMeetings]
         }
     }
+
+    static func actions(
+        for availability: MacMeetingCommandAvailability
+    ) -> [MeetingSidebarAction] {
+        var actions: [MeetingSidebarAction] = []
+        if availability.canRename { actions.append(.rename) }
+        if availability.canMove { actions.append(.moveMeetings) }
+        if availability.canRetranscribe { actions.append(.retranscribe) }
+        if availability.canExportMarkdown { actions.append(.export) }
+        if availability.canMoveToTrash { actions.append(.trash) }
+        return actions
+    }
+}
+
+enum MeetingTitleValidation: Equatable {
+    case valid(normalizedTitle: String)
+    case empty
+
+    var normalizedTitle: String? {
+        guard case let .valid(normalizedTitle) = self else { return nil }
+        return normalizedTitle
+    }
+
+    var canSubmit: Bool {
+        normalizedTitle != nil
+    }
+
+    var message: LocalizedStringResource? {
+        switch self {
+        case .valid:
+            nil
+        case .empty:
+            "Enter a meeting title."
+        }
+    }
+
+    static func evaluate(title: String) -> MeetingTitleValidation {
+        let normalizedTitle = title
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+        guard !normalizedTitle.isEmpty else { return .empty }
+        return .valid(normalizedTitle: normalizedTitle)
+    }
+}
+
+enum SidebarNameValidation: Equatable {
+    case valid(normalizedName: String)
+    case empty
+    case duplicate
+
+    var normalizedName: String? {
+        guard case let .valid(normalizedName) = self else { return nil }
+        return normalizedName
+    }
+
+    var canSubmit: Bool {
+        normalizedName != nil
+    }
+
+    var message: LocalizedStringResource? {
+        switch self {
+        case .valid:
+            nil
+        case .empty:
+            "Enter a folder name."
+        case .duplicate:
+            "A folder with this name already exists here."
+        }
+    }
+
+    static func evaluate(
+        name: String,
+        parentFolderID: FolderID?,
+        currentFolderID: FolderID?,
+        folders: [Folder]
+    ) -> SidebarNameValidation {
+        let normalizedName = name
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+        guard !normalizedName.isEmpty else { return .empty }
+
+        let targetKey = comparisonKey(normalizedName)
+        let hasDuplicate = folders.contains { folder in
+            guard folder.id != currentFolderID,
+                  folder.parentFolderID == parentFolderID
+            else { return false }
+            return comparisonKey(folder.name) == targetKey
+        }
+        guard !hasDuplicate else { return .duplicate }
+        return .valid(normalizedName: normalizedName)
+    }
+
+    private static func comparisonKey(_ name: String) -> String {
+        name.precomposedStringWithCanonicalMapping.folding(
+            options: [.caseInsensitive],
+            locale: Locale(identifier: "en_US_POSIX")
+        )
+    }
 }
 
 enum MeetingSidebarVisibility {

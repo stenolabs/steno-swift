@@ -21,6 +21,7 @@ public actor SpeechAssetInstaller: ModelInstalling {
 
     public nonisolated var bundleDescription: ModelBundleDescription {
         ModelBundleDescription(
+            id: .appleSpeech,
             title: "Transcription language",
             source: .appleSystemAssets,
             approximateBytes: SpeechAssetBytes.germanTranscriptionDownload

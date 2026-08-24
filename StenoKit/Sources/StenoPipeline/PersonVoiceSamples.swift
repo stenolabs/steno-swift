@@ -271,16 +271,18 @@ private struct ResolutionContext {
             }
             artifacts[key] = artifact
         }
-        guard let artifact = artifacts[key] ?? nil,
-              let track = artifact.tracks.first(where: {
-                  $0.assetKind.rawValue == channel
-              })
-        else { return nil }
-        guard let segment = track.segments
-            .filter({ $0.clusterID == clusterID && $0.end > $0.start })
-            .max(by: { ($0.end - $0.start) < ($1.end - $1.start) })
-        else { return nil }
-        return (track.assetID, segment)
+        guard let artifact = artifacts[key] ?? nil else { return nil }
+        let matches = artifact.tracks.compactMap { track
+            -> (assetID: MediaAssetID, segment: DiarizationRunSegment)? in
+            guard track.assetKind.rawValue == channel,
+                  let segment = track.segments
+                    .filter({ $0.clusterID == clusterID && $0.end > $0.start })
+                    .max(by: { ($0.end - $0.start) < ($1.end - $1.start) })
+            else { return nil }
+            return (track.assetID, segment)
+        }
+        guard matches.count == 1 else { return nil }
+        return matches[0]
     }
 }
 

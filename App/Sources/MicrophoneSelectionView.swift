@@ -29,7 +29,7 @@ struct MicrophoneSelectionButton: View {
         if let microphone = model.resolvedRecordingMicrophone {
             return microphone.name
         }
-        return "Choose microphone"
+        return String(localized: "Choose microphone")
     }
 }
 
@@ -119,9 +119,9 @@ struct MicrophoneSelectionControls: View {
         case .manual(let selected):
             if let available = model.microphoneDiscovery.availableDevices
                 .first(where: { $0.uid == selected.uid }) {
-                return "Selected manually: \(available.name). Steno will not use another device."
+                return String(localized: "Selected manually: \(available.name). Steno will not use another device.")
             }
-            return "\(selected.name) is not available. Choose another microphone before recording."
+            return String(localized: "\(selected.name) is not available. Choose another microphone before recording.")
 
         case .automatic:
             return automaticStatusText
@@ -130,23 +130,23 @@ struct MicrophoneSelectionControls: View {
 
     private var automaticStatusText: String {
         if model.microphoneDiscovery.hasUnresolvedActiveDevices {
-            return "Steno cannot identify every microphone used by active apps. Choose one manually."
+            return String(localized: "Steno cannot identify every microphone used by active apps. Choose one manually.")
         }
         guard let detected = model.microphoneDiscovery.automaticDevice else {
             if model.microphoneDiscovery.activeDevices.isEmpty {
-                return "Join the meeting first, or choose a microphone manually. Steno will not guess."
+                return String(localized: "Join the meeting first, or choose a microphone manually. Steno will not guess.")
             }
             let names = model.microphoneDiscovery.activeDevices
                 .map(\.name)
                 .joined(separator: ", ")
-            return "Active apps use several microphones (\(names)). Choose one manually."
+            return String(localized: "Active apps use several microphones (\(names)). Choose one manually.")
         }
 
         let appNames = activeApplicationNames(using: detected.uid)
         if appNames.isEmpty {
-            return "Detected from the active browser or meeting app: \(detected.name)."
+            return String(localized: "Detected from the active browser or meeting app: \(detected.name).")
         }
-        return "Detected: \(detected.name), used by \(appNames.joined(separator: ", "))."
+        return String(localized: "Detected: \(detected.name), used by \(appNames.joined(separator: ", ")).")
     }
 
     private func activeApplicationNames(using deviceUID: String) -> [String] {

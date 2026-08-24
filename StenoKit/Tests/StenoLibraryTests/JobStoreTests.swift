@@ -5,6 +5,117 @@ import StenoDomain
 
 @Suite("JobStore")
 struct JobStoreTests {
+    @Test("job status mutations read and write within one library transaction")
+    func statusMutationsUseOneTransaction() async throws {
+        try await withTemporaryDirectory { root in
+            let library = try Library.open(at: root)
+            let meeting = try await library.createMeeting(
+                title: "Meeting",
+                status: .processing
+            )
+            let setup = try JobStore(layout: library.layout)
+            let direct = Job(kind: .finalASR, meetingID: meeting.id)
+            let claimed = Job(kind: .diarization, meetingID: meeting.id)
+            let recovered = Job(kind: .export, meetingID: meeting.id)
+            let failed = Job(kind: .templateRender, meetingID: meeting.id)
+            for job in [direct, claimed, recovered, failed] {
+                try await setup.enqueue(job)
+            }
+            _ = try await setup.transition(recovered.id, to: .running)
+            _ = try await setup.transition(failed.id, to: .running)
+            _ = try await setup.transition(
+                failed.id,
+                to: .failed,
+                failureReason: .diarizationModelsNotInstalled
+            )
+
+            let recorder = JobMutationCheckpointRecorder()
+            let store = try JobStore(
+                layout: library.layout,
+                mutationAction: { checkpoint, transaction in
+                    try transaction.validate(layout: library.layout)
+                    recorder.record(checkpoint)
+                }
+            )
+
+            _ = try await store.transition(direct.id, to: .running)
+            #expect(try await store.claimNext(kind: .diarization)?.id == claimed.id)
+            _ = try await store.recoverAtLaunch()
+            _ = try await store.requeueFailedJobs(
+                kind: .templateRender,
+                failureReason: .diarizationModelsNotInstalled
+            )
+
+            #expect(recorder.values == [
+                .afterExclusiveTransactionBeforeTransitionRead,
+                .afterExclusiveTransactionBeforeClaimScan,
+                .afterExclusiveTransactionBeforeRecoveryScan,
+                .afterExclusiveTransactionBeforeRequeueScan,
+            ])
+        }
+    }
+
+    @Test("launch recovery leaves a job claimed by another store running")
+    func recoverySkipsActivelyClaimedJob() async throws {
+        try await withTemporaryDirectory { root in
+            let library = try Library.open(at: root)
+            let meeting = try await library.createMeeting(
+                title: "Meeting",
+                status: .processing
+            )
+            let owner = try JobStore(layout: library.layout)
+            let recovery = try JobStore(layout: library.layout)
+            let job = Job(kind: .finalASR, meetingID: meeting.id)
+            try await owner.enqueue(job)
+
+            #expect(try await owner.claimNext(kind: .finalASR)?.id == job.id)
+            #expect(try await recovery.recoverAtLaunch().isEmpty)
+            #expect(try await recovery.load(job.id).status == .running)
+
+            _ = try await owner.transition(job.id, to: .finished)
+        }
+    }
+
+    @Test("launch recovery removes only unused terminal and orphan execution locks")
+    func recoveryCleansUnusedExecutionLocks() async throws {
+        try await withTemporaryDirectory { root in
+            let library = try Library.open(at: root)
+            let meeting = try await library.createMeeting(
+                title: "Meeting",
+                status: .processing
+            )
+            let owner = try JobStore(layout: library.layout)
+            let recovery = try JobStore(layout: library.layout)
+            let active = Job(kind: .finalASR, meetingID: meeting.id)
+            let finished = Job(kind: .diarization, meetingID: meeting.id)
+            try await owner.enqueue(active)
+            try await owner.enqueue(finished)
+            _ = try await owner.claimNext(kind: .finalASR)
+            _ = try await owner.claimNext(kind: .diarization)
+            _ = try await owner.transition(finished.id, to: .finished)
+
+            let activeLock = library.layout.jobsDirectory.appendingPathComponent(
+                ".\(active.id).execution-lock"
+            )
+            let finishedLock = library.layout.jobsDirectory.appendingPathComponent(
+                ".\(finished.id).execution-lock"
+            )
+            let orphanLock = library.layout.jobsDirectory.appendingPathComponent(
+                ".\(JobID()).execution-lock"
+            )
+            try Data().write(to: orphanLock)
+
+            _ = try await recovery.recoverAtLaunch()
+
+            #expect(FileManager.default.fileExists(atPath: activeLock.path))
+            #expect(!FileManager.default.fileExists(atPath: finishedLock.path))
+            #expect(!FileManager.default.fileExists(atPath: orphanLock.path))
+            #expect(try await recovery.load(active.id).status == .running)
+
+            _ = try await owner.transition(active.id, to: .finished)
+        }
+    }
+
     @Test("persists transitions and counts execution attempts")
     func transitions() async throws {
         try await withTemporaryDirectory { root in
@@ -21,6 +132,26 @@ struct JobStoreTests {
             #expect(finished.status == .finished)
             #expect(try await store.load(job.id) == finished)
             #expect(try await store.list().map(\.id) == [job.id])
+        }
+    }
+
+    @Test("cancellation cannot overwrite a job that was already claimed")
+    func cancellationDoesNotUseAStaleQueuedState() async throws {
+        try await withTemporaryDirectory { root in
+            let library = try Library.open(at: root)
+            let meeting = try await library.createMeeting(
+                title: "Meeting",
+                status: .processing
+            )
+            let store = try JobStore(layout: library.layout)
+            let job = Job(kind: .finalASR, meetingID: meeting.id)
+            try await store.enqueue(job)
+            #expect(try await store.claimNext(kind: .finalASR)?.id == job.id)
+
+            let cancellation = try await store.cancelIfQueuedOrFailed(job.id)
+
+            #expect(cancellation == nil)
+            #expect(try await store.load(job.id).status == .running)
         }
     }
 
@@ -338,6 +469,19 @@ struct JobStoreTests {
     }
 }
 
+private final class JobMutationCheckpointRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValues: [JobStoreMutationCheckpoint] = []
+
+    var values: [JobStoreMutationCheckpoint] {
+        lock.withLock { storedValues }
+    }
+
+    func record(_ value: JobStoreMutationCheckpoint) {
+        lock.withLock { storedValues.append(value) }
+    }
+}
+
 @Suite("RecoverySweep")
 struct RecoverySweepTests {
     @Test("a draft without a recording is never collected as stranded")
@@ -360,7 +504,20 @@ struct RecoverySweepTests {
         try await withTemporaryDirectory { root in
             let library = try Library.open(at: root)
             let inactive = try await library.createMeeting(title: "Inactive", status: .recording)
-            let withAssets = try await library.createMeeting(title: "WithAssets", status: .recording)
+            let plan = TranscriptionPlan(
+                liveProviderID: .apple,
+                finalProviderID: .parakeetTDTv3
+            )
+            let sourceLocale = try MeetingSourceLocale(
+                localeIdentifier: "de-DE",
+                origin: .explicit
+            )
+            let withAssets = try await library.createMeeting(
+                title: "WithAssets",
+                status: .recording,
+                sourceLocale: sourceLocale,
+                transcriptionPlan: plan
+            )
             let active = try await library.createMeeting(title: "Active", status: .recording)
             _ = try await library.createMeeting(title: "Ready", status: .ready)
             let store = try JobStore(layout: library.layout)
@@ -396,6 +553,8 @@ struct RecoverySweepTests {
             #expect(jobs.count == 1)
             #expect(jobs.first?.kind == .finalASR)
             #expect(jobs.first?.meetingID == withAssets.id)
+            #expect(jobs.first?.transcriptionProviderID == .parakeetTDTv3)
+            #expect(jobs.first?.localeIdentifier == "de-DE")
         }
     }
 }

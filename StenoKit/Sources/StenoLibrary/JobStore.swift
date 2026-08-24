@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import StenoDomain
 
@@ -26,13 +27,96 @@ enum JobStoreEnsureCheckpoint: Equatable, Sendable {
 
 typealias JobStoreEnsureAction = @Sendable (JobStoreEnsureCheckpoint) throws -> Void
 
+package enum JobStoreMutationCheckpoint: Equatable, Sendable {
+    case afterExclusiveTransactionBeforeTransitionRead
+    case afterExclusiveTransactionBeforeClaimScan
+    case afterExclusiveTransactionBeforeRecoveryScan
+    case afterExclusiveTransactionBeforeRequeueScan
+}
+
+package typealias JobStoreMutationAction = @Sendable (
+    JobStoreMutationCheckpoint,
+    LibraryMutationTransaction
+) throws -> Void
+
+private final class JobExecutionLease: @unchecked Sendable {
+    private static let filenameSuffix = ".execution-lock"
+    private let descriptor: Int32
+
+    private init(descriptor: Int32) {
+        self.descriptor = descriptor
+    }
+
+    static func acquire(
+        jobID: JobID,
+        layout: LibraryLayout
+    ) throws -> JobExecutionLease? {
+        let url = fileURL(jobID: jobID, layout: layout)
+        let descriptor = Darwin.open(
+            url.path,
+            O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC,
+            S_IRUSR | S_IWUSR
+        )
+        guard descriptor >= 0 else {
+            throw POSIXFailure(operation: "open job execution lease", code: errno)
+        }
+        guard fchmod(descriptor, S_IRUSR | S_IWUSR) == 0 else {
+            let code = errno
+            Darwin.close(descriptor)
+            throw POSIXFailure(operation: "secure job execution lease", code: code)
+        }
+        while flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
+            if errno == EINTR { continue }
+            let code = errno
+            Darwin.close(descriptor)
+            if code == EWOULDBLOCK { return nil }
+            throw POSIXFailure(operation: "lock job execution lease", code: code)
+        }
+        return JobExecutionLease(descriptor: descriptor)
+    }
+
+    static func fileURL(jobID: JobID, layout: LibraryLayout) -> URL {
+        layout.jobsDirectory.appendingPathComponent(
+            ".\(jobID)\(filenameSuffix)"
+        )
+    }
+
+    static func jobID(for url: URL) -> JobID? {
+        let name = url.lastPathComponent
+        guard name.first == ".", name.hasSuffix(filenameSuffix) else {
+            return nil
+        }
+        let identifier = name.dropFirst().dropLast(filenameSuffix.count)
+        guard let uuid = UUID(uuidString: String(identifier)) else { return nil }
+        return JobID(rawValue: uuid)
+    }
+
+    deinit {
+        _ = flock(descriptor, LOCK_UN)
+        Darwin.close(descriptor)
+    }
+}
+
+package struct JobExecutionClaim: Sendable {
+    package let job: Job
+    fileprivate let leaseToken: UUID
+}
+
+private struct HeldJobExecutionLease {
+    let token: UUID
+    let lease: JobExecutionLease
+}
+
 public actor JobStore {
     public nonisolated let layout: LibraryLayout
     private nonisolated let ensureAction: JobStoreEnsureAction
+    private nonisolated let mutationAction: JobStoreMutationAction
+    private var activeExecutionLeases: [JobID: HeldJobExecutionLease] = [:]
 
     public init(layout: LibraryLayout) throws {
         self.layout = layout
         ensureAction = { _ in }
+        mutationAction = { _, _ in }
         try FileManager.default.createDirectory(
             at: layout.jobsDirectory,
             withIntermediateDirectories: true
@@ -45,6 +129,20 @@ public actor JobStore {
     ) throws {
         self.layout = layout
         ensureAction = ensureCheckpoint
+        mutationAction = { _, _ in }
+        try FileManager.default.createDirectory(
+            at: layout.jobsDirectory,
+            withIntermediateDirectories: true
+        )
+    }
+
+    package init(
+        layout: LibraryLayout,
+        mutationAction: @escaping JobStoreMutationAction
+    ) throws {
+        self.layout = layout
+        ensureAction = { _ in }
+        self.mutationAction = mutationAction
         try FileManager.default.createDirectory(
             at: layout.jobsDirectory,
             withIntermediateDirectories: true
@@ -131,7 +229,8 @@ public actor JobStore {
               existing.textModelEndpointSnapshot == job.textModelEndpointSnapshot,
               existing.templateRenderInputFingerprint
                 == job.templateRenderInputFingerprint,
-              existing.importGenerationID == job.importGenerationID,
+              existing.processingGenerationID == job.processingGenerationID,
+              existing.transcriptionProviderID == job.transcriptionProviderID,
               existing.createdAt == job.createdAt else {
             throw LibraryError.jobIdentityConflict(job.id)
         }
@@ -258,7 +357,7 @@ public actor JobStore {
             $0.kind == .diarization
                 && $0.meetingID == meetingID
                 && $0.sourceRunID == sourceRunID
-                && $0.importGenerationID == importGenerationID
+                && $0.processingGenerationID == importGenerationID
         }
         let finished = matching.filter { $0.status == .finished }
         if finished.contains(where: { $0.id == visibleDiarizationJobID }) {
@@ -324,6 +423,13 @@ public actor JobStore {
         try Self.list(layout: layout)
     }
 
+    package nonisolated func list(
+        transaction: LibraryMutationTransaction
+    ) throws -> [Job] {
+        try transaction.validate(layout: layout)
+        return try Self.list(layout: layout)
+    }
+
     private nonisolated static func list(layout: LibraryLayout) throws -> [Job] {
         let urls = try FileManager.default.contentsOfDirectory(
             at: layout.jobsDirectory,
@@ -352,7 +458,52 @@ public actor JobStore {
         errorMessage: String? = nil,
         failureReason: Job.FailureReason? = nil
     ) throws -> Job {
-        var job = try load(jobID)
+        let job = try withStatusMutation(
+            .afterExclusiveTransactionBeforeTransitionRead
+        ) { transaction in
+            try transition(
+                jobID,
+                to: newStatus,
+                errorMessage: errorMessage,
+                failureReason: failureReason,
+                transaction: transaction
+            )
+        }
+        if job.status != .running {
+            activeExecutionLeases.removeValue(forKey: job.id)
+        }
+        return job
+    }
+
+    /// Cancels a job only while it cannot be executing. Reading the status and
+    /// changing it share both the actor isolation and the library transaction,
+    /// so a queue claim can never be overwritten from a stale snapshot.
+    package func cancelIfQueuedOrFailed(_ jobID: JobID) throws -> Job? {
+        try withStatusMutation(
+            .afterExclusiveTransactionBeforeTransitionRead
+        ) { transaction in
+            let job = try load(jobID, transaction: transaction)
+            guard job.status == .queued || job.status == .failed else {
+                return nil
+            }
+            return try transition(
+                jobID,
+                to: .cancelled,
+                transaction: transaction
+            )
+        }
+    }
+
+    @discardableResult
+    package nonisolated func transition(
+        _ jobID: JobID,
+        to newStatus: Job.Status,
+        errorMessage: String? = nil,
+        failureReason: Job.FailureReason? = nil,
+        transaction: LibraryMutationTransaction
+    ) throws -> Job {
+        try transaction.validate(layout: layout)
+        var job = try Self.load(jobID, layout: layout)
         guard Self.allowsTransition(from: job.status, to: newStatus) else {
             throw LibraryError.invalidStatusTransition(
                 from: job.status,
@@ -365,46 +516,142 @@ public actor JobStore {
         job.status = newStatus
         job.errorMessage = errorMessage
         job.failureReason = newStatus == .failed ? failureReason : nil
+        try transaction.validate(layout: layout)
         try JSONDocumentStore.write(job, to: layout.job(jobID))
         return job
     }
 
     public func recoverAtLaunch() throws -> [Job] {
-        var recovered: [Job] = []
-        for job in try list() where job.status == .running {
-            recovered.append(try transition(job.id, to: .queued))
+        try withStatusMutation(.afterExclusiveTransactionBeforeRecoveryScan) { transaction in
+            var recovered: [Job] = []
+            for job in try Self.list(layout: layout) where job.status == .running {
+                guard activeExecutionLeases[job.id] == nil,
+                      let lease = try JobExecutionLease.acquire(
+                          jobID: job.id,
+                          layout: layout
+                      )
+                else { continue }
+                let recoveredJob = try transition(
+                    job.id,
+                    to: .queued,
+                    transaction: transaction
+                )
+                withExtendedLifetime(lease) {}
+                recovered.append(recoveredJob)
+            }
+            try removeUnusedExecutionLocks(transaction: transaction)
+            return recovered
         }
-        return recovered
+    }
+
+    private func removeUnusedExecutionLocks(
+        transaction: LibraryMutationTransaction
+    ) throws {
+        try transaction.validate(layout: layout)
+        let urls = try FileManager.default.contentsOfDirectory(
+            at: layout.jobsDirectory,
+            includingPropertiesForKeys: nil
+        )
+        for url in urls {
+            guard let jobID = JobExecutionLease.jobID(for: url) else { continue }
+            let jobURL = layout.job(jobID)
+            let canRemove: Bool
+            if FileManager.default.fileExists(atPath: jobURL.path) {
+                let status = try Self.load(jobID, layout: layout).status
+                canRemove = status == .finished
+                    || status == .failed
+                    || status == .cancelled
+            } else {
+                canRemove = true
+            }
+            guard canRemove,
+                  activeExecutionLeases[jobID] == nil,
+                  let lease = try JobExecutionLease.acquire(
+                      jobID: jobID,
+                      layout: layout
+                  )
+            else { continue }
+            try transaction.validate(layout: layout)
+            try FileManager.default.removeItem(at: url)
+            withExtendedLifetime(lease) {}
+        }
     }
 
     /// Atomically returns only failed jobs with one exact recoverable reason
     /// to the queue. An optional fixed legacy message shape supports a narrow
     /// upgrade migration for jobs written before typed reasons existed.
+    /// Generation filtering reads Meeting metadata under the same root lock
+    /// as the status transition, so a replacement cannot race the decision.
     /// Keeping the scan and transitions in this actor method makes repeated
     /// or concurrent user actions idempotent.
     public func requeueFailedJobs(
         kind: Job.Kind,
         failureReason: Job.FailureReason,
         legacyErrorPrefix: String? = nil,
-        legacyErrorSuffix: String? = nil
+        legacyErrorSuffix: String? = nil,
+        currentMeetingGenerationOnly: Bool = false
     ) throws -> [JobID] {
-        var requeued: [JobID] = []
-        for job in try list() where
-            job.kind == kind
-            && job.status == .failed
-            && (
-                job.failureReason == failureReason
-                || Self.matchesLegacyFailure(
-                    job,
-                    prefix: legacyErrorPrefix,
-                    suffix: legacyErrorSuffix
+        try withStatusMutation(.afterExclusiveTransactionBeforeRequeueScan) { transaction in
+            var requeued: [JobID] = []
+            for job in try Self.list(layout: layout) where
+                job.kind == kind
+                && job.status == .failed
+                && (!currentMeetingGenerationOnly
+                    || Self.matchesCurrentMeetingGeneration(
+                        job,
+                        layout: layout,
+                        transaction: transaction
+                    ))
+                && (
+                    job.failureReason == failureReason
+                    || Self.matchesLegacyFailure(
+                        job,
+                        prefix: legacyErrorPrefix,
+                        suffix: legacyErrorSuffix
+                    )
                 )
-            )
-        {
-            _ = try transition(job.id, to: .queued)
-            requeued.append(job.id)
+            {
+                _ = try transition(
+                    job.id,
+                    to: .queued,
+                    transaction: transaction
+                )
+                requeued.append(job.id)
+            }
+            return requeued
         }
-        return requeued
+    }
+
+    /// Atomically returns failed jobs with one exact persisted error message to
+    /// the queue. The exact match deliberately avoids retrying unrelated
+    /// failures that happen to share a job kind.
+    public func requeueFailedJobs(
+        kind: Job.Kind,
+        errorMessage: String,
+        currentMeetingGenerationOnly: Bool = false
+    ) throws -> [JobID] {
+        try withStatusMutation(.afterExclusiveTransactionBeforeRequeueScan) { transaction in
+            var requeued: [JobID] = []
+            for job in try Self.list(layout: layout) where
+                job.kind == kind
+                && job.status == .failed
+                && job.errorMessage == errorMessage
+                && (!currentMeetingGenerationOnly
+                    || Self.matchesCurrentMeetingGeneration(
+                        job,
+                        layout: layout,
+                        transaction: transaction
+                    ))
+            {
+                _ = try transition(
+                    job.id,
+                    to: .queued,
+                    transaction: transaction
+                )
+                requeued.append(job.id)
+            }
+            return requeued
+        }
     }
 
     private static func matchesLegacyFailure(
@@ -424,6 +671,27 @@ public actor JobStore {
         return message.count > prefix.count + suffix.count
     }
 
+    private static func matchesCurrentMeetingGeneration(
+        _ job: Job,
+        layout: LibraryLayout,
+        transaction: LibraryMutationTransaction
+    ) -> Bool {
+        do {
+            try transaction.validate(layout: layout)
+        } catch {
+            return false
+        }
+        guard let meeting = try? JSONDocumentStore.read(
+            Meeting.self,
+            from: layout.meetingMetadata(job.meetingID),
+            currentSchemaVersion: Meeting.currentSchemaVersion,
+            schemaVersion: \.schemaVersion
+        ) else {
+            return false
+        }
+        return meeting.processingGenerationID == job.processingGenerationID
+    }
+
     private static func isEquivalent(
         _ existing: Job,
         to candidate: Job,
@@ -438,7 +706,7 @@ public actor JobStore {
             && existing.textModelEndpointSnapshot == candidate.textModelEndpointSnapshot
             && existing.templateRenderInputFingerprint
                 == candidate.templateRenderInputFingerprint
-            && existing.importGenerationID == candidate.importGenerationID
+            && existing.processingGenerationID == candidate.processingGenerationID
             && blockingStatuses.contains(existing.status)
     }
 
@@ -448,6 +716,18 @@ public actor JobStore {
     ) throws -> Bool {
         try list().contains {
             $0.kind == kind && $0.meetingID == meetingID
+        }
+    }
+
+    public func containsJob(
+        kind: Job.Kind,
+        meetingID: MeetingID,
+        processingGenerationID: MeetingTransferGenerationID?
+    ) throws -> Bool {
+        try list().contains {
+            $0.kind == kind
+                && $0.meetingID == meetingID
+                && $0.processingGenerationID == processingGenerationID
         }
     }
 
@@ -463,12 +743,51 @@ public actor JobStore {
     }
 
     public func claimNext(kind: Job.Kind) throws -> Job? {
-        guard let job = try list().first(where: {
-            $0.kind == kind && $0.status == .queued
-        }) else {
+        try claimNextWithExecutionLease(kind: kind)?.job
+    }
+
+    package func claimNextWithExecutionLease(
+        kind: Job.Kind
+    ) throws -> JobExecutionClaim? {
+        try withStatusMutation(.afterExclusiveTransactionBeforeClaimScan) { transaction in
+            for job in try Self.list(layout: layout) where
+                job.kind == kind && job.status == .queued
+            {
+                guard let lease = try JobExecutionLease.acquire(
+                    jobID: job.id,
+                    layout: layout
+                ) else { continue }
+                let claimed = try transition(
+                    job.id,
+                    to: .running,
+                    transaction: transaction
+                )
+                let token = UUID()
+                activeExecutionLeases[job.id] = HeldJobExecutionLease(
+                    token: token,
+                    lease: lease
+                )
+                return JobExecutionClaim(job: claimed, leaseToken: token)
+            }
             return nil
         }
-        return try transition(job.id, to: .running)
+    }
+
+    package func releaseExecutionLease(_ claim: JobExecutionClaim) {
+        guard activeExecutionLeases[claim.job.id]?.token == claim.leaseToken else {
+            return
+        }
+        activeExecutionLeases.removeValue(forKey: claim.job.id)
+    }
+
+    private func withStatusMutation<Result>(
+        _ checkpoint: JobStoreMutationCheckpoint,
+        _ body: (LibraryMutationTransaction) throws -> Result
+    ) throws -> Result {
+        try LibraryMutationCoordination.withExclusiveTransaction(layout: layout) { transaction in
+            try mutationAction(checkpoint, transaction)
+            return try body(transaction)
+        }
     }
 
     private static func allowsTransition(

@@ -37,7 +37,7 @@ struct MeetingTransferExportPresentationTests {
             visibleSpeakerLabels: ["Ada", "Speaker 2"]
         )
 
-        #expect(MeetingTransferExportPresentation.textContent(for: preview) == [
+        #expect(MeetingTransferExportPresentation.textContent(for: preview).map(english) == [
             "Notes, including any time markers",
             "Transcript",
             "Speakers: Ada, Speaker 2",
@@ -57,14 +57,14 @@ struct MeetingTransferExportPresentationTests {
             "Microphone - 1 MB",
             "System audio - 2 MB",
         ])
-        #expect(MeetingTransferExportPresentation.audioSummary(
+        #expect(english(MeetingTransferExportPresentation.audioSummary(
             for: preview,
             selectedAudioAssetIDs: [microphoneID]
-        ) == "1 track selected, 1 MB total")
-        let microphoneWarning = try #require(MeetingTransferExportPresentation.audioWarning(
+        )) == "1 track selected, 1 MB total")
+        let microphoneWarning = english(try #require(MeetingTransferExportPresentation.audioWarning(
             for: preview,
             selectedAudioAssetIDs: [microphoneID]
-        ))
+        )))
         #expect(microphoneWarning.contains("Adding 1 MB"))
         #expect(!microphoneWarning.contains("2 MB"))
         #expect(!microphoneWarning.contains("3 MB"))
@@ -72,10 +72,10 @@ struct MeetingTransferExportPresentationTests {
         #expect(microphoneWarning.contains("other voices in the room"))
         #expect(microphoneWarning.contains("cleartext file"))
 
-        #expect(MeetingTransferExportPresentation.audioSummary(
+        #expect(english(MeetingTransferExportPresentation.audioSummary(
             for: preview,
             selectedAudioAssetIDs: [microphoneID, systemAudioID]
-        ) == "2 tracks selected, 3 MB total")
+        )) == "2 tracks selected, 3 MB total")
     }
 
     @Test("empty or unknown audio selection stays off and shows no recording warning")
@@ -85,10 +85,10 @@ struct MeetingTransferExportPresentationTests {
             .init(assetID: offeredID, label: "Microphone", byteCount: 1_048_576),
         ])
 
-        #expect(MeetingTransferExportPresentation.audioSummary(
+        #expect(english(MeetingTransferExportPresentation.audioSummary(
             for: preview,
             selectedAudioAssetIDs: []
-        ) == "Audio off - 0 tracks selected")
+        )) == "Audio off - 0 tracks selected")
         #expect(MeetingTransferExportPresentation.audioWarning(
             for: preview,
             selectedAudioAssetIDs: []
@@ -124,30 +124,35 @@ struct MeetingTransferExportPresentationTests {
 
     @Test("share wording keeps AirDrop selection explicit")
     func airDropInstructionIsExplicit() {
-        #expect(MeetingTransferExportPresentation.shareActionLabel == "Share meeting")
-        #expect(MeetingTransferExportPresentation.airDropInstruction.contains(
+        #expect(english(MeetingTransferExportPresentation.shareActionLabel) == "Share meeting")
+        #expect(MeetingTransferExportPresentation.shareSymbolName == "square.and.arrow.up")
+        #expect(english(MeetingTransferExportPresentation.airDropInstruction).contains(
             "may open AirDrop directly or show the Share menu"
         ))
-        #expect(MeetingTransferExportPresentation.airDropInstruction.contains(
+        #expect(english(MeetingTransferExportPresentation.airDropInstruction).contains(
             "choose AirDrop"
         ))
-        #expect(MeetingTransferExportPresentation.shareAccessibilityValue(isPreparing: true)
+        #expect(english(MeetingTransferExportPresentation.shareAccessibilityValue(isPreparing: true))
             == "Preparing package")
-        let accessibilityHint = MeetingTransferExportPresentation.shareAccessibilityHint(
+        let accessibilityHint = english(MeetingTransferExportPresentation.shareAccessibilityHint(
             isPreparing: false
-        )
+        ))
         #expect(accessibilityHint.contains("system sharing"))
         #expect(!accessibilityHint.contains("opens AirDrop"))
-        #expect(MeetingTransferExportPresentation.sharingStatusText.contains(
+        #expect(english(MeetingTransferExportPresentation.sharingStatusText).contains(
             "system sharing"
         ))
-        #expect(!MeetingTransferExportPresentation.sharingStatusText.contains(
+        #expect(!english(MeetingTransferExportPresentation.sharingStatusText).contains(
             "AirDrop is open"
         ))
-        #expect(MeetingTransferSharingError.serviceUnavailable.localizedDescription.contains(
+        #expect(MeetingTransferSharingError.serviceUnavailable.message(
+            locale: Locale(identifier: "en")
+        ).contains(
             "Activate Share meeting again"
         ))
-        #expect(!MeetingTransferSharingError.serviceUnavailable.localizedDescription.contains(
+        #expect(!MeetingTransferSharingError.serviceUnavailable.message(
+            locale: Locale(identifier: "en")
+        ).contains(
             "Click"
         ))
     }
@@ -156,7 +161,7 @@ struct MeetingTransferExportPresentationTests {
     func cleanupRetryIsPersistentPresentationState() {
         #expect(MeetingTransferExportPresentation.cleanupActionLabel(
             for: .cleanupRequired("retry")
-        ) == "Retry cleanup")
+        ).map(english) == "Retry cleanup")
         #expect(MeetingTransferExportPresentation.cleanupActionLabel(
             for: .failed("failed")
         ) == nil)
@@ -168,8 +173,15 @@ struct MeetingTransferExportPresentationTests {
     @Test("invalid persisted source locale is explained without guessing")
     func invalidSourceLocaleIsExplained() {
         #expect(MeetingTransferExportPresentation.errorMessage(
-            MeetingTransferExportError.invalidSourceLocale
+            MeetingTransferExportError.invalidSourceLocale,
+            locale: Locale(identifier: "en")
         ) == "The meeting contains inconsistent source-language information and cannot be shared.")
+    }
+
+    private func english(_ resource: LocalizedStringResource) -> String {
+        var resource = resource
+        resource.locale = Locale(identifier: "en")
+        return String(localized: resource)
     }
 
     @Test("only loaded non-recording and non-interrupted meetings offer sharing")
@@ -1220,7 +1232,7 @@ struct MeetingTransferExportPresentationTests {
         #expect(recoveryHarness.callCount == 0)
         let notice = try #require(model.notice)
         #expect(notice.isError)
-        #expect(notice.text.contains("preserved for manual cleanup"))
+        #expect(notice.text.contains(MeetingTransferSharing.manualCleanupWarning))
     }
 
     @Test("registered start failure recovers archive cleartext before export cleanup")

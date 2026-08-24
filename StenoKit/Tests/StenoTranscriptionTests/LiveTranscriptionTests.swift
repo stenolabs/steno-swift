@@ -23,6 +23,120 @@ struct LiveTranscriptionTests {
         ))
     }
 
+    @Test("shows only the last volatile block from a cumulative snapshot")
+    func projectsOnlyCurrentVolatileBlock() {
+        var feed = LiveTranscriptFeed()
+        let first = block(text: "final one", start: 0, end: 1)
+        let second = block(text: "final two", start: 1, end: 2)
+        let current = block(text: "current", start: 2, end: 3)
+
+        feed.apply(
+            .volatile(output([first, second, current])),
+            for: .microphone
+        )
+
+        #expect(feed.rows.map(\.block.text) == [
+            "final two", "current", "final one",
+        ])
+        #expect(feed.rows.map(\.kind) == [.final, .volatile, .final])
+    }
+
+    @Test("replaces cumulative finals instead of appending duplicates")
+    func deduplicatesCumulativeFinals() {
+        var feed = LiveTranscriptFeed()
+        let first = block(text: "first", start: 0, end: 1)
+        let second = block(text: "second", start: 1, end: 2)
+
+        feed.apply(.final(output([first])), for: .microphone)
+        feed.apply(.final(output([first, second])), for: .microphone)
+
+        #expect(feed.rows.map(\.block.text) == ["second", "first"])
+        #expect(feed.rows.allSatisfy { $0.kind == .final })
+    }
+
+    @Test("a later snapshot restores a final whose individual event was skipped")
+    func restoresSkippedFinal() {
+        var feed = LiveTranscriptFeed()
+        let first = block(text: "first", start: 0, end: 1)
+        let skipped = block(text: "skipped", start: 1, end: 2)
+        let current = block(text: "current", start: 2, end: 3)
+
+        feed.apply(.final(output([first])), for: .microphone)
+        feed.apply(
+            .volatile(output([first, skipped, current])),
+            for: .microphone
+        )
+
+        #expect(feed.rows.map(\.block.text) == ["skipped", "current", "first"])
+    }
+
+    @Test("orders two channels newest first with volatile rows below the latest final")
+    func ordersChannels() {
+        var feed = LiveTranscriptFeed()
+        let micFinal = block(
+            text: "newest final",
+            start: 3,
+            end: 4,
+            channel: .microphone
+        )
+        let micCurrent = block(
+            text: "mic current",
+            start: 4,
+            end: 5,
+            channel: .microphone
+        )
+        let systemFinal = block(
+            text: "older final",
+            start: 1,
+            end: 2,
+            channel: .system
+        )
+        let systemCurrent = block(
+            text: "system current",
+            start: 2,
+            end: 3,
+            channel: .system
+        )
+
+        feed.apply(
+            .volatile(output([micFinal, micCurrent])),
+            for: .microphone
+        )
+        feed.apply(
+            .volatile(output([systemFinal, systemCurrent])),
+            for: .system
+        )
+
+        #expect(feed.rows.map(\.block.text) == [
+            "newest final", "mic current", "system current", "older final",
+        ])
+    }
+
+    @Test("clearing volatile rows preserves every final row")
+    func clearsOnlyVolatileRows() {
+        var feed = LiveTranscriptFeed()
+        let final = block(text: "final", start: 0, end: 1)
+        let current = block(text: "current", start: 1, end: 2)
+        feed.apply(.volatile(output([final, current])), for: .microphone)
+
+        feed.clearVolatile()
+
+        #expect(feed.rows.map(\.block.text) == ["final"])
+        #expect(!feed.isEmpty)
+    }
+
+    @Test("an empty volatile snapshot clears only the current guess")
+    func emptyVolatileSnapshotPreservesFinals() {
+        var feed = LiveTranscriptFeed()
+        let final = block(text: "final", start: 0, end: 1)
+        let current = block(text: "current", start: 1, end: 2)
+        feed.apply(.volatile(output([final, current])), for: .microphone)
+
+        feed.apply(.volatile(output([])), for: .microphone)
+
+        #expect(feed.rows.map(\.block.text) == ["final"])
+    }
+
     @Test("feeds every RecordingSession-style AsyncStream buffer into a live session")
     func feedsAudioStream() async throws {
         let session = FakeLiveSession()
@@ -113,15 +227,20 @@ struct LiveTranscriptionTests {
     private func block(
         text: String,
         start: TimeInterval,
-        end: TimeInterval
+        end: TimeInterval,
+        channel: TranscriptionChannel = .microphone
     ) -> TranscriptionBlock {
         TranscriptionBlock(
-            channel: .microphone,
+            channel: channel,
             text: text,
             start: start,
             end: end,
             words: [TranscriptionWord(text: text, start: start, end: end)]
         )
+    }
+
+    private func output(_ blocks: [TranscriptionBlock]) -> TranscriptOutput {
+        TranscriptOutput(localeIdentifier: "de-DE", blocks: blocks)
     }
 }
 
@@ -140,4 +259,49 @@ private actor FakeLiveSession: LiveTranscriptionSession {
     func receivedFrameLengths() -> [AVAudioFrameCount] {
         frameLengths
     }
+
+@Suite("Live transcript feed channel isolation")
+struct LiveTranscriptFeedChannelTests {
+    @Test("a capture gap clears only the volatile row of its own track")
+    func clearingOneChannelKeepsTheOther() {
+        var feed = LiveTranscriptFeed()
+        feed.apply(.volatile(output([block("mic guess", channel: .microphone)])), for: .microphone)
+        feed.apply(.volatile(output([block("system guess", channel: .system)])), for: .system)
+
+        feed.clearVolatile(for: .microphone)
+
+        #expect(feed.rows.map(\.block.text) == ["system guess"])
+    }
+
+    @Test("clearing a channel keeps its finalised rows")
+    func clearingKeepsFinalRows() {
+        var feed = LiveTranscriptFeed()
+        // Ein volatiler Schnappschuss traegt den ganzen Stand: alles ausser
+        // dem letzten Block gilt als fertig.
+        feed.apply(
+            .volatile(output([
+                block("said", channel: .microphone, start: 0, end: 1),
+                block("guessing", channel: .microphone, start: 1, end: 2),
+            ])),
+            for: .microphone
+        )
+
+        feed.clearVolatile(for: .microphone)
+
+        #expect(feed.rows.map(\.block.text) == ["said"])
+    }
+
+    private func block(
+        _ text: String,
+        channel: TranscriptionChannel,
+        start: TimeInterval = 0,
+        end: TimeInterval = 1
+    ) -> TranscriptionBlock {
+        TranscriptionBlock(channel: channel, text: text, start: start, end: end, words: [])
+    }
+
+    private func output(_ blocks: [TranscriptionBlock]) -> TranscriptOutput {
+        TranscriptOutput(localeIdentifier: "de-DE", blocks: blocks)
+    }
+}
 }

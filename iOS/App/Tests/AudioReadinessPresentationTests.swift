@@ -1,9 +1,22 @@
+import Foundation
 import StenoDomain
 import Testing
 @testable import Steno
 
 @Suite("Audio readiness presentation")
 struct AudioReadinessPresentationTests {
+    @Test("opening readiness during a recording does not reconfigure audio")
+    func activeRecordingSkipsAudioConfiguration() {
+        #expect(
+            AudioReadinessLifecycle.startAction(recordingIsActive: true)
+                == .observeWithoutConfiguration
+        )
+        #expect(
+            AudioReadinessLifecycle.startAction(recordingIsActive: false)
+                == .configureAndObserve
+        )
+    }
+
     @Test("an inferred language offers confirmation of the visible value")
     func inferredLanguageCanBeConfirmed() {
         #expect(
@@ -11,7 +24,7 @@ struct AudioReadinessPresentationTests {
                 languageName: "German (Germany)",
                 wasChosenExplicitly: false,
                 canChangeLanguage: true
-            ) == "Use German (Germany)"
+            ).map(english) == "Use German (Germany)"
         )
     }
 
@@ -46,11 +59,11 @@ struct AudioReadinessPresentationTests {
         )
 
         #expect(
-            DiarizationModelPresentation.downloadDisclosure(description)
+            english(DiarizationModelPresentation.downloadDisclosure(description))
                 == "huggingface.co, 509,902,848 bytes (about 509.9 MB)"
         )
         #expect(
-            DiarizationModelPresentation.explanation
+            english(DiarizationModelPresentation.explanation)
                 == "Separates voices into speaker labels on this device. It does not recognize people or assign names. Installation runs only while Steno is open."
         )
     }
@@ -59,10 +72,17 @@ struct AudioReadinessPresentationTests {
     func diarizationRecordingLockText() {
         #expect(
             DiarizationModelPresentation.installLockMessage(recordingIsActive: true)
+                .map(english)
                 == "Stop the recording before installing speaker separation models. Recording and transcription work without them."
         )
         #expect(
             DiarizationModelPresentation.installLockMessage(recordingIsActive: false) == nil
         )
+    }
+
+    private func english(_ resource: LocalizedStringResource) -> String {
+        var resource = resource
+        resource.locale = Locale(identifier: "en")
+        return String(localized: resource)
     }
 }

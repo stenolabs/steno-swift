@@ -22,5 +22,9 @@ struct StenoApp: App {
                     Task { await model.cancelDiarizationModelInstallForBackground() }
                 }
         }
+        .commands {
+            StenoCommands(model: model)
+            InspectorCommands()
+        }
     }
 }

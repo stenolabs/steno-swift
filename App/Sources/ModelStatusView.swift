@@ -31,13 +31,11 @@ struct ModelStatusView: View {
             }
 
             Section {
-                if model.isInstallingModels {
+                if model.isInstallingBaselineModels {
                     installProgress
-                } else {
-                    Button("Allow and install") {
-                        Task { await model.allowAndInstallModels() }
-                    }
-                    .disabled(model.modelBundles.isEmpty || !model.hasLoadedLocales)
+                }
+                if let action = installAction {
+                    installActionButton(action)
                 }
                 // Ein gesperrter Knopf ohne Grund laesst raten. Solange die
                 // Sprachliste fehlt, steht der Grund darunter; sobald sie da
@@ -144,16 +142,62 @@ struct ModelStatusView: View {
 
     @ViewBuilder
     private var installProgress: some View {
-        let progress = model.modelInstallProgress
-        // Titel und Anteil kommen aus dem Fortschritt selbst: waehrend eines
-        // halben Gigabytes soll dastehen, woran gerade gearbeitet wird.
-        ProgressView(value: progress?.fraction ?? 0, total: 1) {
-            Text(progress?.title ?? "Installing")
-        } currentValueLabel: {
-            Text("\(Int(((progress?.fraction ?? 0) * 100).rounded())) %")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
+        switch model.modelInstallProgressPresentation {
+        case .indeterminate(let title):
+            ProgressView {
+                Text(title)
+            }
+        case .determinate(let title, let fraction):
+            ProgressView(value: fraction, total: 1) {
+                Text(title)
+            } currentValueLabel: {
+                Text("\(Int((fraction * 100).rounded())) %")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+        case nil:
+            EmptyView()
+        }
+    }
+
+    private var installAction: MacModelInstallActionPresentation? {
+        let isReady = model.modelReadiness?
+            .isReady(for: model.transcriptionLocale) == true
+            && !model.lastCheckFoundWrongBytes
+        return MacModelInstallActionPresentation.make(
+            isReady: isReady,
+            isInstallingAny: model.isInstallingModels,
+            isActiveInstallation: model.isInstallingBaselineModels
+                && model.showsModelInstallationCancellationAction,
+            cancellationState: model.modelInstallationCancellationState,
+            installTitle: "Allow and install"
+        )
+    }
+
+    @ViewBuilder
+    private func installActionButton(
+        _ action: MacModelInstallActionPresentation
+    ) -> some View {
+        switch action {
+        case .install(let title):
+            Button {
+                Task { await model.allowAndInstallModels() }
+            } label: {
+                Text(title)
+            }
+            .disabled(model.modelBundles.isEmpty || !model.hasLoadedLocales)
+        case .cancel(let title):
+            Button {
+                Task { await model.cancelModelInstallation() }
+            } label: {
+                Text(title)
+            }
+        case .cancelling(let title):
+            Button {} label: {
+                Text(title)
+            }
+            .disabled(true)
         }
     }
 

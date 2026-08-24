@@ -24,7 +24,10 @@ import SwiftUI
 /// keeps a readable measure; nothing appears that a phone does not get.
 struct RecordingView: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.openURL) private var openURL
+    @Environment(\.scenePhase) private var scenePhase
     @FocusState private var notesFocused: Bool
     let showReadiness: () -> Void
 
@@ -34,8 +37,25 @@ struct RecordingView: View {
 
     private var model: RecordingModel { app.recording }
     private var isWide: Bool { sizeClass == .regular }
+    private var usesHorizontalHeaderLayout: Bool {
+        isWide && IOSAdaptiveStackAxis.axis(for: dynamicTypeSize) == .horizontal
+    }
 
+    @ViewBuilder
     var body: some View {
+        switch app.startupState {
+        case .opening:
+            IOSStartupOpeningView()
+        case .failed(let failure):
+            IOSStartupFailedView(failure: failure) {
+                await app.retryStartup()
+            }
+        case .ready:
+            recordingContent
+        }
+    }
+
+    private var recordingContent: some View {
         VStack(spacing: 0) {
             header
             transcript
@@ -43,13 +63,17 @@ struct RecordingView: View {
         }
         .navigationTitle("Recording")
         .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            guard phase == .active else { return }
+            model.refreshMicrophonePermission()
+        }
     }
 
     // MARK: - Header: state, duration, level
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if isWide {
+            if usesHorizontalHeaderLayout {
                 // Side by side: a level meter drawn across a full iPad column
                 // is a line, not a meter - the shape of the movement is the
                 // whole information, and stretching it flattens it away.
@@ -70,6 +94,24 @@ struct RecordingView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
+            if MicrophonePermissionPresentation.action(
+                for: model.microphonePermission
+            ) == .openSettings {
+                Text(MicrophonePermissionPresentation.deniedExplanation)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Button {
+                    openURL(MicrophonePermissionPresentation.settingsURL)
+                } label: {
+                    Text(MicrophonePermissionPresentation.openSettingsTitle)
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityHint(
+                    Text(MicrophonePermissionPresentation.openSettingsHint)
+                )
+                .accessibilityIdentifier("recording-open-microphone-settings")
+            }
+
             if app.models.isReady(for: app.language.locale) == false {
                 Button("Open audio readiness", action: showReadiness)
                     .buttonStyle(.bordered)
@@ -87,9 +129,12 @@ struct RecordingView: View {
                 .fill(isRecording ? .red : .secondary)
                 .frame(width: 12, height: 12)
             Text(durationText(model.elapsed))
-                .font(.system(size: 40, weight: .semibold, design: .rounded))
+                .font(.system(.largeTitle, design: .rounded, weight: .semibold))
                 .monospacedDigit()
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(RecordingAccessibilityPresentation.durationLabel))
+        .accessibilityValue(RecordingAccessibilityPresentation.durationValue(for: model.elapsed))
     }
 
     private var isRecording: Bool {
@@ -108,8 +153,7 @@ struct RecordingView: View {
         // else that could be shown here.
         if model.isSilenceAlarming, isRecording {
             return StatusMessage(
-                text: "Nothing heard for \(Int(model.silentSeconds)) seconds. "
-                    + "Check the microphone.",
+                text: String(localized: "Nothing heard for \(Int(model.silentSeconds)) seconds. Check the microphone."),
                 symbol: "mic.slash",
                 tint: .red
             )
@@ -117,8 +161,7 @@ struct RecordingView: View {
         switch model.state {
         case .interrupted(let reason, let at):
             return StatusMessage(
-                text: "Interrupted because \(reason). "
-                    + "Audio up to \(durationText(at)) is intact.",
+                text: String(localized: "Interrupted because \(reason). Audio up to \(durationText(at)) is intact."),
                 symbol: "exclamationmark.triangle.fill",
                 tint: .orange
             )
@@ -130,7 +173,7 @@ struct RecordingView: View {
             )
         case .preparing:
             return StatusMessage(
-                text: "Preparing the recogniser…",
+                text: String(localized: "Preparing the recogniser…"),
                 symbol: "hourglass",
                 tint: .secondary
             )
@@ -157,7 +200,7 @@ struct RecordingView: View {
                 modelReady: app.models.isReady(for: app.language.locale)
             ) {
                 return StatusMessage(
-                    text: message,
+                    text: String(localized: message),
                     symbol: "text.badge.xmark",
                     tint: .orange
                 )
@@ -169,9 +212,7 @@ struct RecordingView: View {
             if !app.language.recordingSelection.effectiveLocaleWasChosenExplicitly,
                !app.language.available.isEmpty {
                 return StatusMessage(
-                    text: "Transcription language is guessed as "
-                        + "\(app.language.selectedDisplayName). Confirm it under "
-                        + "Audio readiness before you rely on a transcript.",
+                    text: String(localized: "Transcription language is guessed as \(app.language.selectedDisplayName). Confirm it under Audio readiness before you rely on a transcript."),
                     symbol: "questionmark.circle",
                     tint: .orange
                 )
@@ -183,16 +224,15 @@ struct RecordingView: View {
     private func involuntaryStopText(_ reason: RecordingStopReason) -> String {
         switch reason {
         case .requested:
-            "Recording ended."
+            String(localized: "Recording ended.")
         case .lowDiskSpace:
-            "Recording stopped: the device ran out of space. "
-                + "Everything up to that point is saved."
+            String(localized: "Recording stopped: the device ran out of space. Everything up to that point is saved.")
         case .writerFailure:
-            "Recording stopped: the audio file could not be written. "
-                + "Everything up to that point is saved."
+            String(localized: "Recording stopped: the audio file could not be written. Everything up to that point is saved.")
         case .ringBufferOverflow:
-            "Recording stopped: audio arrived faster than it could be written. "
-                + "Everything up to that point is saved."
+            String(localized: "Recording stopped: audio arrived faster than it could be written. Everything up to that point is saved.")
+        case .diskSpaceMonitoringFailure:
+            String(localized: "Recording stopped: free disk space could not be checked for 30 seconds. Everything up to that point is saved.")
         }
     }
 
@@ -200,12 +240,15 @@ struct RecordingView: View {
 
     @ViewBuilder
     private var transcript: some View {
-        if model.finalText.isEmpty && model.volatileText.isEmpty {
+        if model.liveTranscriptRows.isEmpty {
             // Kept out of the scroll view: with a bottom anchor an empty state
             // would cling to the lower edge, which reads as a layout fault.
             VStack(spacing: 8) {
                 Spacer()
-                Text(emptyStateText)
+                Text(RecordingPresentation.emptyStateText(
+                    isRecording: isRecording,
+                    hasTranscriptionFailure: model.transcriptionFailure != nil
+                ))
                     .foregroundStyle(.secondary)
                 if model.transcriptionFailure != nil, isRecording {
                     Text("The audio is being captured either way.")
@@ -220,22 +263,20 @@ struct RecordingView: View {
         }
     }
 
-    private var emptyStateText: String {
-        guard isRecording else { return "Not recording." }
-        return model.transcriptionFailure == nil
-            ? "Listening…"
-            : "No live transcript on this device."
-    }
-
     private var transcriptText: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
-                Text(model.finalText)
-                // Volatile text is visibly lighter, and the caption below
-                // never goes away: the live transcript is a catch-up aid, not
-                // something to quote from.
-                Text(model.volatileText)
-                    .foregroundStyle(.secondary)
+                // Newest first. Volatile text is visibly lighter, and the
+                // caption below never goes away: the live transcript is a
+                // catch-up aid, not something to quote from.
+                ForEach(model.liveTranscriptRows) { row in
+                    Text(row.block.text)
+                        .foregroundStyle(
+                            row.kind == .volatile
+                                ? AnyShapeStyle(.secondary)
+                                : AnyShapeStyle(.primary)
+                        )
+                }
                 if isRecording {
                     Text("Preliminary, corrected after the recording.")
                         .font(.caption)
@@ -306,6 +347,9 @@ struct RecordingView: View {
             }
             .buttonStyle(.bordered)
             .disabled(!isRecording)
+            .accessibilityLabel("Add marker")
+            .accessibilityHint("Adds a timestamped marker to this recording.")
+            .accessibilityIdentifier("recording-add-marker")
 
             Button {
                 Task {
@@ -329,23 +373,46 @@ struct RecordingView: View {
             .tint(model.isActive ? .red : .accentColor)
             // Nothing to record into until the library is open.
             .disabled(!app.canStartRecording)
+            .accessibilityLabel(Text(
+                model.isActive
+                    ? RecordingAccessibilityPresentation.stopLabel
+                    : RecordingAccessibilityPresentation.recordLabel
+            ))
+            .accessibilityHint(Text(
+                model.isActive
+                    ? RecordingAccessibilityPresentation.stopHint
+                    : RecordingAccessibilityPresentation.recordHint
+            ))
+            .accessibilityIdentifier(
+                model.isActive ? "recording-stop" : "recording-start"
+            )
         }
         .padding()
     }
 
     private var markerLabel: String {
         model.markers.isEmpty
-            ? "Mark"
-            : "Mark (\(model.markers.count))"
+            ? String(localized: "Mark")
+            : String(localized: "Mark (\(model.markers.count))")
     }
 }
 
 enum RecordingPresentation {
+    static func emptyStateText(
+        isRecording: Bool,
+        hasTranscriptionFailure: Bool
+    ) -> LocalizedStringResource {
+        guard isRecording else { return "Not recording." }
+        return hasTranscriptionFailure
+            ? "No live transcript on this device."
+            : "Listening…"
+    }
+
     static func modelMessage(
         isRecording: Bool,
         transcriptionFailure: String?,
         modelReady: Bool?
-    ) -> String? {
+    ) -> LocalizedStringResource? {
         if let transcriptionFailure {
             return "Recording. No live transcript: \(transcriptionFailure)"
         }
@@ -359,7 +426,7 @@ enum RecordingPresentation {
         hasContent: Bool,
         isSaving: Bool,
         failure: String?
-    ) -> String? {
+    ) -> LocalizedStringResource? {
         if let failure {
             return "Notes could not be saved: \(failure)"
         }

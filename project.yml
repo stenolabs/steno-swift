@@ -1,6 +1,10 @@
 name: Steno
 options:
   bundleIdPrefix: org.steno
+  developmentLanguage: en
+  knownRegions:
+    - en
+    - de
   deploymentTarget:
     macOS: "26.0"
   createIntermediateGroups: true
@@ -11,9 +15,14 @@ targets:
   Steno:
     type: application
     platform: macOS
+    configFiles:
+      Debug: Config/Signing.xcconfig
+      Release: Config/Signing.xcconfig
     sources:
       - App/Sources
+      - Shared/Sources
       - App/Resources
+      - Shared/Resources/AppIcon.icon
     dependencies:
       - package: StenoKit
         product: StenoDomain
@@ -29,10 +38,12 @@ targets:
         product: StenoPipeline
       - package: StenoKit
         product: StenoExchange
+      - package: StenoKit
+        product: StenoDemo
     info:
       path: App/Info.plist
       properties:
-        # Eigener Name, damit die native App neben der alten Electron-Steno in
+        # Eigener Name, damit die neue App neben der alten Electron-Steno in
         # /Applications stehen kann. Die Bundle-ID bleibt org.steno.Steno:
         # An ihr haengen die Einstellungen (Sprache, Endpunkte), und sie
         # kollidiert ohnehin nicht mit der alten App (com.stenoai.recorder).
@@ -61,7 +72,12 @@ targets:
             CFBundleTypeRole: Editor
     settings:
       base:
+        ARCHS: arm64
         PRODUCT_NAME: steno-macos
+        # Dasselbe Motiv wie die iOS-App: eine App, ein Zeichen.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        STRING_CATALOG_GENERATE_SYMBOLS: true
+        SWIFT_EMIT_LOC_STRINGS: true
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
         ENABLE_HARDENED_RUNTIME: false
@@ -69,7 +85,8 @@ targets:
         # designated requirement. "Sign to Run Locally" changes that identity
         # after every build and makes macOS prompt again or reject stale grants.
         CODE_SIGN_STYLE: Automatic
-        # Set DEVELOPMENT_TEAM locally when signing for a physical device.
+        # Config/Signing.xcconfig optionally includes the ignored local
+        # .steno-signing.xcconfig when a stable development identity is wanted.
         MACOSX_DEPLOYMENT_TARGET: "26.0"
         GENERATE_INFOPLIST_FILE: false
   StenoTests:
@@ -81,6 +98,7 @@ targets:
       - target: Steno
     settings:
       base:
+        ARCHS: arm64
         PRODUCT_BUNDLE_IDENTIFIER: org.steno.StenoTests
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete

@@ -15,12 +15,29 @@ public enum ModelSource: String, Sendable, Equatable, CaseIterable {
     }
 }
 
+public struct ModelBundleID: RawRepresentable, Codable, Hashable, Sendable {
+    public let rawValue: String
+    public init(rawValue: String) { self.rawValue = rawValue }
+
+    public static let legacy = Self(rawValue: "legacy.unspecified")
+    public static let appleSpeech = Self(rawValue: "apple.transcription-language")
+    public static let speakerSeparation = Self(rawValue: "fluidaudio.speaker-separation")
+    public static let parakeetTDTv3 = Self(rawValue: "fluidaudio.parakeet-tdt-v3")
+}
+
 public struct ModelBundleDescription: Sendable, Equatable {
+    public let id: ModelBundleID
     public let title: String
     public let source: ModelSource
     public let approximateBytes: Int
 
-    public init(title: String, source: ModelSource, approximateBytes: Int) {
+    public init(
+        id: ModelBundleID = .legacy,
+        title: String,
+        source: ModelSource,
+        approximateBytes: Int
+    ) {
+        self.id = id
         self.title = title
         self.source = source
         self.approximateBytes = approximateBytes

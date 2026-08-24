@@ -17,7 +17,17 @@ struct SpeakerPresentationTests {
         )
 
         #expect(mic.label == "Speaker 1 (microphone)")
+        #expect(mic.labelKind == .generic(
+            number: 1,
+            identifier: "SPEAKER_0",
+            source: .microphone
+        ))
         #expect(system.label == "Speaker 1 (system)")
+        #expect(system.labelKind == .generic(
+            number: 1,
+            identifier: "SPEAKER_0",
+            source: .system
+        ))
     }
 
     @Test func trackKindAliasesKeepTheirChannelWithoutReview() {
@@ -91,7 +101,7 @@ struct SpeakerPresentationTests {
     @Test func ambiguousBareClusterDoesNotBorrowAnotherChannelsIdentity() {
         let meetingID = MeetingID()
         let runID = RunID()
-        let person = Person(displayName: "Grace")
+        let person = Person(displayName: "Anna")
         let mic = cluster(
             meetingID: meetingID,
             runID: runID,
@@ -124,7 +134,7 @@ struct SpeakerPresentationTests {
     @Test func publicConfirmedLookupsRejectAmbiguousBareCluster() {
         let meetingID = MeetingID()
         let runID = RunID()
-        let person = Person(displayName: "Grace")
+        let person = Person(displayName: "Anna")
         let mic = cluster(
             meetingID: meetingID,
             runID: runID,
@@ -155,7 +165,7 @@ struct SpeakerPresentationTests {
 
     @Test func confirmedPersonUsesPersonMarker() {
         let runID = RunID()
-        let person = Person(displayName: "Grace")
+        let person = Person(displayName: "Anna")
         let reviewed = cluster(
             runID: runID,
             channel: MediaAsset.Kind.micTrack.rawValue,
@@ -169,14 +179,14 @@ struct SpeakerPresentationTests {
             review: review
         )
 
-        #expect(result.label == "Grace")
+        #expect(result.label == "Anna")
         #expect(result.marker == .person(person.id))
         #expect(result.channel == MediaAsset.Kind.micTrack.rawValue)
     }
 
     @Test func stalePersonKeepsQuestionMark() {
         let runID = RunID()
-        let person = Person(displayName: "Grace")
+        let person = Person(displayName: "Anna")
         let reviewed = cluster(
             runID: runID,
             channel: MediaAsset.Kind.systemTrack.rawValue,
@@ -190,7 +200,7 @@ struct SpeakerPresentationTests {
             review: review
         )
 
-        #expect(result.label == "Grace?")
+        #expect(result.label == "Anna?")
         #expect(result.marker == .person(person.id))
     }
 
@@ -224,7 +234,7 @@ struct SpeakerPresentationTests {
             clusterID: "SPEAKER_0",
             status: .confirmed,
             suggestedPersonID: PersonID(),
-            suggestedName: "Grace"
+            suggestedName: "Anna"
         )
         let review = review(
             runID: runID,
@@ -234,13 +244,13 @@ struct SpeakerPresentationTests {
 
         let result = SpeakerPresentationResolver.presentation(for: reviewed, review: review)
 
-        #expect(result.label == "Probably Grace")
+        #expect(result.label == "Probably Anna")
         #expect(result.marker == .unconfirmedRank(0))
     }
 
     @Test func otherRunStaysGeneric() {
         let currentRunID = RunID()
-        let person = Person(displayName: "Grace")
+        let person = Person(displayName: "Anna")
         let reviewed = cluster(
             runID: currentRunID,
             channel: MediaAsset.Kind.micTrack.rawValue,
@@ -260,7 +270,7 @@ struct SpeakerPresentationTests {
 
     @Test func mergeResolutionKeepsChannel() {
         let runID = RunID()
-        let person = Person(displayName: "Grace")
+        let person = Person(displayName: "Anna")
         let micPrimary = cluster(
             runID: runID,
             channel: MediaAsset.Kind.micTrack.rawValue,
@@ -299,7 +309,7 @@ struct SpeakerPresentationTests {
             review: review
         )
 
-        #expect(mic.label == "Grace")
+        #expect(mic.label == "Anna")
         #expect(mic.marker == .person(person.id))
         #expect(system.label == "Speaker 1 (system)")
         #expect(system.marker == .unconfirmedRank(1))
@@ -359,19 +369,21 @@ struct SpeakerPresentationTests {
         )
 
         #expect(confirmed.label == "Ada")
+        #expect(confirmed.labelKind == .verbatim)
         #expect(confirmed.marker == nil)
         #expect(
             confirmed.originCue
                 == "Imported text label - not a locally confirmed identity"
         )
         #expect(unconfirmed.label == "Unknown speaker")
+        #expect(unconfirmed.labelKind == .unknown)
         #expect(unconfirmed.marker == nil)
         #expect(unconfirmed.originCue == confirmed.originCue)
     }
 
     @Test func mixedClusterNeverBecomesAConfirmedPersonOrParticipant() {
         let runID = RunID()
-        let person = Person(displayName: "Grace")
+        let person = Person(displayName: "Anna")
         let mixed = cluster(
             runID: runID,
             channel: MediaAsset.Kind.micTrack.rawValue,

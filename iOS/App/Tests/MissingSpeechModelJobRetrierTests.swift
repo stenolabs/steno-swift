@@ -1,6 +1,7 @@
 import Foundation
 import StenoDomain
 import StenoLibrary
+import StenoPipeline
 import StenoTranscription
 import Testing
 @testable import Steno

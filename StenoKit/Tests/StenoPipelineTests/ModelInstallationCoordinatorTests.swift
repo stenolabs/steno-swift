@@ -60,19 +60,46 @@ struct ModelInstallationCoordinatorTests {
         let readiness = await coordinator.readiness(for: [Locale(identifier: "de-DE")])
         #expect(!readiness.isReady(for: Locale(identifier: "de-DE")))
     }
+
+    @Test("optional bundles do not change baseline readiness or installation")
+    func optionalBundlesAreExplicit() async throws {
+        let required = CountingInstaller(
+            id: .appleSpeech,
+            readyLocales: [Locale(identifier: "de-DE")]
+        )
+        let optional = CountingInstaller(id: .parakeetTDTv3, readyLocales: [])
+        let coordinator = ModelInstallationCoordinator(installers: [required, optional])
+        let locale = Locale(identifier: "de-DE")
+
+        let baseline = await coordinator.readiness(
+            for: [locale],
+            bundleIDs: [.appleSpeech]
+        )
+        #expect(baseline.isReady(for: locale))
+
+        try await coordinator.install(
+            bundleIDs: [.parakeetTDTv3],
+            for: locale,
+            consentGranted: true
+        ) { _ in }
+        #expect(await required.installCount == 0)
+        #expect(await optional.installCount == 1)
+    }
 }
 
 actor CountingInstaller: ModelInstalling {
-    nonisolated let bundleDescription = ModelBundleDescription(
-        title: "Test bundle",
-        source: .huggingFace,
-        approximateBytes: 1
-    )
+    nonisolated let bundleDescription: ModelBundleDescription
     private var ready: Set<String>
     private(set) var installCount = 0
     private(set) var cancelCount = 0
 
-    init(readyLocales: [Locale]) {
+    init(id: ModelBundleID = .legacy, readyLocales: [Locale]) {
+        bundleDescription = ModelBundleDescription(
+            id: id,
+            title: "Test bundle",
+            source: .huggingFace,
+            approximateBytes: 1
+        )
         ready = Set(readyLocales.map(\.identifier))
     }
 

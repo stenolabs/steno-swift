@@ -44,6 +44,7 @@ struct IdentityInvariantTests {
         let original = IdentityReviewState(
             meetingID: meetingID,
             currentRunID: runID,
+            voiceEvidenceMutationPolicy: .allowed,
             clusters: [cluster],
             persons: [knownPerson]
         )
@@ -60,6 +61,134 @@ struct IdentityInvariantTests {
         #expect(original.persons[0].prototypes.isEmpty)
         #expect(person(knownPerson.id, in: result.state)?.prototypes.count == 1)
         #expect(result.status == .confirmed)
+    }
+
+    @Test("demo policy forbids every voice-evidence mutation before state changes")
+    func forbiddenEvidencePolicyFailsClosed() throws {
+        let meetingID = MeetingID()
+        let runID = RunID()
+        let adaID = PersonID()
+        let graceID = PersonID()
+        let cluster = makeCluster(
+            meetingID: meetingID,
+            runID: runID,
+            clusterID: "A"
+        )
+        let prototype = SpeakerPrototype(
+            personID: adaID,
+            embedding: cluster.embedding,
+            recordingType: cluster.recordingType,
+            channel: cluster.channel,
+            meetingID: meetingID,
+            runID: runID,
+            clusterID: cluster.clusterID,
+            speechDurationSeconds: cluster.speechDurationSeconds,
+            segmentCount: cluster.segmentCount,
+            source: .userConfirmed
+        )
+        let negative = HardNegative(
+            personID: graceID,
+            embedding: cluster.embedding,
+            recordingType: cluster.recordingType,
+            channel: cluster.channel,
+            meetingID: meetingID,
+            runID: runID,
+            clusterID: cluster.clusterID,
+            speechDurationSeconds: cluster.speechDurationSeconds,
+            segmentCount: cluster.segmentCount,
+            source: .userConfirmed
+        )
+        let original = IdentityReviewState(
+            meetingID: meetingID,
+            currentRunID: runID,
+            voiceEvidenceMutationPolicy: .forbidden,
+            clusters: [cluster],
+            persons: [
+                Person(id: adaID, displayName: "Ada", prototypes: [prototype]),
+                Person(id: graceID, displayName: "Grace", hardNegatives: [negative]),
+            ],
+            participantIDs: [adaID]
+        )
+        let originalBytes = try reviewStateBytes(original)
+
+        // IdentityReviewState has value semantics. These throwing checks prove
+        // that no changed state escapes and that the caller's value stays
+        // byte-identical, but they cannot inspect a function-local copy that
+        // was mutated and then discarded before throwing. The successful
+        // keepGeneric path below exposes its returned copy, while controller
+        // tests separately bind all persisted identity evidence and metadata.
+
+        #expect(throws: IdentityReviewError.voiceEvidenceForbidden) {
+            _ = try engine.confirm(
+                clusterID: cluster.clusterID,
+                channel: cluster.channel,
+                runID: runID,
+                as: graceID,
+                in: original
+            )
+        }
+        #expect(try reviewStateBytes(original) == originalBytes)
+
+        #expect(throws: IdentityReviewError.voiceEvidenceForbidden) {
+            _ = try engine.reassign(
+                clusterID: cluster.clusterID,
+                channel: cluster.channel,
+                runID: runID,
+                to: graceID,
+                in: original
+            )
+        }
+        #expect(try reviewStateBytes(original) == originalBytes)
+
+        #expect(throws: IdentityReviewError.voiceEvidenceForbidden) {
+            _ = try engine.markMultiple(
+                clusterID: cluster.clusterID,
+                channel: cluster.channel,
+                runID: runID,
+                in: original
+            )
+        }
+        #expect(try reviewStateBytes(original) == originalBytes)
+
+        #expect(throws: IdentityReviewError.voiceEvidenceForbidden) {
+            _ = try engine.resetToGeneric(
+                clusterID: cluster.clusterID,
+                channel: cluster.channel,
+                runID: runID,
+                in: original
+            )
+        }
+        #expect(try reviewStateBytes(original) == originalBytes)
+
+        let evidenceFree = IdentityReviewState(
+            meetingID: meetingID,
+            currentRunID: runID,
+            voiceEvidenceMutationPolicy: .forbidden,
+            clusters: [cluster],
+            persons: original.persons,
+            participantIDs: original.participantIDs
+        )
+        #expect(!evidenceFree.persons.flatMap(\.prototypes).isEmpty)
+        #expect(!evidenceFree.persons.flatMap(\.hardNegatives).isEmpty)
+        let generic = try engine.keepGeneric(
+            clusterID: cluster.clusterID,
+            channel: cluster.channel,
+            runID: runID,
+            in: evidenceFree
+        )
+
+        #expect(generic.status == .generic)
+        #expect(generic.state.clusters[0].reviewState == .generic)
+        #expect(generic.state.persons == evidenceFree.persons)
+        #expect(
+            generic.state.persons.flatMap(\.prototypes)
+                == evidenceFree.persons.flatMap(\.prototypes)
+        )
+        #expect(
+            generic.state.persons.flatMap(\.hardNegatives)
+                == evidenceFree.persons.flatMap(\.hardNegatives)
+        )
+        #expect(generic.state.participantIDs == evidenceFree.participantIDs)
     }
 
     @Test("Invariant 03: same-context prototypes win and scoring uses minimum distance, never an average")
@@ -265,8 +394,8 @@ struct IdentityInvariantTests {
         )
     }
 
-    @Test("Invariant 09: fragment merge is transitive, duration-weighted, normalized and keeps the strongest id")
-    func unionFindMerge() throws {
+    @Test("Invariant 09: complete linkage rejects a transitive bridge between distant fragments")
+    func completeLinkageMerge() throws {
         let meetingID = MeetingID()
         let runID = RunID()
         let clusters = [
@@ -274,6 +403,41 @@ struct IdentityInvariantTests {
             makeCluster(meetingID: meetingID, runID: runID, clusterID: "B", distance: 0.087, duration: 30),
             makeCluster(meetingID: meetingID, runID: runID, clusterID: "C", distance: 0.331, duration: 20),
         ]
+
+        #expect(try #require(cosineDistance(clusters[0].embedding, clusters[1].embedding)) <= 0.10)
+        #expect(try #require(cosineDistance(clusters[1].embedding, clusters[2].embedding)) <= 0.10)
+        #expect(try #require(cosineDistance(clusters[0].embedding, clusters[2].embedding)) > 0.10)
+
+        let merge = engine.mergeSameChannelFragments(clusters)
+        let merged = try #require(merge.clusters.first { $0.clusterID == "B" })
+
+        #expect(merge.clusters.count == 2)
+        #expect(merged.clusterID == "B")
+        #expect(merged.mergedFrom == ["A"])
+        #expect(merged.speechDurationSeconds == 40)
+        #expect(abs(merged.embedding.reduce(0) { $0 + $1 * $1 } - 1) < 0.000_001)
+        #expect(merge.primaryKey(for: clusters[0])?.clusterID == "B")
+        #expect(merge.primaryKey(for: clusters[2])?.clusterID == "C")
+    }
+
+    // Die Gegenprobe zur vorigen Invariante. Complete Linkage darf nur die
+    // Verkettung ueber eine Bruecke verhindern, nicht das Verschmelzen echter
+    // Fragmente einer Stimme: liegen alle drei paarweise unter dem Grenzwert,
+    // muss genau ein Cluster herauskommen. Ohne diesen Test wuerde eine zu
+    // strenge Pruefung unbemerkt jede Verschmelzung verhindern.
+    @Test("Invariant 09b: fragments within the threshold still merge, duration-weighted and normalized")
+    func completeLinkageStillMergesTrueFragments() throws {
+        let meetingID = MeetingID()
+        let runID = RunID()
+        let clusters = [
+            makeCluster(meetingID: meetingID, runID: runID, clusterID: "A", distance: 0, duration: 10),
+            makeCluster(meetingID: meetingID, runID: runID, clusterID: "B", distance: 0.02, duration: 30),
+            makeCluster(meetingID: meetingID, runID: runID, clusterID: "C", distance: 0.045, duration: 20),
+        ]
+
+        #expect(try #require(cosineDistance(clusters[0].embedding, clusters[1].embedding)) <= 0.10)
+        #expect(try #require(cosineDistance(clusters[1].embedding, clusters[2].embedding)) <= 0.10)
+        #expect(try #require(cosineDistance(clusters[0].embedding, clusters[2].embedding)) <= 0.10)
 
         let merge = engine.mergeSameChannelFragments(clusters)
         let merged = try #require(merge.clusters.first)
@@ -284,6 +448,7 @@ struct IdentityInvariantTests {
         #expect(merged.speechDurationSeconds == 60)
         #expect(abs(merged.embedding.reduce(0) { $0 + $1 * $1 } - 1) < 0.000_001)
         #expect(merge.primaryKey(for: clusters[0])?.clusterID == "B")
+        #expect(merge.primaryKey(for: clusters[2])?.clusterID == "B")
     }
 
     @Test("Invariant 10: a mixed fragment contaminates the merge and the whole cluster has no candidates")
@@ -316,6 +481,7 @@ struct IdentityInvariantTests {
         var state = IdentityReviewState(
             meetingID: meetingID,
             currentRunID: runID,
+            voiceEvidenceMutationPolicy: .allowed,
             clusters: [
                 makeCluster(meetingID: meetingID, runID: runID, channel: "mic", clusterID: "SPEAKER_0"),
                 makeCluster(meetingID: meetingID, runID: runID, channel: "system", clusterID: "SPEAKER_0", distance: 1),
@@ -349,6 +515,7 @@ struct IdentityInvariantTests {
         let state = IdentityReviewState(
             meetingID: meetingID,
             currentRunID: currentRunID,
+            voiceEvidenceMutationPolicy: .allowed,
             clusters: [currentCluster],
             persons: [ada],
             participantIDs: [ada.id]
@@ -388,6 +555,7 @@ struct IdentityInvariantTests {
         let state = IdentityReviewState(
             meetingID: meetingID,
             currentRunID: runID,
+            voiceEvidenceMutationPolicy: .allowed,
             clusters: [selfCluster],
             persons: [ada]
         )
@@ -424,4 +592,31 @@ struct IdentityInvariantTests {
         #expect(result.candidates.first?.confirmedMeetingCount == 0)
         #expect(result.status == .possible)
     }
+}
+
+private struct ReviewStateSnapshot: Encodable {
+    let meetingID: MeetingID
+    let currentRunID: RunID
+    let clusters: [IdentityCluster]
+    let persons: [Person]
+    let participantIDs: [PersonID]
+    let voiceEvidenceMutationPolicy: String
+}
+
+private func reviewStateBytes(_ state: IdentityReviewState) throws -> Data {
+    let policy = switch state.voiceEvidenceMutationPolicy {
+    case .allowed: "allowed"
+    case .forbidden: "forbidden"
+    }
+    let snapshot = ReviewStateSnapshot(
+        meetingID: state.meetingID,
+        currentRunID: state.currentRunID,
+        clusters: state.clusters,
+        persons: state.persons,
+        participantIDs: state.participantIDs,
+        voiceEvidenceMutationPolicy: policy
+    )
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    return try encoder.encode(snapshot)
 }

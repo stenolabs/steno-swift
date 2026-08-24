@@ -35,7 +35,10 @@ struct LevelMeter: View {
 
             if showsCaption {
                 HStack {
-                    Text(caption)
+                    Text(RecordingAccessibilityPresentation.microphoneLevelCaption(
+                        for: level,
+                        isActive: isActive
+                    ))
                     Spacer()
                     if isActive && level.isClipping {
                         Text("clipping").foregroundStyle(.red)
@@ -45,12 +48,13 @@ struct LevelMeter: View {
                 .foregroundStyle(.secondary)
             }
         }
-    }
-
-    private var caption: String {
-        guard isActive else { return "idle" }
-        return level.average <= AudioLevel.floor
-            ? "silence"
-            : String(format: "%.0f dBFS, peak %.0f", level.average, level.peak)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(RecordingAccessibilityPresentation.microphoneLevelLabel))
+        .accessibilityValue(Text(
+            RecordingAccessibilityPresentation.microphoneLevelValue(
+                for: level,
+                isActive: isActive
+            )
+        ))
     }
 }

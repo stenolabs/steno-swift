@@ -1,4 +1,5 @@
 import Foundation
+import StenoDomain
 import Testing
 @testable import StenoIntelligence
 
@@ -56,6 +57,54 @@ struct TextModelEndpointPolicyTests {
             #expect(throws: TextModelEndpointPolicyError.self) {
                 try policy(url)
             }
+        }
+    }
+
+    /// Ollama ueber seine OpenAI-Schicht anzusprechen kostet zwei Dinge, die
+    /// der eigene Dialekt kann: den Denkmodus abschalten und die
+    /// Kontextgroesse setzen. Gemessen an gemma4:12b war das der Unterschied
+    /// zwischen einem Ergebnis in 149 Token und gar keinem.
+    @Test("an Ollama port suggests the native dialect and drops the /v1 suffix")
+    func ollamaPortSuggestsNativeDialect() throws {
+        for value in [
+            "http://192.168.1.10:11434/v1",
+            "http://192.168.1.10:11434/v1/",
+            "http://192.168.1.10:11434",
+        ] {
+            let url = try #require(URL(string: value))
+            let suggestion = try #require(TextModelEndpointPolicy.nativeDialectSuggestion(
+                baseURL: url,
+                dialect: .openAICompatible
+            ))
+            #expect(suggestion.dialect == .ollama)
+            #expect(suggestion.baseURL.absoluteString == "http://192.168.1.10:11434")
+        }
+    }
+
+    @Test("no suggestion when the endpoint already uses the native dialect")
+    func nativeDialectNeedsNoSuggestion() throws {
+        let url = try #require(URL(string: "http://192.168.1.10:11434"))
+        #expect(TextModelEndpointPolicy.nativeDialectSuggestion(
+            baseURL: url,
+            dialect: .ollama
+        ) == nil)
+    }
+
+    /// Der Port ist das einzige Indiz, und es ist nur ein Indiz - deshalb
+    /// bleibt es ein Vorschlag. Ohne ihn wird nichts vorgeschlagen.
+    @Test("no suggestion for other ports or dialects")
+    func otherEndpointsGetNoSuggestion() throws {
+        for (value, dialect) in [
+            ("http://localhost:8080/v1", TextModelAPIDialect.openAICompatible),
+            ("http://localhost:1234/v1", TextModelAPIDialect.lmStudio),
+            ("https://api.openai.com/v1", TextModelAPIDialect.openAI),
+            ("https://models.example.com:11434/v1", TextModelAPIDialect.openAI),
+        ] {
+            let url = try #require(URL(string: value))
+            #expect(TextModelEndpointPolicy.nativeDialectSuggestion(
+                baseURL: url,
+                dialect: dialect
+            ) == nil)
         }
     }
 

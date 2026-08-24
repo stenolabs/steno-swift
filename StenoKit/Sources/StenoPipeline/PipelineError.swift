@@ -22,6 +22,7 @@ public enum PipelineError: Error, Equatable, Sendable {
     case textModelUnavailable(String)
     case templateRenderInputChanged
     case templateRenderPinsRequired
+    case textModelEndpointConfigurationIncomplete(String)
     case invalidDownstreamJob(JobID)
     case invalidRunArtifact(RunID)
     case corruptRunArtifact(RunID)
@@ -64,7 +65,7 @@ extension PipelineError: LocalizedError {
         case .unknownTemplate(let templateID):
             "Template \(templateID) is not available."
         case .unknownTextModelEndpoint:
-            "Der ausgewählte Textmodell-Endpunkt ist nicht mehr verfügbar."
+            "The selected text-model endpoint is no longer available."
         case .textModelEndpointConfigurationChanged:
             "The selected text-model endpoint changed after this report was queued. Create the report again."
         case .textModelUnavailable(let message):
@@ -73,6 +74,8 @@ extension PipelineError: LocalizedError {
             "The report input changed after it was queued. Create the report again."
         case .templateRenderPinsRequired:
             "This external report predates the required input and endpoint safeguards. Review the current report preview and create the report again."
+        case .textModelEndpointConfigurationIncomplete(let endpointName):
+            "The text-model endpoint \u{201C}\(endpointName)\u{201D} has an incomplete configuration. Open Language Models in Settings and save the endpoint."
         case .invalidDownstreamJob(let jobID):
             "Downstream pipeline job \(jobID) conflicts with its deterministic provenance."
         case .invalidRunArtifact(let runID):

@@ -1,18 +1,43 @@
 import Foundation
 
+public struct DemoProvenance: Codable, Equatable, Hashable, Sendable {
+    public let datasetID: String
+    public let datasetVersion: String
+    public let itemID: String
+    /// Lokale Identität genau einer sichtbaren Demo-Installation. Optional,
+    /// damit ältere Meeting-Dokumente und gebündelte Transcript-Provenienz
+    /// unverändert lesbar bleiben.
+    public let installationGenerationID: MeetingTransferGenerationID?
+
+    public init(
+        datasetID: String,
+        datasetVersion: String,
+        itemID: String,
+        installationGenerationID: MeetingTransferGenerationID? = nil
+    ) {
+        self.datasetID = datasetID
+        self.datasetVersion = datasetVersion
+        self.itemID = itemID
+        self.installationGenerationID = installationGenerationID
+    }
+}
+
 public struct MeetingMetadata: Codable, Equatable, Sendable {
     public let legacyProvenanceKey: String?
     public let legacyFolders: [String]
     public let transferReceipt: MeetingTransferReceipt?
+    public let demoProvenance: DemoProvenance?
 
     public init(
         legacyProvenanceKey: String? = nil,
         legacyFolders: [String] = [],
-        transferReceipt: MeetingTransferReceipt? = nil
+        transferReceipt: MeetingTransferReceipt? = nil,
+        demoProvenance: DemoProvenance? = nil
     ) {
         self.legacyProvenanceKey = legacyProvenanceKey
         self.legacyFolders = legacyFolders
         self.transferReceipt = transferReceipt
+        self.demoProvenance = demoProvenance
     }
 }
 
@@ -21,7 +46,7 @@ public struct Meeting: Codable, Equatable, Sendable {
 
     public let schemaVersion: Int
     public let id: MeetingID
-    public let title: String
+    public var title: String
     public let createdAt: Date
     public var status: Status
     /// Personen mit belegtem Redebeitrag in diesem Meeting: gepflegt von der
@@ -46,6 +71,21 @@ public struct Meeting: Codable, Equatable, Sendable {
     /// eine nur aus Geraeteeinstellungen abgeleitete Sprache nicht als
     /// ausdrueckliche Nutzerwahl gespeichert.
     public let sourceLocale: MeetingSourceLocale?
+    /// Die ausdrücklich gewählten ASR-Provider für dieses Meeting.
+    /// Nil bezeichnet ein ungepinntes (insbesondere ein altes) Meeting.
+    public var transcriptionPlan: TranscriptionPlan?
+
+    public var isDemo: Bool {
+        metadata?.demoProvenance != nil
+    }
+
+    /// Bindet jede produktive Verarbeitung an genau die sichtbare Meeting-
+    /// Generation. Demo-Identität hat Vorrang, falls alte/ungewöhnliche
+    /// Metadaten zusätzlich einen Transferbeleg enthalten.
+    public var processingGenerationID: MeetingTransferGenerationID? {
+        metadata?.demoProvenance?.installationGenerationID
+            ?? metadata?.transferReceipt?.importGenerationID
+    }
 
     public init(
         schemaVersion: Int = Self.currentSchemaVersion,
@@ -57,7 +97,8 @@ public struct Meeting: Codable, Equatable, Sendable {
         additionalParticipantIDs: [PersonID] = [],
         folderID: FolderID? = nil,
         metadata: MeetingMetadata? = nil,
-        sourceLocale: MeetingSourceLocale? = nil
+        sourceLocale: MeetingSourceLocale? = nil,
+        transcriptionPlan: TranscriptionPlan? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.id = id
@@ -69,6 +110,7 @@ public struct Meeting: Codable, Equatable, Sendable {
         self.folderID = folderID
         self.metadata = metadata
         self.sourceLocale = sourceLocale
+        self.transcriptionPlan = transcriptionPlan
     }
 
     public enum Status: String, Codable, Equatable, Sendable {
@@ -94,6 +136,7 @@ public struct Meeting: Codable, Equatable, Sendable {
         case folderID
         case metadata
         case sourceLocale
+        case transcriptionPlan
     }
 
     public init(from decoder: Decoder) throws {
@@ -116,6 +159,10 @@ public struct Meeting: Codable, Equatable, Sendable {
         sourceLocale = try container.decodeIfPresent(
             MeetingSourceLocale.self,
             forKey: .sourceLocale
+        )
+        transcriptionPlan = try container.decodeIfPresent(
+            TranscriptionPlan.self,
+            forKey: .transcriptionPlan
         )
     }
 }

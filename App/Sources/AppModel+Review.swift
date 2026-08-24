@@ -19,11 +19,39 @@ enum SpeakerPlaybackAssetSelection {
     }
 }
 
+enum TemporaryPlaybackFile {
+    static func retainingOnSuccess<Result>(
+        at url: URL,
+        _ operation: () throws -> Result
+    ) rethrows -> Result {
+        do {
+            return try operation()
+        } catch {
+            try? FileManager.default.removeItem(at: url)
+            throw error
+        }
+    }
+}
+
 private enum AppModelReportPreflightError: LocalizedError {
     case runtimeUnavailable
 
     var errorDescription: String? {
-        "The library is not ready yet."
+        String(localized: "The library is not ready yet.")
+    }
+}
+
+private struct DemoDataObservingNotesPersistence: MeetingNotesPersistence {
+    let store: MeetingNotesStore
+    let didPersist: @MainActor @Sendable (MeetingID) async -> Void
+
+    func notes(_ meetingID: MeetingID) async throws -> String? {
+        try await store.notes(meetingID)
+    }
+
+    func setNotes(_ meetingID: MeetingID, to notes: String?) async throws {
+        try await store.setNotes(meetingID, to: notes)
+        await didPersist(meetingID)
     }
 }
 
@@ -94,7 +122,12 @@ extension AppModel {
             return session
         }
         guard let runtime else { return nil }
-        let store = MeetingNotesStore(layout: runtime.library.layout)
+        let store = DemoDataObservingNotesPersistence(
+            store: MeetingNotesStore(layout: runtime.library.layout),
+            didPersist: { [weak self] meetingID in
+                await self?.demoDataMeetingContentDidChange(meetingID)
+            }
+        )
         let session = MeetingNotesEditingSession(meetingID: meetingID, store: store)
         notesSessions[meetingID] = session
         await session.load()
@@ -149,7 +182,7 @@ extension AppModel {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .none
-        return "Notes \(formatter.string(from: Date()))"
+        return String(localized: "Notes \(formatter.string(from: Date()))")
     }
 
     /// Ergänzt eine Person als Anwesende ohne Redebeitrag. `name` legt bei
@@ -182,7 +215,7 @@ extension AppModel {
                 participantIDs: meeting.additionalParticipantIDs + [resolvedID]
             )
         } catch let LibraryError.duplicatePersonName(name) {
-            reviewError = "A person named \(name) already exists."
+            reviewError = String(localized: "A person named \(name) already exists.")
         } catch {
             reviewError = AppModel.message("The participant could not be added.", error)
         }
@@ -213,44 +246,70 @@ extension AppModel {
         guard let runtime else { return nil }
         do {
             reviewError = nil
-            return try await MeetingReviewController(library: runtime.library)
+            let updated = try await MeetingReviewController(library: runtime.library)
                 .perform(action, on: cluster, data: data, meetingID: meetingID)
+            await demoDataDidPersistSpeakerReview(for: meetingID)
+            return updated
         } catch MeetingReviewController.ReviewActionError.stale {
-            reviewError = "The review state belongs to a superseded run; the view has been reloaded."
+            reviewError = String(localized: "The review state changed. The view has been reloaded; please try again.")
             return await loadReviewData(meetingID: meetingID)
+        } catch MeetingReviewController.ReviewActionError
+            .demoMeetingCannotCreateVoiceEvidence {
+            reviewError = Self.demoVoiceEvidenceRestrictionMessage
+            return nil
         } catch let LibraryError.duplicatePersonName(name) {
-            reviewError = "A person named \(name) already exists."
+            reviewError = String(localized: "A person named \(name) already exists.")
             return nil
         } catch let error as IdentityReviewError {
-            reviewError = Self.message(for: error)
+            reviewError = Self.reviewMessage(for: error)
             return nil
         } catch {
-            reviewError = "Assigning the speaker failed: \(error.localizedDescription)"
+            reviewError = String(localized: "Assigning the speaker failed: \(error.localizedDescription)")
             return nil
         }
     }
 
     /// Rohe Fehlernamen gehören nicht in die Oberfläche.
-    private static func message(for error: IdentityReviewError) -> String {
+    static func reviewMessage(for error: IdentityReviewError) -> String {
         switch error {
         case .clusterNotFound:
-            "This speaker belongs to a superseded run. Please reload the view."
+            String(localized: "This speaker belongs to a superseded run. Please reload the view.")
+        case .ambiguousClusterAlias:
+            String(localized: "This speaker cannot be changed because its cluster provenance is ambiguous.")
         case .personNotFound:
-            "The selected person no longer exists."
+            String(localized: "The selected person no longer exists.")
         case .mixedClusterCannotBeNamed:
-            "This section is marked as \u{201C}multiple people\u{201D} and cannot be assigned to one person."
+            String(localized: "This section is marked as \u{201C}multiple people\u{201D} and cannot be assigned to one person.")
         case .selfClusterCannotBeNamed:
-            "Your own microphone track is not named as a person."
+            String(localized: "Your own microphone track is not named as a person.")
         case .noAssignmentToReassign:
-            "There is no assignment here that could be changed."
+            String(localized: "There is no assignment here that could be changed.")
+        case .voiceEvidenceForbidden:
+            demoVoiceEvidenceRestrictionMessage
         }
     }
 
+    private static let demoVoiceEvidenceRestrictionMessage = String(localized: "Demo meetings cannot create or change real voice profiles.")
+
     // MARK: - Hörproben
 
+    func resolvePlaybackAsset(
+        from assets: [MediaAsset],
+        channel: String
+    ) -> MediaAsset? {
+        guard let asset = SpeakerPlaybackAssetSelection.asset(
+            from: assets,
+            channel: channel
+        ) else {
+            report("No original track found for the voice sample.")
+            return nil
+        }
+        return asset
+    }
+
     /// Spielt einen Ausschnitt der Originalspur ab (Toggle). Text und Audio
-    /// stammen aus demselben Turn; abgespielt wird direkt aus dem
-    /// unveränderten Original, nichts wird extrahiert oder kopiert.
+    /// stammen aus demselben Turn. Das Original bleibt unveraendert; fuer die
+    /// Wiedergabe entsteht eine kurzlebige Kopie im Temp-Verzeichnis.
     func toggleSample(_ sample: SpeakerSample, meetingID: MeetingID) async {
         if playingSampleID == sample.id {
             stopSamplePlayback()
@@ -261,13 +320,10 @@ extension AppModel {
         guard let runtime else { return }
         do {
             let assets = try await runtime.library.listMediaAssets(meetingID: meetingID)
-            guard let asset = SpeakerPlaybackAssetSelection.asset(
+            guard let asset = resolvePlaybackAsset(
                 from: assets,
                 channel: sample.channel
-            ) else {
-                reviewError = "No original track found for the voice sample."
-                return
-            }
+            ) else { return }
             let url = await runtime.library.layout.mediaFile(
                 meetingID,
                 fileName: asset.fileName
@@ -283,10 +339,14 @@ extension AppModel {
                 // Nulllange Turns (Altimporte) bekommen eine hoerbare Mindestlaenge.
                 duration: max(0.5, sample.duration)
             )
-            let player = try AVAudioPlayer(contentsOf: clipURL)
+            let player = try TemporaryPlaybackFile.retainingOnSuccess(
+                at: clipURL
+            ) {
+                try AVAudioPlayer(contentsOf: clipURL)
+            }
             guard player.play() else {
                 try? FileManager.default.removeItem(at: clipURL)
-                reviewError = "Playback could not be started."
+                report("Playback could not be started.")
                 return
             }
             samplePlayer = player
@@ -298,7 +358,7 @@ extension AppModel {
                 self?.stopSamplePlayback()
             }
         } catch {
-            reviewError = "Playback failed: \(error.localizedDescription)"
+            report("Playback failed: \(error.localizedDescription)")
         }
     }
 
@@ -362,14 +422,16 @@ extension AppModel {
 
         let clipURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("steno-sample-\(UUID().uuidString).caf")
-        let output = try AVAudioFile(
-            forWriting: clipURL,
-            settings: format.settings,
-            commonFormat: format.commonFormat,
-            interleaved: format.isInterleaved
-        )
-        try output.write(from: buffer)
-        return clipURL
+        return try TemporaryPlaybackFile.retainingOnSuccess(at: clipURL) {
+            let output = try AVAudioFile(
+                forWriting: clipURL,
+                settings: format.settings,
+                commonFormat: format.commonFormat,
+                interleaved: format.isInterleaved
+            )
+            try output.write(from: buffer)
+            return clipURL
+        }
     }
 
     enum SamplePlaybackError: Error {
@@ -381,10 +443,14 @@ extension AppModel {
     func requestDiarization(meetingID: MeetingID) async -> Bool {
         guard let runtime else { return false }
         do {
+            let meeting = try await runtime.library.loadMeeting(meetingID)
             let jobs = try await runtime.jobStore.list().filter {
                 $0.meetingID == meetingID
             }
-            guard !SpeakerProcessingJobSelection.hasActiveJob(in: jobs) else {
+            guard !SpeakerProcessingJobSelection.hasActiveJob(
+                in: jobs,
+                processingGenerationID: meeting.processingGenerationID
+            ) else {
                 return false
             }
             if try await DiarizationRequest.enqueueMissingIdentitySuggestion(
@@ -392,6 +458,7 @@ extension AppModel {
                 jobStore: runtime.jobStore,
                 meetingID: meetingID
             ) {
+                noteJobEnqueued(for: meetingID)
                 return true
             }
             if try await DiarizationRequest.enqueue(
@@ -399,13 +466,19 @@ extension AppModel {
                 jobStore: runtime.jobStore,
                 meetingID: meetingID
             ) {
+                noteJobEnqueued(for: meetingID)
                 return true
             }
-            if let retry = SpeakerProcessingJobSelection.retryJob(in: jobs) {
-                return try await runtime.jobStore.enqueueIfNoEquivalentJob(
+            if let retry = SpeakerProcessingJobSelection.retryJob(
+                in: jobs,
+                processingGenerationID: meeting.processingGenerationID
+            ) {
+                let enqueued = try await runtime.jobStore.enqueueIfNoEquivalentJob(
                     retry,
                     blockingStatuses: [.queued, .running]
                 )
+                if enqueued { noteJobEnqueued(for: meetingID) }
+                return enqueued
             }
             // Importierte Alt-Meetings haben keinen eigenen ASR-Lauf: Ihr
             // Transkript stammt aus der alten App. Die Sprechererkennung
@@ -415,10 +488,12 @@ extension AppModel {
             guard await hasPlayableAudio(meetingID),
                   try await !hasFinalASRRun(meetingID)
             else { return false }
-            return try await runtime.jobStore.enqueueIfNoEquivalentJob(
-                Job(kind: .finalASR, meetingID: meetingID),
+            let enqueued = try await runtime.jobStore.enqueueIfNoEquivalentJob(
+                Job.finalASR(for: meeting),
                 blockingStatuses: [.queued, .running]
             )
+            if enqueued { noteJobEnqueued(for: meetingID) }
+            return enqueued
         } catch {
             reviewError = AppModel.message("Speaker recognition could not be started.", error)
             return false
@@ -444,9 +519,11 @@ extension AppModel {
                 report("This meeting has no original audio to transcribe again.")
                 return false
             }
+            let meeting = try await runtime.library.loadMeeting(meetingID)
             let pending = try await runtime.jobStore.list().contains {
                 $0.meetingID == meetingID
                     && $0.kind == .finalASR
+                    && $0.processingGenerationID == meeting.processingGenerationID
                     && ($0.status == .queued || $0.status == .running)
             }
             guard !pending else {
@@ -454,8 +531,9 @@ extension AppModel {
                 return false
             }
             try await runtime.jobStore.enqueue(
-                Job(kind: .finalASR, meetingID: meetingID)
+                Job.finalASR(for: meeting)
             )
+            noteJobEnqueued(for: meetingID)
             report("Transcribing again. The previous transcript stays available.", isError: false)
             return true
         } catch {
@@ -503,8 +581,19 @@ extension AppModel {
     func reports(for meetingID: MeetingID) async -> [StoredTemplateResult] {
         guard let runtime else { return [] }
         let layout = await runtime.library.layout
-        return (try? TemplateResultStore(layout: layout)
-            .list(meetingID: meetingID)) ?? []
+        do {
+            let listing = try TemplateResultStore(layout: layout)
+                .listWithRepairOutcome(meetingID: meetingID)
+            if listing.didRepair {
+                await demoDataMeetingContentDidChange(meetingID)
+            }
+            return listing.results
+        } catch {
+            // Das Quarantänisieren kann vor einem fehlgeschlagenen
+            // Wiederherstellen bereits den Meeting-Baum verändert haben.
+            await demoDataMeetingContentDidChange(meetingID)
+            return []
+        }
     }
 
     /// Liefert den eingereihten Render samt sichtbarem Endpunkt-Snapshot,

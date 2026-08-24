@@ -23,6 +23,11 @@ public struct TextModelProviderSelection: Equatable, Sendable {
 public typealias TextModelProviderResolver = @Sendable (TextModelProviderSelection) throws
     -> any TextModelProvider
 
+public typealias TranscriptionProviderResolver = @Sendable (
+    TranscriptionProviderID,
+    MediaAsset.Kind
+) throws -> any TranscriptionProvider
+
 enum ImportedPipelineStateCheckpoint: Equatable, Sendable {
     case beforeImportedGenerationValidation(JobID)
     case afterImportedGenerationInputBinding(JobID)
@@ -32,6 +37,18 @@ enum ImportedPipelineStateCheckpoint: Equatable, Sendable {
 
 typealias ImportedPipelineStateAction = @Sendable (
     ImportedPipelineStateCheckpoint
+) throws -> Void
+
+/// Testhaken fuer den Abbruchpfad: laesst Tests einen Persistenzfehler an
+/// einer definierten Stelle einschleusen, statt ihn ueber Dateirechte auf
+/// dem `runsDirectory` zu erzwingen. Ein solcher Zwang ist ein Rennen gegen
+/// den Koordinator, der zu diesem Zeitpunkt schon geschrieben haben kann.
+enum PipelineCancellationPersistenceCheckpoint: Equatable, Sendable {
+    case beforeRemoveTemporaryArtifacts(JobID)
+}
+
+typealias PipelineCancellationPersistenceAction = @Sendable (
+    PipelineCancellationPersistenceCheckpoint
 ) throws -> Void
 
 enum PipelineCompletionPolicy {
@@ -47,6 +64,7 @@ enum PipelineCompletionPolicy {
     ) -> Bool {
         !jobs.contains {
             $0.meetingID == job.meetingID
+                && $0.processingGenerationID == job.processingGenerationID
                 && $0.id != job.id
                 && chainedJobKinds.contains($0.kind)
                 && ($0.status == .queued || $0.status == .running)
@@ -72,7 +90,7 @@ public actor PipelineCoordinator {
 
     private let library: Library
     private let jobStore: JobStore
-    private let transcriptionProviders: [MediaAsset.Kind: any TranscriptionProvider]
+    private let transcriptionProviderResolver: TranscriptionProviderResolver
     private let diarizationProvider: any DiarizationProvider
     private let identityEngine: SpeakerSuggestionEngine
     private let textModelProviderResolver: TextModelProviderResolver
@@ -82,9 +100,12 @@ public actor PipelineCoordinator {
     private let pollInterval: Duration
     private let importedStateAction: ImportedPipelineStateAction
     private let mediaCleanupAction: PipelineMediaCleanupAction
+    private let cancellationPersistenceAction: PipelineCancellationPersistenceAction
+    private let taskExecutorPreference: (any TaskExecutor)?
 
     private var queueTask: Task<Void, Never>?
     private var activeTask: Task<Void, Error>?
+    private var activeClaim: JobExecutionClaim?
     private var activeJobID: JobID?
     private var cancellationRequests: Set<JobID> = []
     private var stopping = false
@@ -96,6 +117,40 @@ public actor PipelineCoordinator {
         case committing
     }
 
+    public init(
+        library: Library,
+        jobStore: JobStore,
+        transcriptionProviderResolver: @escaping TranscriptionProviderResolver,
+        diarizationProvider: any DiarizationProvider = FluidSortformerProvider(),
+        identityEngine: SpeakerSuggestionEngine = SpeakerSuggestionEngine(),
+        textModelProviderResolver: @escaping TextModelProviderResolver = { selection in
+            if let endpointID = selection.endpointID {
+                throw PipelineError.unknownTextModelEndpoint(endpointID)
+            }
+            return FoundationModelsProvider()
+        },
+        locale: Locale,
+        pollInterval: Duration = .milliseconds(25)
+    ) {
+        self.library = library
+        self.jobStore = jobStore
+        self.transcriptionProviderResolver = transcriptionProviderResolver
+        self.diarizationProvider = diarizationProvider
+        self.identityEngine = identityEngine
+        self.textModelProviderResolver = textModelProviderResolver
+        self.locale = locale
+        runStore = RunArtifactStore(layout: library.layout)
+        templateResultStore = TemplateResultStore(layout: library.layout)
+        self.pollInterval = pollInterval
+        importedStateAction = { _ in }
+        mediaCleanupAction = { _ in }
+        cancellationPersistenceAction = { _ in }
+        taskExecutorPreference = nil
+    }
+
+    /// Uebergangspfad fuer bestehende Apple-only Aufrufer. Ein gepinnter
+    /// anderer Provider wird bewusst abgelehnt und niemals still auf Apple
+    /// umgebogen.
     public init(
         library: Library,
         jobStore: JobStore,
@@ -111,9 +166,40 @@ public actor PipelineCoordinator {
         locale: Locale,
         pollInterval: Duration = .milliseconds(25)
     ) {
+        self.init(
+            library: library,
+            jobStore: jobStore,
+            transcriptionProviderResolver: Self.appleOnlyResolver(providers),
+            diarizationProvider: diarizationProvider,
+            identityEngine: identityEngine,
+            textModelProviderResolver: textModelProviderResolver,
+            locale: locale,
+            pollInterval: pollInterval
+        )
+    }
+
+    init(
+        library: Library,
+        jobStore: JobStore,
+        transcriptionProviderResolver: @escaping TranscriptionProviderResolver,
+        diarizationProvider: any DiarizationProvider = FluidSortformerProvider(),
+        identityEngine: SpeakerSuggestionEngine = SpeakerSuggestionEngine(),
+        textModelProviderResolver: @escaping TextModelProviderResolver = { selection in
+            if let endpointID = selection.endpointID {
+                throw PipelineError.unknownTextModelEndpoint(endpointID)
+            }
+            return FoundationModelsProvider()
+        },
+        locale: Locale,
+        pollInterval: Duration = .milliseconds(25),
+        importedStateCheckpoint: @escaping ImportedPipelineStateAction,
+        mediaCleanupCheckpoint: @escaping PipelineMediaCleanupAction = { _ in },
+        cancellationPersistenceCheckpoint: @escaping PipelineCancellationPersistenceAction = { _ in },
+        taskExecutorPreference: (any TaskExecutor)? = nil
+    ) {
         self.library = library
         self.jobStore = jobStore
-        transcriptionProviders = providers
+        self.transcriptionProviderResolver = transcriptionProviderResolver
         self.diarizationProvider = diarizationProvider
         self.identityEngine = identityEngine
         self.textModelProviderResolver = textModelProviderResolver
@@ -121,8 +207,10 @@ public actor PipelineCoordinator {
         runStore = RunArtifactStore(layout: library.layout)
         templateResultStore = TemplateResultStore(layout: library.layout)
         self.pollInterval = pollInterval
-        importedStateAction = { _ in }
-        mediaCleanupAction = { _ in }
+        importedStateAction = importedStateCheckpoint
+        mediaCleanupAction = mediaCleanupCheckpoint
+        cancellationPersistenceAction = cancellationPersistenceCheckpoint
+        self.taskExecutorPreference = taskExecutorPreference
     }
 
     init(
@@ -140,20 +228,38 @@ public actor PipelineCoordinator {
         locale: Locale,
         pollInterval: Duration = .milliseconds(25),
         importedStateCheckpoint: @escaping ImportedPipelineStateAction,
-        mediaCleanupCheckpoint: @escaping PipelineMediaCleanupAction = { _ in }
+        mediaCleanupCheckpoint: @escaping PipelineMediaCleanupAction = { _ in },
+        cancellationPersistenceCheckpoint: @escaping PipelineCancellationPersistenceAction = { _ in },
+        taskExecutorPreference: (any TaskExecutor)? = nil
     ) {
-        self.library = library
-        self.jobStore = jobStore
-        transcriptionProviders = providers
-        self.diarizationProvider = diarizationProvider
-        self.identityEngine = identityEngine
-        self.textModelProviderResolver = textModelProviderResolver
-        self.locale = locale
-        runStore = RunArtifactStore(layout: library.layout)
-        templateResultStore = TemplateResultStore(layout: library.layout)
-        self.pollInterval = pollInterval
-        importedStateAction = importedStateCheckpoint
-        mediaCleanupAction = mediaCleanupCheckpoint
+        self.init(
+            library: library,
+            jobStore: jobStore,
+            transcriptionProviderResolver: Self.appleOnlyResolver(providers),
+            diarizationProvider: diarizationProvider,
+            identityEngine: identityEngine,
+            textModelProviderResolver: textModelProviderResolver,
+            locale: locale,
+            pollInterval: pollInterval,
+            importedStateCheckpoint: importedStateCheckpoint,
+            mediaCleanupCheckpoint: mediaCleanupCheckpoint,
+            cancellationPersistenceCheckpoint: cancellationPersistenceCheckpoint,
+            taskExecutorPreference: taskExecutorPreference
+        )
+    }
+
+    private static func appleOnlyResolver(
+        _ providers: [MediaAsset.Kind: any TranscriptionProvider]
+    ) -> TranscriptionProviderResolver {
+        { providerID, assetKind in
+            guard providerID == .apple else {
+                throw TranscriptionRegistryError.unknownProvider(providerID)
+            }
+            guard let provider = providers[assetKind] else {
+                throw PipelineError.missingProvider(assetKind)
+            }
+            return provider
+        }
     }
 
     public func start() {
@@ -169,7 +275,7 @@ public actor PipelineCoordinator {
             return
         }
         stopping = false
-        queueTask = Task { [weak self] in
+        queueTask = Task(executorPreference: taskExecutorPreference) { [weak self] in
             await self?.consumeQueue()
         }
     }
@@ -180,6 +286,10 @@ public actor PipelineCoordinator {
         activeTask?.cancel()
         _ = await activeTask?.result
         _ = await queueTask?.result
+        if let activeClaim {
+            await jobStore.releaseExecutionLease(activeClaim)
+        }
+        activeClaim = nil
         activeTask = nil
         activeJobID = nil
         activePhase = nil
@@ -187,19 +297,36 @@ public actor PipelineCoordinator {
     }
 
     public func cancel(jobID: JobID) async throws {
-        if activeJobID == jobID {
-            guard activePhase != .committing else {
-                throw PipelineError.cancellationTooLate(jobID)
+        while true {
+            if activeJobID == jobID {
+                guard activePhase != .committing else {
+                    throw PipelineError.cancellationTooLate(jobID)
+                }
+                cancellationRequests.insert(jobID)
+                activeTask?.cancel()
+                while true {
+                    if let runtimeFailure { throw runtimeFailure }
+                    guard try await jobStore.load(jobID).status == .running else {
+                        return
+                    }
+                    guard activeJobID == jobID else {
+                        let failure = PipelineError.persistenceFailure(
+                            "Cancellation handling ended while job \(jobID) remained running."
+                        )
+                        runtimeFailure = failure
+                        throw failure
+                    }
+                    try await Task.sleep(for: pollInterval)
+                }
             }
-            cancellationRequests.insert(jobID)
-            activeTask?.cancel()
-            while try await jobStore.load(jobID).status == .running {
-                try await Task.sleep(for: pollInterval)
+            guard let job = try await jobStore.cancelIfQueuedOrFailed(jobID) else {
+                // A queue claim may have won while this actor was suspended in
+                // JobStore. Yield once so consumeQueue can publish its active
+                // phase, then make the cancellation decision from fresh state.
+                await Task.yield()
+                if activeJobID == jobID { continue }
+                return
             }
-            return
-        }
-        let job = try await jobStore.load(jobID)
-        if job.status == .queued || job.status == .failed {
             do {
                 try withCurrentMeetingGeneration(for: job) { transaction in
                     try runStore.removeTemporaryArtifacts(
@@ -208,14 +335,8 @@ public actor PipelineCoordinator {
                     )
                 }
             } catch PipelineError.importedGenerationChanged {
-                _ = try await jobStore.transition(
-                    job.id,
-                    to: .cancelled,
-                    errorMessage: "Imported meeting generation changed."
-                )
                 return
             }
-            _ = try await jobStore.transition(jobID, to: .cancelled)
             try await markImportedJobNeedsManualRetry(
                 job,
                 reason: "Processing was cancelled."
@@ -223,6 +344,7 @@ public actor PipelineCoordinator {
             if job.kind != .templateRender {
                 try await settleMeetingStatus(after: job, whenNoActiveJobs: .ready)
             }
+            return
         }
     }
 
@@ -241,18 +363,24 @@ public actor PipelineCoordinator {
     private func consumeQueue() async {
         while !Task.isCancelled {
             do {
-                guard let job = try await claimNextJob() else {
+                guard let claim = try await claimNextJob() else {
                     try await Task.sleep(for: pollInterval)
                     continue
                 }
+                activeClaim = claim
+                try Task.checkCancellation()
+                let job = claim.job
                 try importedStateAction(.beforeImportedGenerationValidation(job.id))
                 guard try importedGenerationIsCurrent(job) else {
                     await cancelJobForGenerationChange(job)
+                    activeClaim = nil
                     continue
                 }
                 activeJobID = job.id
                 activePhase = .processing
-                let task = Task { try await self.execute(job) }
+                let task = Task(executorPreference: taskExecutorPreference) {
+                    try await self.execute(job)
+                }
                 activeTask = task
                 do {
                     try await task.value
@@ -262,24 +390,31 @@ public actor PipelineCoordinator {
                 activeTask = nil
                 activeJobID = nil
                 activePhase = nil
+                if !stopping {
+                    activeClaim = nil
+                }
             } catch is CancellationError {
                 break
             } catch {
+                if let activeClaim {
+                    await jobStore.releaseExecutionLease(activeClaim)
+                    self.activeClaim = nil
+                }
                 runtimeFailure = .persistenceFailure(String(describing: error))
                 break
             }
         }
     }
 
-    private func claimNextJob() async throws -> Job? {
+    private func claimNextJob() async throws -> JobExecutionClaim? {
         for kind in [
             Job.Kind.finalASR,
             .diarization,
             .identitySuggestion,
             .templateRender,
         ] {
-            if let job = try await jobStore.claimNext(kind: kind) {
-                return job
+            if let claim = try await jobStore.claimNextWithExecutionLease(kind: kind) {
+                return claim
             }
         }
         return nil
@@ -324,8 +459,8 @@ public actor PipelineCoordinator {
                 guard try !stateStore.requiresFreshImportRetry(
                     job.meetingID,
                     transaction: transaction
-                ), meeting.metadata?.transferReceipt?.importGenerationID
-                    == job.importGenerationID else {
+                ), meeting.processingGenerationID
+                    == job.processingGenerationID else {
                     throw PipelineError.importedGenerationChanged(job.meetingID)
                 }
                 return try body(transaction)
@@ -387,6 +522,7 @@ public actor PipelineCoordinator {
                     transaction: transaction
                 )
             }
+            await library.publishMeetingChange(job.meetingID)
             try await finish(job: job)
             return
         }
@@ -461,6 +597,7 @@ public actor PipelineCoordinator {
                 transaction: transaction
             )
         }
+        await library.publishMeetingChange(job.meetingID)
         try await finish(job: job)
     }
 
@@ -470,10 +607,12 @@ public actor PipelineCoordinator {
               let fingerprint = job.templateRenderInputFingerprint,
               Self.isSHA256Fingerprint(fingerprint),
               let snapshot = job.textModelEndpointSnapshot,
-              snapshot.id == endpointID,
-              snapshot.configurationRevision != nil
+              snapshot.id == endpointID
         else {
             throw PipelineError.templateRenderPinsRequired
+        }
+        guard snapshot.configurationRevision != nil else {
+            throw PipelineError.textModelEndpointConfigurationIncomplete(snapshot.name)
         }
     }
 
@@ -490,6 +629,7 @@ public actor PipelineCoordinator {
     private func executeFinalASR(_ job: Job) async throws {
         try await setMeetingStatus(.processing, for: job)
         let effectiveLocale = job.localeIdentifier.map(Locale.init(identifier:)) ?? locale
+        let providerID = job.transcriptionProviderID ?? .apple
 
         if let committed = try withCurrentMeetingGeneration(for: job, { transaction in
             try runStore.loadCommitted(
@@ -525,10 +665,7 @@ public actor PipelineCoordinator {
                 throw PipelineError.noAudioSamples(job.meetingID)
             }
             let selectedProviders = try processableAssets.map { asset in
-                guard let provider = transcriptionProviders[asset.kind] else {
-                    throw PipelineError.missingProvider(asset.kind)
-                }
-                return provider
+                try transcriptionProviderResolver(providerID, asset.kind)
             }
             let descriptor = selectedProviders[0].descriptor
             guard selectedProviders.allSatisfy({ $0.descriptor == descriptor }) else {
@@ -1037,7 +1174,7 @@ public actor PipelineCoordinator {
             kind: kind,
             meetingID: job.meetingID,
             sourceRunID: sourceRunID,
-            importGenerationID: job.importGenerationID,
+            importGenerationID: job.processingGenerationID,
             createdAt: Date()
         )
         try withCurrentMeetingGeneration(for: job) { transaction in
@@ -1051,7 +1188,8 @@ public actor PipelineCoordinator {
                 guard existing.kind == downstream.kind,
                       existing.meetingID == downstream.meetingID,
                       existing.sourceRunID == downstream.sourceRunID,
-                      existing.importGenerationID == downstream.importGenerationID else {
+                      existing.processingGenerationID
+                        == downstream.processingGenerationID else {
                     throw PipelineError.invalidDownstreamJob(existing.id)
                 }
                 return
@@ -1064,10 +1202,44 @@ public actor PipelineCoordinator {
     }
 
     private func finish(job: Job) async throws {
-        if job.kind != .templateRender {
-            try await settleMeetingStatus(after: job, whenNoActiveJobs: .ready)
+        let meetingChanged = try LibraryMutationCoordination.withExclusiveTransaction(
+            layout: library.layout
+        ) { transaction in
+            let meeting = try library.loadMeeting(
+                job.meetingID,
+                transaction: transaction
+            )
+            guard meeting.processingGenerationID == job.processingGenerationID else {
+                throw PipelineError.importedGenerationChanged(job.meetingID)
+            }
+            let jobs = try jobStore.list(transaction: transaction)
+            let targetStatus = job.kind == .templateRender ? nil
+                : PipelineCompletionPolicy.meetingStatus(
+                    after: job,
+                    jobs: jobs,
+                    whenNoActiveJobs: .ready
+                )
+            let changed = targetStatus != nil && meeting.status != targetStatus
+            if let targetStatus {
+                _ = try library.updateMeetingStatus(
+                    job.meetingID,
+                    to: targetStatus,
+                    transaction: transaction
+                )
+            }
+            _ = try jobStore.transition(
+                job.id,
+                to: .finished,
+                transaction: transaction
+            )
+            return changed
         }
-        _ = try await jobStore.transition(job.id, to: .finished)
+        if let activeClaim, activeClaim.job.id == job.id {
+            await jobStore.releaseExecutionLease(activeClaim)
+        }
+        if meetingChanged {
+            await library.publishMeetingChange(job.meetingID)
+        }
     }
 
     private func settleMeetingStatus(
@@ -1091,12 +1263,16 @@ public actor PipelineCoordinator {
         if error is CancellationError {
             if cancellationRequests.remove(job.id) != nil {
                 do {
+                    try cancellationPersistenceAction(
+                        .beforeRemoveTemporaryArtifacts(job.id)
+                    )
                     try withCurrentMeetingGeneration(for: job) { transaction in
                         try runStore.removeTemporaryArtifacts(
                             for: job,
                             transaction: transaction
                         )
                     }
+                    await library.publishMeetingChange(job.meetingID)
                     _ = try await jobStore.transition(job.id, to: .cancelled)
                     try await markImportedJobNeedsManualRetry(
                         job,
@@ -1108,9 +1284,15 @@ public actor PipelineCoordinator {
                 } catch PipelineError.importedGenerationChanged {
                     await cancelJobForGenerationChange(job)
                 } catch {
-                    runtimeFailure = .persistenceFailure(String(describing: error))
+                    let cancellationFailure = PipelineError.persistenceFailure(
+                        String(describing: error)
+                    )
+                    await persistFailure(error, for: job)
+                    if runtimeFailure == nil {
+                        runtimeFailure = cancellationFailure
+                    }
                 }
-            } else if !stopping {
+            } else {
                 await persistFailure(error, for: job)
             }
             return
@@ -1143,7 +1325,9 @@ public actor PipelineCoordinator {
             createdAt: job.createdAt,
             startedAt: Date(),
             finishedAt: Date(),
-            errorMessage: message
+            errorMessage: message,
+            textModelDiagnostic: (error as? any TextModelDiagnosticProviding)?
+                .textModelDiagnostic
         )
         if let data = try? Data(contentsOf: runStore.temporaryDirectory(for: job)
             .appendingPathComponent("run.json")),
@@ -1152,6 +1336,8 @@ public actor PipelineCoordinator {
             failedRun.status = .failed
             failedRun.finishedAt = Date()
             failedRun.errorMessage = message
+            failedRun.textModelDiagnostic = (error as? any TextModelDiagnosticProviding)?
+                .textModelDiagnostic
         }
         var persistenceErrors: [String] = []
         do {
@@ -1170,6 +1356,7 @@ public actor PipelineCoordinator {
                     transaction: transaction
                 )
             }
+            await library.publishMeetingChange(job.meetingID)
         } catch PipelineError.importedGenerationChanged {
             await cancelJobForGenerationChange(job)
             return
@@ -1228,6 +1415,10 @@ public actor PipelineCoordinator {
         if job.kind == .templateRender,
            case PipelineError.templateRenderPinsRequired = error {
             return .templateRenderPinsRequired
+        }
+        if job.kind == .templateRender,
+           case PipelineError.textModelEndpointConfigurationIncomplete = error {
+            return .textModelEndpointConfigurationIncomplete
         }
         if job.kind == .diarization,
            let diarizationError = error as? DiarizationError,
@@ -1294,8 +1485,12 @@ public actor PipelineCoordinator {
     private func defaultEngineDescriptor(for job: Job) -> EngineDescriptor {
         switch job.kind {
         case .finalASR:
+            let providerID = job.transcriptionProviderID ?? .apple
             for assetKind in [MediaAsset.Kind.micTrack, .systemTrack, .imported] {
-                if let descriptor = transcriptionProviders[assetKind]?.descriptor {
+                if let descriptor = try? transcriptionProviderResolver(
+                    providerID,
+                    assetKind
+                ).descriptor {
                     return descriptor
                 }
             }

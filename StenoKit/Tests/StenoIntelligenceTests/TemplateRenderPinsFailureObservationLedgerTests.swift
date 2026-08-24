@@ -74,4 +74,19 @@ struct TemplateRenderPinsFailureObservationLedgerTests {
         )
         #expect(claimed.id == failed.id)
     }
+
+    @Test("an incomplete endpoint configuration is an actionable cold failure")
+    func claimsEndpointConfigurationFailure() throws {
+        let failed = Job(
+            kind: .templateRender,
+            meetingID: MeetingID(),
+            status: .failed,
+            failureReason: .textModelEndpointConfigurationIncomplete
+        )
+        let ledger = TemplateRenderPinsFailureObservationLedger()
+
+        let claimed = try #require(ledger.claimLatestFailure(in: [failed]))
+
+        #expect(claimed.id == failed.id)
+    }
 }

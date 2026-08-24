@@ -1,0 +1,5897 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "" : {
+      "shouldTranslate" : false
+    },
+    "·" : {
+      "shouldTranslate" : false
+    },
+    "„%@“" : {
+      "shouldTranslate" : false
+    },
+    "%@ (%@)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ (%2$@)"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ (%2$@)"
+          }
+        }
+      }
+    },
+    "%@ (current)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ (aktuell)"
+          }
+        }
+      }
+    },
+    "%@ (estimated on the source device)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ (auf dem Quellgerät geschätzt)"
+          }
+        }
+      }
+    },
+    "%@ (in this meeting)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ (in diesem Meeting)"
+          }
+        }
+      }
+    },
+    "%@ (no source language)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ (keine Ausgangssprache)"
+          }
+        }
+      }
+    },
+    "%@ (selected on the source device)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ (auf dem Quellgerät ausgewählt)"
+          }
+        }
+      }
+    },
+    "%@ disconnected. The microphone track is paused; system audio continues." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ wurde getrennt. Die Mikrofonspur ist pausiert, das Systemaudio läuft weiter."
+          }
+        }
+      }
+    },
+    "%@ is not available. Choose another microphone before recording." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ ist nicht verfügbar. Wähle vor der Aufnahme ein anderes Mikrofon."
+          }
+        }
+      }
+    },
+    "%@ is not responding. The microphone track is paused; system audio continues." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ antwortet nicht. Die Mikrofonspur ist pausiert, das Systemaudio läuft weiter."
+          }
+        }
+      }
+    },
+    "%@ level" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pegel: %1$@"
+          }
+        }
+      }
+    },
+    "%@ Transcript and speakers remain fully usable without a model." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ Transkript und Sprecher bleiben ohne Modell vollständig nutzbar."
+          }
+        }
+      }
+    },
+    "%@ You can skip this and add it later in Settings." : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ Du kannst dies überspringen und später in den Einstellungen hinzufügen."
+          }
+        }
+      }
+    },
+    "%lld" : {
+      "shouldTranslate" : false
+    },
+    "%lld %%" : {
+      "shouldTranslate" : false
+    },
+    "%lld direct meetings, %lld subfolders" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld direkte Meetings, %2$lld Unterordner"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld direct meetings, %2$lld subfolders"
+          }
+        }
+      }
+    },
+    "%lld file(s) are in the legacy app’s delete queue and will not be imported." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld Datei(en) befinden sich in der Löschwarteschlange der alten App und werden nicht importiert."
+          }
+        }
+      }
+    },
+    "%lld imported meetings need attention because their processing could not be resumed. Other meetings and recording remain available." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld importierte Meetings benötigen Aufmerksamkeit, weil ihre Verarbeitung nicht fortgesetzt werden konnte. Andere Meetings und die Aufnahmefunktion bleiben verfügbar."
+          }
+        }
+      }
+    },
+    "%lld Meetings Selected" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld Meetings ausgewählt"
+          }
+        }
+      }
+    },
+    "%lld notices" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld Hinweise"
+          }
+        }
+      }
+    },
+    "%lld of %lld lines" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld von %2$lld Zeilen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld of %2$lld lines"
+          }
+        }
+      }
+    },
+    "%lld of %lld speakers are still unconfirmed; the minutes will call them “Speaker 1” and so on." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld von %2$lld Sprechern sind noch unbestätigt. Im Protokoll heißen sie „Sprecher 1“ und so weiter."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld of %2$lld speakers are still unconfirmed; the minutes will call them “Speaker 1” and so on."
+          }
+        }
+      }
+    },
+    "%lld of %lld: %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld von %2$lld: %3$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld of %2$lld: %3$@"
+          }
+        }
+      }
+    },
+    "%lld percent" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld Prozent"
+          }
+        }
+      }
+    },
+    "%lld tracks selected, %@ total" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld Spuren ausgewählt, insgesamt %2$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld tracks selected, %2$@ total"
+          }
+        }
+      }
+    },
+    "•" : {
+      "shouldTranslate" : false
+    },
+    "1 track selected, %@ total" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 Spur ausgewählt, insgesamt %1$@"
+          }
+        }
+      }
+    },
+    "4096" : {
+      "shouldTranslate" : false
+    },
+    "A different version of this source meeting is already present. Steno will not overwrite, merge or duplicate it." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eine andere Version dieses Quell-Meetings ist bereits vorhanden. Steno überschreibt, vereinigt und dupliziert sie nicht."
+          }
+        }
+      }
+    },
+    "A new transcript is added; the current one stays available as an earlier version. Speaker assignments for this meeting have to be confirmed again afterwards." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ein neues Transkript wird hinzugefügt. Das aktuelle bleibt als frühere Version erhalten. Die Sprecherzuordnungen für dieses Meeting müssen danach erneut bestätigt werden."
+          }
+        }
+      }
+    },
+    "A newer transcription is ready. Your correction is shown instead." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eine neuere Transkription ist fertig. Stattdessen wird deine Korrektur angezeigt."
+          }
+        }
+      }
+    },
+    "A person named %@ already exists." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eine Person namens %1$@ ist bereits vorhanden."
+          }
+        }
+      }
+    },
+    "A temporary meeting export could not be verified and was preserved for manual cleanup." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ein temporärer Meeting-Export konnte nicht verifiziert werden und wurde zur manuellen Bereinigung beibehalten."
+          }
+        }
+      }
+    },
+    "About 461 MB from huggingface.co" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Etwa 461 MB von huggingface.co"
+          }
+        }
+      }
+    },
+    "Active apps use several microphones (%@). Choose one manually." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aktive Apps verwenden mehrere Mikrofone (%1$@). Wähle eines manuell aus."
+          }
+        }
+      }
+    },
+    "Add" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hinzufügen"
+          }
+        }
+      }
+    },
+    "Add endpoint" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Endpunkt hinzufügen"
+          }
+        }
+      }
+    },
+    "Add participant" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Teilnehmende Person hinzufügen"
+          }
+        }
+      }
+    },
+    "Added manually: no detected speech - click the name for contact details" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Manuell hinzugefügt: keine Sprache erkannt. Klicke für Kontaktdaten auf den Namen."
+          }
+        }
+      }
+    },
+    "Adding %@ sends an unencrypted raw recording. Microphone tracks may contain other voices in the room. The package may remain as a cleartext file on the receiving device." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Durch Hinzufügen von %1$@ wird eine unverschlüsselte Originalaufnahme gesendet. Mikrofonspuren können weitere Stimmen im Raum enthalten. Das Paket kann als unverschlüsselte Datei auf dem Empfangsgerät verbleiben."
+          }
+        }
+      }
+    },
+    "AirDrop could not be opened directly. Activate Share meeting again to open the system Share menu, then choose AirDrop." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AirDrop konnte nicht direkt geöffnet werden. Wähle erneut „Meeting teilen“, um das Freigabemenü des Systems zu öffnen, und wähle dann AirDrop."
+          }
+        }
+      }
+    },
+    "All %lld voice sample%@, counter-evidence and meeting appearances move to %@. %@ disappears. This can't be undone." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alle %1$lld Stimmproben%2$@, Gegenbelege und Meeting-Vorkommen werden zu %3$@ verschoben. %4$@ verschwindet. Dies kann nicht rückgängig gemacht werden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "All %1$lld voice sample%2$@, counter-evidence and meeting appearances move to %3$@. %4$@ disappears. This can't be undone."
+          }
+        }
+      }
+    },
+    "Allow and install" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erlauben und installieren"
+          }
+        }
+      }
+    },
+    "An earlier temporary meeting export needs cleanup before another meeting can be shared." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ein früherer temporärer Meeting-Export muss bereinigt werden, bevor ein weiteres Meeting geteilt werden kann."
+          }
+        }
+      }
+    },
+    "Another meeting share is still active or needs cleanup. Finish or clean it before sharing another meeting." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eine andere Meeting-Freigabe ist noch aktiv oder muss bereinigt werden. Schließe sie ab oder bereinige sie, bevor du ein weiteres Meeting teilst."
+          }
+        }
+      }
+    },
+    "API key" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "API-Schlüssel"
+          }
+        }
+      }
+    },
+    "API type" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "API-Typ"
+          }
+        }
+      }
+    },
+    "Appears in the header of exported Markdown and stays on this Mac; this field is never sent to a language model. If you took part yourself, add yourself to that meeting's participants - that list does go to the model." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erscheint in der Kopfzeile exportierter Markdown-Dateien und bleibt auf diesem Mac. Dieses Feld wird nie an ein Sprachmodell gesendet. Wenn du selbst teilgenommen hast, füge dich den Teilnehmenden des Meetings hinzu. Diese Liste wird an das Modell gesendet."
+          }
+        }
+      }
+    },
+    "Appears in the header of exported Markdown and stays on this Mac; this field is never sent to a language model. If you took part yourself, add yourself to that meeting's participants - that list does go to the model. You can skip this and add it later in Settings." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erscheint in der Kopfzeile exportierter Markdown-Dateien und bleibt auf diesem Mac. Dieses Feld wird nie an ein Sprachmodell gesendet. Wenn du selbst teilgenommen hast, füge dich den Teilnehmenden des Meetings hinzu. Diese Liste wird an das Modell gesendet. Du kannst dies überspringen und später in den Einstellungen ergänzen."
+          }
+        }
+      }
+    },
+    "Apple Intelligence (on device)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Intelligence (auf dem Gerät)"
+          }
+        }
+      }
+    },
+    "Apple Intelligence is not enabled." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Intelligence ist nicht aktiviert."
+          }
+        }
+      }
+    },
+    "Applies to new recordings and imports." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gilt für neue Aufnahmen und Importe."
+          }
+        }
+      }
+    },
+    "Assign" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zuweisen"
+          }
+        }
+      }
+    },
+    "Assigning the speaker failed: %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Sprecher konnte nicht zugeordnet werden: %1$@"
+          }
+        }
+      }
+    },
+    "Audio" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Audio"
+          }
+        }
+      }
+    },
+    "Audio available - voice samples and speaker naming possible" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Audio verfügbar: Stimmproben und Sprecherbenennung sind möglich"
+          }
+        }
+      }
+    },
+    "Audio included in the received meeting." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das empfangene Meeting enthält Audio."
+          }
+        }
+      }
+    },
+    "Audio no longer available" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Audio nicht mehr verfügbar"
+          }
+        }
+      }
+    },
+    "Audio off - 0 tracks selected" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Audio aus - 0 Spuren ausgewählt"
+          }
+        }
+      }
+    },
+    "Automatic - browser or meeting app" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Automatisch - Browser oder Meeting-App"
+          }
+        }
+      }
+    },
+    "Back to the recording" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zurück zur Aufnahme"
+          }
+        }
+      }
+    },
+    "Base URL" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Basis-URL"
+          }
+        }
+      }
+    },
+    "Cancel" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abbrechen"
+          }
+        }
+      }
+    },
+    "Cancelling" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wird abgebrochen"
+          }
+        }
+      }
+    },
+    "Cancelling after the current safe import step…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abbruch nach dem aktuellen sicheren Importschritt…"
+          }
+        }
+      }
+    },
+    "Cancelling…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wird abgebrochen…"
+          }
+        }
+      }
+    },
+    "Change" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ändern"
+          }
+        }
+      }
+    },
+    "Checking …" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wird geprüft …"
+          }
+        }
+      }
+    },
+    "Checking local models" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lokale Modelle werden geprüft"
+          }
+        }
+      }
+    },
+    "Choices are pinned with the spoken language when a recording starts. Changing them affects only new recordings and explicit re-transcriptions." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Auswahl wird beim Start einer Aufnahme mit der gesprochenen Sprache festgeschrieben. Änderungen gelten nur für neue Aufnahmen und ausdrücklich erneut gestartete Transkriptionen."
+          }
+        }
+      }
+    },
+    "Choose a language" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sprache auswählen"
+          }
+        }
+      }
+    },
+    "Choose a person" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Person auswählen"
+          }
+        }
+      }
+    },
+    "Choose folder…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ordner auswählen…"
+          }
+        }
+      }
+    },
+    "Choose microphone" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mikrofon auswählen"
+          }
+        }
+      }
+    },
+    "Choose the language spoken in this recording. The Mac system locale is never used as a guess." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wähle die in dieser Aufnahme gesprochene Sprache. Die Systemsprache des Mac wird niemals als Vermutung verwendet."
+          }
+        }
+      }
+    },
+    "Choose the microphone used for new recordings" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mikrofon für neue Aufnahmen auswählen"
+          }
+        }
+      }
+    },
+    "Clips you marked as someone else. Steno uses them to avoid future mix-ups - a wrong entry here blocks recognition for good, even in unrelated meetings." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ausschnitte, die du als eine andere Person markiert hast. Steno verhindert damit künftige Verwechslungen. Ein falscher Eintrag blockiert die Erkennung dauerhaft, auch in anderen Meetings."
+          }
+        }
+      }
+    },
+    "Close" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Schließen"
+          }
+        }
+      }
+    },
+    "Close the search" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Suche schließen"
+          }
+        }
+      }
+    },
+    "Closing stops the current check or import and removes Steno's private prepared copy." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Beim Schließen wird die aktuelle Prüfung oder der Import beendet und Stenos private vorbereitete Kopie entfernt."
+          }
+        }
+      }
+    },
+    "Compute diarization and speaker suggestions for this meeting" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diarisierung und Sprechervorschläge für dieses Meeting berechnen"
+          }
+        }
+      }
+    },
+    "Compute precise timestamps, diarization and speaker suggestions" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Genaue Zeitstempel, Diarisierung und Sprechervorschläge berechnen"
+          }
+        }
+      }
+    },
+    "Confirm a speaker in a meeting and they will appear here." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bestätige eine sprechende Person in einem Meeting, damit sie hier erscheint."
+          }
+        }
+      }
+    },
+    "Confirm as %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Als %1$@ bestätigen"
+          }
+        }
+      }
+    },
+    "Confirm language" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sprache bestätigen"
+          }
+        }
+      }
+    },
+    "Confirmed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bestätigt"
+          }
+        }
+      }
+    },
+    "Confirmed - correctable from the menu" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bestätigt - über das Menü korrigierbar"
+          }
+        }
+      }
+    },
+    "Confirmed not %@ (%lld)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bestätigt nicht %1$@ (%2$lld)"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Confirmed not %1$@ (%2$lld)"
+          }
+        }
+      }
+    },
+    "Contents" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inhalt"
+          }
+        }
+      }
+    },
+    "Context window" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kontextfenster"
+          }
+        }
+      }
+    },
+    "Continue" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Weiter"
+          }
+        }
+      }
+    },
+    "Copy" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kopieren"
+          }
+        }
+      }
+    },
+    "Correct this line" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Zeile korrigieren"
+          }
+        }
+      }
+    },
+    "Count this sample towards recognition again" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Probe wieder für die Erkennung verwenden"
+          }
+        }
+      }
+    },
+    "Create" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erstellen"
+          }
+        }
+      }
+    },
+    "Create a folder" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ordner erstellen"
+          }
+        }
+      }
+    },
+    "Create a meeting without a recording, to take notes beforehand" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meeting ohne Aufnahme erstellen, um vorab Notizen zu machen"
+          }
+        }
+      }
+    },
+    "Create and confirm" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erstellen und bestätigen"
+          }
+        }
+      }
+    },
+    "Creates the package, then opens system sharing. If a Share menu appears, choose AirDrop." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erstellt das Paket und öffnet danach die Systemfreigabe. Falls ein Freigabemenü erscheint, wähle AirDrop."
+          }
+        }
+      }
+    },
+    "Delete" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Löschen"
+          }
+        }
+      }
+    },
+    "Delete %@?" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ löschen?"
+          }
+        }
+      }
+    },
+    "Delete endpoint?" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Endpunkt löschen?"
+          }
+        }
+      }
+    },
+    "Delete folder" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ordner löschen"
+          }
+        }
+      }
+    },
+    "Delete Folder…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ordner löschen…"
+          }
+        }
+      }
+    },
+    "Delete the folder “%@”?" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ordner „%1$@“ löschen?"
+          }
+        }
+      }
+    },
+    "Delete…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Löschen…"
+          }
+        }
+      }
+    },
+    "Deleted %@." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ wurde gelöscht."
+          }
+        }
+      }
+    },
+    "Deleting “%@” removes its configuration and saved API key from this Mac. This cannot be undone." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Beim Löschen von „%1$@“ werden die Konfiguration und der gespeicherte API-Schlüssel von diesem Mac entfernt. Dies kann nicht rückgängig gemacht werden."
+          }
+        }
+      }
+    },
+    "Demo meetings cannot create or change real voice profiles." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Demo-Meetings können keine echten Stimmprofile erstellen oder ändern."
+          }
+        }
+      }
+    },
+    "demo.badge.accessibility.label" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Synthetisches Demo-Meeting"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Synthetic demo meeting"
+          }
+        }
+      }
+    },
+    "demo.badge.label" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Demo"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Demo"
+          }
+        }
+      }
+    },
+    "demo.data.attribution.copy" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die drei Aufnahmen wurden aus erfundenem deutschem Text vorgerendert. Piper und sein Stimm-Repository stehen unter der MIT-Lizenz. Die Modellkarte der Stimme nennt MLS unter CC BY 4.0. Vollständige Quellenangaben sind im Datensatz enthalten."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The three recordings are pre-rendered from fictional German text. Piper and its voice repository are MIT-licensed; the voice model card names MLS as CC BY 4.0. Full attribution is bundled with the dataset."
+          }
+        }
+      }
+    },
+    "demo.data.attribution.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quellenangabe"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Attribution"
+          }
+        }
+      }
+    },
+    "demo.data.install.action" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Demo-Meetings installieren"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Install demo meetings"
+          }
+        }
+      }
+    },
+    "demo.data.install.confirmation.message" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Steno installiert drei lokale synthetische Meetings für Screenshots und Benchmarks. Dafür werden weder ein Modell noch eine Netzwerkverbindung verwendet."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Steno installs three local synthetic meetings for screenshots and benchmarks. No model or network connection is used."
+          }
+        }
+      }
+    },
+    "demo.data.install.confirmation.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Demo-Meetings installieren?"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Install demo meetings?"
+          }
+        }
+      }
+    },
+    "demo.data.item.conflict.detail" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieses Meeting gehört nicht zu den Demodaten. Steno ändert es nicht."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This meeting is not owned as demo data. Steno will not change it."
+          }
+        }
+      }
+    },
+    "demo.data.item.conflict.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kollidierendes Meeting"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Conflicting meeting"
+          }
+        }
+      }
+    },
+    "demo.data.item.installed.detail" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entspricht den mitgelieferten Demodaten."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Matches the bundled demo data."
+          }
+        }
+      }
+    },
+    "demo.data.item.installed.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Installiert"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Installed"
+          }
+        }
+      }
+    },
+    "demo.data.item.missing.detail" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Installiere die Demo-Meetings, um dieses lokale synthetische Meeting hinzuzufügen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Install demo meetings to add this local synthetic meeting."
+          }
+        }
+      }
+    },
+    "demo.data.item.missing.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nicht installiert"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Not installed"
+          }
+        }
+      }
+    },
+    "demo.data.item.modified.detail" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deine Änderungen bleiben erhalten, sofern du nicht „Alle Demodaten ersetzen“ auswählst."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your changes stay unless you choose Replace all demo data."
+          }
+        }
+      }
+    },
+    "demo.data.item.modified.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bearbeitet"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Edited"
+          }
+        }
+      }
+    },
+    "demo.data.item.outdated.detail" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die installierten Demodaten haben Version %1$@."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Installed demo data is version %@."
+          }
+        }
+      }
+    },
+    "demo.data.item.outdated.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aktualisierung verfügbar"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Update available"
+          }
+        }
+      }
+    },
+    "demo.data.item.produktinterview.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Produktinterview"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Product interview"
+          }
+        }
+      }
+    },
+    "demo.data.item.projektauftakt.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Projektauftakt"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Project kickoff"
+          }
+        }
+      }
+    },
+    "demo.data.item.unknown.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Demo-Meeting"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Demo meeting"
+          }
+        }
+      }
+    },
+    "demo.data.item.wochenrunde.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wochenrunde"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Weekly round"
+          }
+        }
+      }
+    },
+    "demo.data.language-change.locked" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Transkriptionssprache kann während der Aktualisierung der Demodaten nicht geändert werden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The transcription language cannot change while demo data is being updated."
+          }
+        }
+      }
+    },
+    "demo.data.operation.failed" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Demodaten konnten nicht aktualisiert werden. Prüfe den Status unten und versuche es erneut."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Demo data could not be updated. Check the status below and try again."
+          }
+        }
+      }
+    },
+    "demo.data.remove.action" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Demodaten entfernen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Remove demo data"
+          }
+        }
+      }
+    },
+    "demo.data.remove.confirmation.message" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Markierte Demo-Meetings werden einschließlich deiner Änderungen in den Papierkorb verschoben. Andere Meetings bleiben in der Bibliothek."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Marked demo meetings, including your changes, move to Trash. Other meetings stay in the library."
+          }
+        }
+      }
+    },
+    "demo.data.remove.confirmation.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Demodaten entfernen?"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Remove demo data?"
+          }
+        }
+      }
+    },
+    "demo.data.replace-all.action" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alle Demodaten ersetzen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Replace all demo data"
+          }
+        }
+      }
+    },
+    "demo.data.replace.action" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Demodaten ersetzen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Replace demo data"
+          }
+        }
+      }
+    },
+    "demo.data.replace.keep-edited.action" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bearbeitete Meetings behalten"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Keep edited meetings"
+          }
+        }
+      }
+    },
+    "demo.data.replace.message" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unbearbeitete Meetings durch die mitgelieferte Version ersetzen. Wähle, ob bearbeitete Meetings in der Bibliothek bleiben oder ebenfalls in den Papierkorb verschoben werden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Replace unedited meetings with the bundled version. Choose whether edited meetings stay in the library or also move to Trash."
+          }
+        }
+      }
+    },
+    "demo.data.replace.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Demodaten ersetzen?"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Replace demo data?"
+          }
+        }
+      }
+    },
+    "demo.data.status.attention" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Einige Demo-Meetings benötigen vor dem Ersetzen Aufmerksamkeit."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Some demo meetings need attention before replacement."
+          }
+        }
+      }
+    },
+    "demo.data.status.checking" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Demodaten werden geprüft"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Checking demo data"
+          }
+        }
+      }
+    },
+    "demo.data.status.conflict" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ein anderes Meeting kollidiert mit den Demodaten."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "A different meeting conflicts with demo data."
+          }
+        }
+      }
+    },
+    "demo.data.status.failed" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Demodaten konnten nicht geprüft werden. Versuche es in diesem Bereich erneut."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Demo data could not be checked. Try again from this pane."
+          }
+        }
+      }
+    },
+    "demo.data.status.installed" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alle drei Demo-Meetings sind installiert."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "All three demo meetings are installed."
+          }
+        }
+      }
+    },
+    "demo.data.status.not-installed" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Demo-Meetings sind nicht installiert."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Demo meetings are not installed."
+          }
+        }
+      }
+    },
+    "demo.data.status.processing" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Demodaten werden aktualisiert"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Updating demo data"
+          }
+        }
+      }
+    },
+    "demo.data.status.retained-result" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Einige Meetings wurden behalten und werden nicht erneut verarbeitet."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Some meetings were kept and will not be retried."
+          }
+        }
+      }
+    },
+    "demo.data.status.retry.action" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erneut prüfen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Check again"
+          }
+        }
+      }
+    },
+    "demo.data.status.retryable-result" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Einige Demo-Meetings wurden nicht verarbeitet. Du kannst die Aktion erneut versuchen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Some demo meetings were not processed. You can try the action again."
+          }
+        }
+      }
+    },
+    "demo.data.status.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Status"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Status"
+          }
+        }
+      }
+    },
+    "demo.data.status.unavailable" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Öffne eine Bibliothek, um Demodaten zu verwalten."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Open a library to manage demo data."
+          }
+        }
+      }
+    },
+    "demo.data.status.unavailable-result" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Status der Demodaten ist nicht verfügbar. Versuche es in diesem Bereich erneut."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Demo data status is unavailable. Try again from this pane."
+          }
+        }
+      }
+    },
+    "demo.data.status.uncertain-result" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Ergebnis einiger Demo-Meetings ist unbekannt. Prüfe den Status, bevor du eine weitere Aktion ausführst."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The outcome for some demo meetings is unknown. Check the status before taking another action."
+          }
+        }
+      }
+    },
+    "demo.data.summary.models" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keine Modelle"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No models"
+          }
+        }
+      }
+    },
+    "demo.data.summary.network" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kein Netzwerk"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No network"
+          }
+        }
+      }
+    },
+    "demo.data.summary.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "3 lokale synthetische Meetings"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "3 local synthetic meetings"
+          }
+        }
+      }
+    },
+    "demo.data.tab.title" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Demodaten"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Demo Data"
+          }
+        }
+      }
+    },
+    "demo.review.leave-generic.action" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Generisch lassen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Leave generic"
+          }
+        }
+      }
+    },
+    "demo.review.progress.all-reviewed" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "alle geprüft"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "all reviewed"
+          }
+        }
+      }
+    },
+    "demo.review.progress.reviewed-count" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld von %2$lld geprüft"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld of %2$lld reviewed"
+          }
+        }
+      }
+    },
+    "demo.review.voice-evidence.explanation" : {
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Demo-Audio kann keine echten Stimmprofile erstellen oder ändern. Du kannst einen Sprecher generisch lassen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Demo audio cannot create or change real voice profiles. You can leave a speaker generic."
+          }
+        }
+      }
+    },
+    "Details" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Details"
+          }
+        }
+      }
+    },
+    "Detect speakers" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sprecher erkennen"
+          }
+        }
+      }
+    },
+    "Detected from the active browser or meeting app: %@." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Im aktiven Browser oder in der Meeting-App erkannt: %1$@."
+          }
+        }
+      }
+    },
+    "Detected: %@, used by %@." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erkannt: %1$@, verwendet von %2$@."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Detected: %1$@, used by %2$@."
+          }
+        }
+      }
+    },
+    "Dismiss" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Schließen"
+          }
+        }
+      }
+    },
+    "Don't use for recognition" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nicht für die Erkennung verwenden"
+          }
+        }
+      }
+    },
+    "Done" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fertig"
+          }
+        }
+      }
+    },
+    "Draft" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entwurf"
+          }
+        }
+      }
+    },
+    "Drag the selection into a folder or use Move Meetings." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ziehe die Auswahl in einen Ordner oder verwende „Meetings verschieben“."
+          }
+        }
+      }
+    },
+    "Drop a nested folder here to move it to the top level." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lege einen verschachtelten Ordner hier ab, um ihn auf die oberste Ebene zu verschieben."
+          }
+        }
+      }
+    },
+    "E-mail" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "E-Mail"
+          }
+        }
+      }
+    },
+    "Earlier versions" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Frühere Versionen"
+          }
+        }
+      }
+    },
+    "Edit" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bearbeiten"
+          }
+        }
+      }
+    },
+    "Edit endpoint" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Endpunkt bearbeiten"
+          }
+        }
+      }
+    },
+    "Empty - move a meeting here" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Leer - verschiebe ein Meeting hierher"
+          }
+        }
+      }
+    },
+    "empty = unchanged" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "leer = unverändert"
+          }
+        }
+      }
+    },
+    "Endpoint deletion incomplete" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Endpunkt nicht vollständig gelöscht"
+          }
+        }
+      }
+    },
+    "Endpoint storage unavailable" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Endpunktspeicher nicht verfügbar"
+          }
+        }
+      }
+    },
+    "Endpoints" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Endpunkte"
+          }
+        }
+      }
+    },
+    "Enter a folder name." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gib einen Ordnernamen ein."
+          }
+        }
+      }
+    },
+    "Enter a meeting title." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gib einen Meeting-Titel ein."
+          }
+        }
+      }
+    },
+    "Enter the API key again before changing this endpoint URL." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gib den API-Schlüssel erneut ein, bevor du die URL dieses Endpunkts änderst."
+          }
+        }
+      }
+    },
+    "Everyone Steno has learned to recognise by voice. Names come from confirming a speaker in a meeting." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alle Personen, die Steno anhand ihrer Stimme erkennen gelernt hat. Namen entstehen durch die Bestätigung einer sprechenden Person in einem Meeting."
+          }
+        }
+      }
+    },
+    "Experimental" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Experimentell"
+          }
+        }
+      }
+    },
+    "Export as Markdown…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Als Markdown exportieren…"
+          }
+        }
+      }
+    },
+    "Export Audio…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Audio exportieren…"
+          }
+        }
+      }
+    },
+    "Export Meeting as Markdown…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meeting als Markdown exportieren…"
+          }
+        }
+      }
+    },
+    "Export Meeting Audio…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meeting-Audio exportieren…"
+          }
+        }
+      }
+    },
+    "Exporting %@ %lld%%" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ wird exportiert: %2$lld %%"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Exporting %1$@ %2$lld%%"
+          }
+        }
+      }
+    },
+    "Find in this transcript (Cmd-F)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In diesem Transkript suchen (Cmd-F)"
+          }
+        }
+      }
+    },
+    "Find in transcript" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Im Transkript suchen"
+          }
+        }
+      }
+    },
+    "Find in Transcript" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Im Transkript suchen"
+          }
+        }
+      }
+    },
+    "FluidAudio Parakeet TDT" : {
+      "shouldTranslate" : false
+    },
+    "Folder" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ordner"
+          }
+        }
+      }
+    },
+    "Folders" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ordner"
+          }
+        }
+      }
+    },
+    "Folders unavailable" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ordner nicht verfügbar"
+          }
+        }
+      }
+    },
+    "for %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "für %1$@"
+          }
+        }
+      }
+    },
+    "For attendees without detected speech." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Für Teilnehmende ohne erkannte Sprache."
+          }
+        }
+      }
+    },
+    "Found" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gefunden"
+          }
+        }
+      }
+    },
+    "gemma-3-27b" : {
+      "shouldTranslate" : false
+    },
+    "General" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allgemein"
+          }
+        }
+      }
+    },
+    "Generate minutes" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Protokoll erstellen"
+          }
+        }
+      }
+    },
+    "Generating sends %@ to “%@” (%@). Audio, structured profile email fields, and attachments are not added to the model input. Email addresses written into the meeting text or the notes are included with it." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Beim Erstellen werden %1$@ an „%2$@“ (%3$@) gesendet. Audio, strukturierte E-Mail-Felder in Profilen und Anhänge werden dem Modelleingang nicht hinzugefügt. E-Mail-Adressen im Meetingtext oder in den Notizen werden mitgesendet."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Generating sends %1$@ to “%2$@” (%3$@). Audio, structured profile email fields, and attachments are not added to the model input. Email addresses written into the meeting text or the notes are included with it."
+          }
+        }
+      }
+    },
+    "Generating with %@…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erstellung mit %1$@…"
+          }
+        }
+      }
+    },
+    "Granted on %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erteilt am %1$@"
+          }
+        }
+      }
+    },
+    "Has an e-mail address" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hat eine E-Mail-Adresse"
+          }
+        }
+      }
+    },
+    "Hashing the received file" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Empfangene Datei wird geprüft"
+          }
+        }
+      }
+    },
+    "http://localhost:1234/v1" : {
+      "shouldTranslate" : false
+    },
+    "I confirm that %@ is spoken in this recording." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ich bestätige, dass in dieser Aufnahme %1$@ gesprochen wird."
+          }
+        }
+      }
+    },
+    "I confirm this is the language spoken in the recording." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ich bestätige, dass dies die in der Aufnahme gesprochene Sprache ist."
+          }
+        }
+      }
+    },
+    "Import" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importieren"
+          }
+        }
+      }
+    },
+    "Import an audio file, meeting package, or legacy library" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Audiodatei, Meeting-Paket oder alte Bibliothek importieren"
+          }
+        }
+      }
+    },
+    "Import and process" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importieren und verarbeiten"
+          }
+        }
+      }
+    },
+    "Import Audio File…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Audiodatei importieren…"
+          }
+        }
+      }
+    },
+    "Import cancelled" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Import abgebrochen"
+          }
+        }
+      }
+    },
+    "Import complete" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Import abgeschlossen"
+          }
+        }
+      }
+    },
+    "Import completed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Import abgeschlossen"
+          }
+        }
+      }
+    },
+    "Import from Legacy Steno App" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aus der alten Steno-App importieren"
+          }
+        }
+      }
+    },
+    "Import from Legacy Steno App…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aus der alten Steno-App importieren…"
+          }
+        }
+      }
+    },
+    "Import meeting package" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meeting-Paket importieren"
+          }
+        }
+      }
+    },
+    "Import Meeting Package…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meeting-Paket importieren…"
+          }
+        }
+      }
+    },
+    "Import only" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nur importieren"
+          }
+        }
+      }
+    },
+    "Import recovery required" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importwiederherstellung erforderlich"
+          }
+        }
+      }
+    },
+    "Imported text label - not a locally confirmed identity" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importierte Textbezeichnung - keine lokal bestätigte Identität"
+          }
+        }
+      }
+    },
+    "Imported via AirDrop" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Über AirDrop importiert"
+          }
+        }
+      }
+    },
+    "Inference profile" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inferenzprofil"
+          }
+        }
+      }
+    },
+    "Input" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eingabe"
+          }
+        }
+      }
+    },
+    "Install" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Installieren"
+          }
+        }
+      }
+    },
+    "Install model and process" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Modell installieren und verarbeiten"
+          }
+        }
+      }
+    },
+    "Installed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Installiert"
+          }
+        }
+      }
+    },
+    "Installed, but not confirmed for %@." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Installiert, aber für %1$@ nicht bestätigt."
+          }
+        }
+      }
+    },
+    "Into" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nach"
+          }
+        }
+      }
+    },
+    "Join the meeting first, or choose a microphone manually. Steno will not guess." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tritt zuerst dem Meeting bei oder wähle ein Mikrofon manuell aus. Steno wird nicht raten."
+          }
+        }
+      }
+    },
+    "Keep this sample, but stop counting it towards recognition" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Probe behalten, aber nicht mehr für die Erkennung verwenden"
+          }
+        }
+      }
+    },
+    "Language Models" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sprachmodelle"
+          }
+        }
+      }
+    },
+    "Leave generic" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Generisch lassen"
+          }
+        }
+      }
+    },
+    "Library needs attention" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bibliothek benötigt Aufmerksamkeit"
+          }
+        }
+      }
+    },
+    "Library unavailable" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bibliothek nicht verfügbar"
+          }
+        }
+      }
+    },
+    "LM Studio" : {
+      "shouldTranslate" : false
+    },
+    "Loading notes…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notizen werden geladen…"
+          }
+        }
+      }
+    },
+    "Local models are missing. The meeting and audio will still be imported, but no job or download will start." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lokale Modelle fehlen. Meeting und Audio werden trotzdem importiert, aber es startet weder ein Auftrag noch ein Download."
+          }
+        }
+      }
+    },
+    "Local models are ready." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lokale Modelle sind bereit."
+          }
+        }
+      }
+    },
+    "Mark This Moment" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diesen Moment markieren"
+          }
+        }
+      }
+    },
+    "Maybe %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vielleicht %1$@"
+          }
+        }
+      }
+    },
+    "Me" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ich"
+          }
+        }
+      }
+    },
+    "Meeting" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meeting"
+          }
+        }
+      }
+    },
+    "Meeting cannot be shared" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meeting kann nicht geteilt werden"
+          }
+        }
+      }
+    },
+    "Meeting date" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meeting-Datum"
+          }
+        }
+      }
+    },
+    "Meeting notes" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meeting-Notizen"
+          }
+        }
+      }
+    },
+    "Meetings" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meetings"
+          }
+        }
+      }
+    },
+    "Meetings and files listed below were already imported and were not rolled back. Run the import again to add the remaining meetings." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die unten aufgeführten Meetings und Dateien wurden bereits importiert und nicht zurückgesetzt. Starte den Import erneut, um die verbleibenden Meetings hinzuzufügen."
+          }
+        }
+      }
+    },
+    "Meetings unavailable" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meetings nicht verfügbar"
+          }
+        }
+      }
+    },
+    "Meetings, transcripts, speaker profiles and minutes are copied. The legacy installation stays unchanged." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meetings, Transkripte, Sprecherprofile und Protokolle werden kopiert. Die alte Installation bleibt unverändert."
+          }
+        }
+      }
+    },
+    "Merge" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vereinigen"
+          }
+        }
+      }
+    },
+    "Merge %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ vereinigen"
+          }
+        }
+      }
+    },
+    "Merge into another person…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mit einer anderen Person vereinigen…"
+          }
+        }
+      }
+    },
+    "Microphone" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mikrofon"
+          }
+        }
+      }
+    },
+    "Microphone choice" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mikrofonauswahl"
+          }
+        }
+      }
+    },
+    "Microphone paused. System audio continues." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mikrofon pausiert. Das Systemaudio läuft weiter."
+          }
+        }
+      }
+    },
+    "Minutes" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Protokoll"
+          }
+        }
+      }
+    },
+    "Minutes use Apple Intelligence on this device by default. Endpoints configured here (for example LM Studio or Ollama) are only used when you explicitly select one while generating minutes; the transcript is then sent to that endpoint." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Protokolle verwenden standardmäßig Apple Intelligence auf diesem Gerät. Hier konfigurierte Endpunkte wie LM Studio oder Ollama werden nur verwendet, wenn du beim Erstellen eines Protokolls ausdrücklich einen auswählst. Das Transkript wird dann an diesen Endpunkt gesendet."
+          }
+        }
+      }
+    },
+    "Model" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Modell"
+          }
+        }
+      }
+    },
+    "Model missing for %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Modell für %1$@ fehlt"
+          }
+        }
+      }
+    },
+    "Models" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Modelle"
+          }
+        }
+      }
+    },
+    "Models Steno needs" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Von Steno benötigte Modelle"
+          }
+        }
+      }
+    },
+    "More actions for %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Weitere Aktionen für %1$@"
+          }
+        }
+      }
+    },
+    "More voice samples (%lld)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Weitere Stimmproben (%lld)"
+          }
+        }
+      }
+    },
+    "Move “%@” to the Trash?" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "„%1$@“ in den Papierkorb legen?"
+          }
+        }
+      }
+    },
+    "Move %lld Meetings" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld Meetings verschieben"
+          }
+        }
+      }
+    },
+    "Move Down" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nach unten"
+          }
+        }
+      }
+    },
+    "Move Folder Down" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ordner nach unten verschieben"
+          }
+        }
+      }
+    },
+    "Move Folder into Folder" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ordner in Ordner verschieben"
+          }
+        }
+      }
+    },
+    "Move Folder to Top Level" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ordner auf die oberste Ebene verschieben"
+          }
+        }
+      }
+    },
+    "Move Folder Up" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ordner nach oben verschieben"
+          }
+        }
+      }
+    },
+    "Move Here" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hierher verschieben"
+          }
+        }
+      }
+    },
+    "Move into Folder" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In Ordner verschieben"
+          }
+        }
+      }
+    },
+    "Move Meeting to Trash…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meeting in den Papierkorb legen…"
+          }
+        }
+      }
+    },
+    "Move to Folder" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In Ordner verschieben"
+          }
+        }
+      }
+    },
+    "Move to Top Level" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auf die oberste Ebene verschieben"
+          }
+        }
+      }
+    },
+    "Move to Trash" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In den Papierkorb"
+          }
+        }
+      }
+    },
+    "Move to Trash…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In den Papierkorb…"
+          }
+        }
+      }
+    },
+    "Move Up" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nach oben"
+          }
+        }
+      }
+    },
+    "Multiple people" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mehrere Personen"
+          }
+        }
+      }
+    },
+    "Multiple people in this cluster" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mehrere Personen in diesem Cluster"
+          }
+        }
+      }
+    },
+    "Muster GmbH" : {
+      "shouldTranslate" : false
+    },
+    "Name" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Name"
+          }
+        }
+      }
+    },
+    "Name new person" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Neue Person benennen"
+          }
+        }
+      }
+    },
+    "name@example.org" : {
+      "shouldTranslate" : false
+    },
+    "Named person" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Benannte Person"
+          }
+        }
+      }
+    },
+    "Names, companies, agenda - anything that helps you later." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Namen, Firmen, Tagesordnung - alles, was dir später hilft."
+          }
+        }
+      }
+    },
+    "New folder" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Neuer Ordner"
+          }
+        }
+      }
+    },
+    "New Folder…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Neuer Ordner…"
+          }
+        }
+      }
+    },
+    "New meeting" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Neues Meeting"
+          }
+        }
+      }
+    },
+    "New Meeting" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Neues Meeting"
+          }
+        }
+      }
+    },
+    "New person" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Neue Person"
+          }
+        }
+      }
+    },
+    "New person…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Neue Person…"
+          }
+        }
+      }
+    },
+    "New subfolder" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Neuer Unterordner"
+          }
+        }
+      }
+    },
+    "New Subfolder…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Neuer Unterordner…"
+          }
+        }
+      }
+    },
+    "No audio was included in the received meeting." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das empfangene Meeting enthält kein Audio."
+          }
+        }
+      }
+    },
+    "No download or processing job starts automatically. Installation downloads speech assets from Apple and speaker separation from huggingface.co." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Es startet automatisch weder ein Download noch ein Verarbeitungsauftrag. Bei der Installation werden Sprachressourcen von Apple und die Sprechertrennung von huggingface.co geladen."
+          }
+        }
+      }
+    },
+    "No endpoints configured." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keine Endpunkte konfiguriert."
+          }
+        }
+      }
+    },
+    "No line contains “%@”." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keine Zeile enthält „%1$@“."
+          }
+        }
+      }
+    },
+    "no meeting content" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "keine Meetinginhalte"
+          }
+        }
+      }
+    },
+    "No meeting selected" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kein Meeting ausgewählt"
+          }
+        }
+      }
+    },
+    "No meetings yet" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Noch keine Meetings"
+          }
+        }
+      }
+    },
+    "No notes or transcript" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keine Notizen oder kein Transkript"
+          }
+        }
+      }
+    },
+    "No participants yet. Confirmed speakers appear automatically; add anyone who attended without speaking." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Noch keine Teilnehmenden. Bestätigte Sprecher erscheinen automatisch. Füge Personen hinzu, die teilgenommen haben, ohne zu sprechen."
+          }
+        }
+      }
+    },
+    "No people yet" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Noch keine Personen"
+          }
+        }
+      }
+    },
+    "No transcript yet" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Noch kein Transkript"
+          }
+        }
+      }
+    },
+    "No voice samples yet - Steno cannot recognise them automatically." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Noch keine Stimmproben. Steno kann diese Person nicht automatisch erkennen."
+          }
+        }
+      }
+    },
+    "None" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keine"
+          }
+        }
+      }
+    },
+    "Not included" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nicht enthalten"
+          }
+        }
+      }
+    },
+    "Not ready for %@." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Für %1$@ nicht bereit."
+          }
+        }
+      }
+    },
+    "Not while recording - it would be captured into the recording" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nicht während einer Aufnahme - der Ton würde mitaufgezeichnet"
+          }
+        }
+      }
+    },
+    "Notes" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notizen"
+          }
+        }
+      }
+    },
+    "Notes %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notizen %1$@"
+          }
+        }
+      }
+    },
+    "Notes could not be opened: %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notizen konnten nicht geöffnet werden: %1$@"
+          }
+        }
+      }
+    },
+    "Notes could not be saved: %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notizen konnten nicht gespeichert werden: %1$@"
+          }
+        }
+      }
+    },
+    "Notes unavailable" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notizen nicht verfügbar"
+          }
+        }
+      }
+    },
+    "Notes, including any time markers" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notizen einschließlich Zeitmarken"
+          }
+        }
+      }
+    },
+    "Offline model" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Offline-Modell"
+          }
+        }
+      }
+    },
+    "OK" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OK"
+          }
+        }
+      }
+    },
+    "One imported meeting needs attention because its processing could not be resumed. Other meetings and recording remain available." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ein importiertes Meeting benötigt Aufmerksamkeit, weil seine Verarbeitung nicht fortgesetzt werden konnte. Andere Meetings und die Aufnahmefunktion bleiben verfügbar."
+          }
+        }
+      }
+    },
+    "Only the folder goes away. Its meetings stay in the library and move back to the date list." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nur der Ordner wird entfernt. Seine Meetings bleiben in der Bibliothek und erscheinen wieder in der Datumsliste."
+          }
+        }
+      }
+    },
+    "Only the folder goes away. Its meetings stay in the library, and its subfolders move to the top level." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nur der Ordner wird entfernt. Seine Meetings bleiben in der Bibliothek und seine Unterordner werden auf die oberste Ebene verschoben."
+          }
+        }
+      }
+    },
+    "Open existing meeting" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vorhandenes Meeting öffnen"
+          }
+        }
+      }
+    },
+    "Opening library" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bibliothek wird geöffnet"
+          }
+        }
+      }
+    },
+    "optional" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "optional"
+          }
+        }
+      }
+    },
+    "Optional local processing" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Optionale lokale Verarbeitung"
+          }
+        }
+      }
+    },
+    "optional, falls back to model" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "optional, sonst Modellwert"
+          }
+        }
+      }
+    },
+    "Organisation (optional)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Organisation (optional)"
+          }
+        }
+      }
+    },
+    "Organization" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Organisation"
+          }
+        }
+      }
+    },
+    "Origin ID" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ursprungskennung"
+          }
+        }
+      }
+    },
+    "Others" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Andere"
+          }
+        }
+      }
+    },
+    "participants" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Teilnehmende"
+          }
+        }
+      }
+    },
+    "Participants" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Teilnehmende"
+          }
+        }
+      }
+    },
+    "Pause microphone" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mikrofon pausieren"
+          }
+        }
+      }
+    },
+    "People" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Personen"
+          }
+        }
+      }
+    },
+    "Personal speaker text" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persönlicher Sprechertext"
+          }
+        }
+      }
+    },
+    "Pick a meeting to look something up while you record." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wähle ein Meeting aus, um während der Aufnahme etwas nachzuschlagen."
+          }
+        }
+      }
+    },
+    "Pick this before the next step: the speech models are downloaded for the language you choose here." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wähle dies vor dem nächsten Schritt. Die Sprachmodelle werden für die hier ausgewählte Sprache geladen."
+          }
+        }
+      }
+    },
+    "Play sample" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Probe abspielen"
+          }
+        }
+      }
+    },
+    "Play the voice sample from %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stimmprobe von %1$@ abspielen"
+          }
+        }
+      }
+    },
+    "Play this section" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diesen Abschnitt abspielen"
+          }
+        }
+      }
+    },
+    "Play this voice sample" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Stimmprobe abspielen"
+          }
+        }
+      }
+    },
+    "Play voice sample" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stimmprobe abspielen"
+          }
+        }
+      }
+    },
+    "Preparing" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wird vorbereitet"
+          }
+        }
+      }
+    },
+    "Preparing package" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paket wird vorbereitet"
+          }
+        }
+      }
+    },
+    "Preparing preview" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vorschau wird vorbereitet"
+          }
+        }
+      }
+    },
+    "Preparing recording" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aufnahme wird vorbereitet"
+          }
+        }
+      }
+    },
+    "Private import cleanup required" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Private Importbereinigung erforderlich"
+          }
+        }
+      }
+    },
+    "Probably %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vermutlich %1$@"
+          }
+        }
+      }
+    },
+    "Processing" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verarbeitung"
+          }
+        }
+      }
+    },
+    "Processing failed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verarbeitung fehlgeschlagen"
+          }
+        }
+      }
+    },
+    "Processing failed for %@: %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verarbeitung für %1$@ fehlgeschlagen: %2$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Processing failed for %1$@: %2$@"
+          }
+        }
+      }
+    },
+    "Processing failed: %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verarbeitung fehlgeschlagen: %1$@"
+          }
+        }
+      }
+    },
+    "Processing location" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verarbeitungsort"
+          }
+        }
+      }
+    },
+    "Provisional live transcript; the final run replaces it." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vorläufiges Live-Transkript. Der abschließende Lauf ersetzt es."
+          }
+        }
+      }
+    },
+    "Re-transcribe and detect speakers" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erneut transkribieren und Sprecher erkennen"
+          }
+        }
+      }
+    },
+    "Reachable, but model “%@” was not found." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erreichbar, aber das Modell „%1$@“ wurde nicht gefunden."
+          }
+        }
+      }
+    },
+    "Reachable, but structured output is not ready." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erreichbar, aber die strukturierte Ausgabe ist nicht bereit."
+          }
+        }
+      }
+    },
+    "Reachable, but structured output is not ready. Reported context: %lld tokens." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erreichbar, aber die strukturierte Ausgabe ist nicht bereit. Gemeldeter Kontext: %1$lld Token."
+          }
+        }
+      }
+    },
+    "Reachable, model “%@” is available." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erreichbar, Modell „%1$@“ ist verfügbar."
+          }
+        }
+      }
+    },
+    "Reading package contents" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paketinhalt wird gelesen"
+          }
+        }
+      }
+    },
+    "Ready" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bereit"
+          }
+        }
+      }
+    },
+    "Ready - processing completed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bereit - Verarbeitung abgeschlossen"
+          }
+        }
+      }
+    },
+    "Ready for %@." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bereit für %1$@."
+          }
+        }
+      }
+    },
+    "Recording" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aufnahme"
+          }
+        }
+      }
+    },
+    "Recording %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aufnahme %1$@"
+          }
+        }
+      }
+    },
+    "Recording access" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aufnahmezugriff"
+          }
+        }
+      }
+    },
+    "Recording microphone" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aufnahmemikrofon"
+          }
+        }
+      }
+    },
+    "Recording recovery needs attention" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aufnahmewiederherstellung benötigt Aufmerksamkeit"
+          }
+        }
+      }
+    },
+    "Recording time" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aufnahmedauer"
+          }
+        }
+      }
+    },
+    "Recordings and imports appear here." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aufnahmen und Importe erscheinen hier."
+          }
+        }
+      }
+    },
+    "Refresh" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aktualisieren"
+          }
+        }
+      }
+    },
+    "Regenerate" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Neu erstellen"
+          }
+        }
+      }
+    },
+    "Region" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Region"
+          }
+        }
+      }
+    },
+    "Reload Folders" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ordner neu laden"
+          }
+        }
+      }
+    },
+    "Reload Meetings" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meetings neu laden"
+          }
+        }
+      }
+    },
+    "Remove participant" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Teilnehmende Person entfernen"
+          }
+        }
+      }
+    },
+    "Rename" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Umbenennen"
+          }
+        }
+      }
+    },
+    "Rename %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ umbenennen"
+          }
+        }
+      }
+    },
+    "Rename folder" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ordner umbenennen"
+          }
+        }
+      }
+    },
+    "Rename Folder…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ordner umbenennen…"
+          }
+        }
+      }
+    },
+    "Rename meeting" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meeting umbenennen"
+          }
+        }
+      }
+    },
+    "Rename Meeting…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meeting umbenennen…"
+          }
+        }
+      }
+    },
+    "Rename…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Umbenennen…"
+          }
+        }
+      }
+    },
+    "Request microphone and system audio access" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zugriff auf Mikrofon und Systemaudio anfordern"
+          }
+        }
+      }
+    },
+    "Reset to generic" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auf generisch zurücksetzen"
+          }
+        }
+      }
+    },
+    "Resume microphone" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mikrofon fortsetzen"
+          }
+        }
+      }
+    },
+    "Retries removal of Steno's temporary meeting package." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Versucht erneut, Stenos temporäres Meeting-Paket zu entfernen."
+          }
+        }
+      }
+    },
+    "Retry cleanup" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bereinigung erneut versuchen"
+          }
+        }
+      }
+    },
+    "Retry the import after recovery. No processing job was created." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wiederhole den Import nach der Wiederherstellung. Es wurde kein Verarbeitungsauftrag erstellt."
+          }
+        }
+      }
+    },
+    "Revoke" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Widerrufen"
+          }
+        }
+      }
+    },
+    "Run with Apple" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mit Apple ausführen"
+          }
+        }
+      }
+    },
+    "Save" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sichern"
+          }
+        }
+      }
+    },
+    "Saving…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wird gesichert…"
+          }
+        }
+      }
+    },
+    "Scan again" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erneut scannen"
+          }
+        }
+      }
+    },
+    "Scanning folder…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ordner wird gescannt…"
+          }
+        }
+      }
+    },
+    "Search titles" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Titel durchsuchen"
+          }
+        }
+      }
+    },
+    "Selected manually: %@. Steno will not use another device." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Manuell ausgewählt: %1$@. Steno verwendet kein anderes Gerät."
+          }
+        }
+      }
+    },
+    "Share meeting" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meeting teilen"
+          }
+        }
+      }
+    },
+    "Share Meeting…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meeting teilen…"
+          }
+        }
+      }
+    },
+    "Share this meeting through AirDrop" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieses Meeting über AirDrop teilen"
+          }
+        }
+      }
+    },
+    "Show notes, participants and speaker assignment" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notizen, Teilnehmende und Sprecherzuordnung anzeigen"
+          }
+        }
+      }
+    },
+    "Show or Hide Inspector" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Informationsbereich ein- oder ausblenden"
+          }
+        }
+      }
+    },
+    "Show Setup Assistant" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Einrichtungsassistenten anzeigen"
+          }
+        }
+      }
+    },
+    "Skip" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Überspringen"
+          }
+        }
+      }
+    },
+    "Source" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quelle"
+          }
+        }
+      }
+    },
+    "Source language" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quellsprache"
+          }
+        }
+      }
+    },
+    "Speaker %lld" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sprecher %lld"
+          }
+        }
+      }
+    },
+    "Speaker %lld (microphone)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sprecher %lld (Mikrofon)"
+          }
+        }
+      }
+    },
+    "Speaker %lld (system)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sprecher %lld (Systemaudio)"
+          }
+        }
+      }
+    },
+    "Speakers" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sprecher"
+          }
+        }
+      }
+    },
+    "Speakers: %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sprecher: %1$@"
+          }
+        }
+      }
+    },
+    "Spoken language" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gesprochene Sprache"
+          }
+        }
+      }
+    },
+    "Start a new recording" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Neue Aufnahme starten"
+          }
+        }
+      }
+    },
+    "Start a recording or import an audio file." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Starte eine Aufnahme oder importiere eine Audiodatei."
+          }
+        }
+      }
+    },
+    "Start recording" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aufnahme starten"
+          }
+        }
+      }
+    },
+    "Start Recording" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aufnahme starten"
+          }
+        }
+      }
+    },
+    "Status" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Status"
+          }
+        }
+      }
+    },
+    "Steno can address it directly instead of through its OpenAI-compatible layer. Only that way can it switch off the model's thinking mode and set the context size. With a thinking model, that decides whether an answer arrives at all." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Steno kann es direkt statt über seine OpenAI-kompatible Schicht ansprechen. Nur so kann Steno den Denkmodus des Modells abschalten und die Kontextgröße festlegen. Bei einem denkenden Modell entscheidet das darüber, ob überhaupt eine Antwort eintrifft."
+          }
+        }
+      }
+    },
+    "Steno cannot confirm that the meeting commit completed. Recovery must finish before you import this package again. No processing job was created." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Steno kann nicht bestätigen, dass das Meeting vollständig gespeichert wurde. Die Wiederherstellung muss abgeschlossen sein, bevor du dieses Paket erneut importierst. Es wurde kein Verarbeitungsauftrag erstellt."
+          }
+        }
+      }
+    },
+    "Steno cannot identify every microphone used by active apps. Choose one manually." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Steno kann nicht jedes von aktiven Apps verwendete Mikrofon ermitteln. Wähle eines manuell aus."
+          }
+        }
+      }
+    },
+    "Steno could not create a private temporary export." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Steno konnte keinen privaten temporären Export erstellen."
+          }
+        }
+      }
+    },
+    "Steno could not finish opening the local library. Try again to use the same local library. %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Steno konnte das Öffnen der lokalen Bibliothek nicht abschließen. Versuche es erneut, um dieselbe lokale Bibliothek zu verwenden. %1$@"
+          }
+        }
+      }
+    },
+    "Steno could not finish recovering %lld interrupted meetings. All recording files remain stored. First error: %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Steno konnte die Wiederherstellung von %1$lld unterbrochenen Meetings nicht abschließen. Alle Aufnahmedateien bleiben gespeichert. Erster Fehler: %2$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Steno could not finish recovering %1$lld interrupted meetings. All recording files remain stored. First error: %2$@"
+          }
+        }
+      }
+    },
+    "Steno could not finish recovering one interrupted meeting. All recording files remain stored. First error: %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Steno konnte die Wiederherstellung eines unterbrochenen Meetings nicht abschließen. Alle Aufnahmedateien bleiben gespeichert. Erster Fehler: %1$@"
+          }
+        }
+      }
+    },
+    "Steno could not open this meeting's notes." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Steno konnte die Notizen dieses Meetings nicht öffnen."
+          }
+        }
+      }
+    },
+    "Steno could not read the available microphones. (%@)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Steno konnte die verfügbaren Mikrofone nicht lesen. (%1$@)"
+          }
+        }
+      }
+    },
+    "Steno could not remove its temporary meeting export. Retry cleanup." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Steno konnte seinen temporären Meeting-Export nicht entfernen. Versuche die Bereinigung erneut."
+          }
+        }
+      }
+    },
+    "Steno couldn't finish deleting “%@”. The endpoint may already have been removed. %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Steno konnte das Löschen von „%1$@“ nicht abschließen. Der Endpunkt wurde möglicherweise bereits entfernt. %2$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Steno couldn't finish deleting “%1$@”. The endpoint may already have been removed. %2$@"
+          }
+        }
+      }
+    },
+    "Steno found %lld original recording files that could not be safely registered. The files remain stored and need attention." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Steno hat %1$lld Originalaufnahmen gefunden, die nicht sicher registriert werden konnten. Die Dateien bleiben gespeichert und benötigen Aufmerksamkeit."
+          }
+        }
+      }
+    },
+    "Steno found an original recording file that could not be safely registered. The file remains stored and needs attention." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Steno hat eine Originalaufnahme gefunden, die nicht sicher registriert werden konnte. Die Datei bleibt gespeichert und benötigt Aufmerksamkeit."
+          }
+        }
+      }
+    },
+    "Steno found an unexpected item in its temporary export. Remove it, then retry cleanup." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Steno hat ein unerwartetes Element in seinem temporären Export gefunden. Entferne es und versuche die Bereinigung erneut."
+          }
+        }
+      }
+    },
+    "Steno is checking and opening the local library." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Steno prüft und öffnet die lokale Bibliothek."
+          }
+        }
+      }
+    },
+    "Steno is not ready to share this meeting." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Steno ist noch nicht bereit, dieses Meeting zu teilen."
+          }
+        }
+      }
+    },
+    "Steno is still checking which languages this Mac can transcribe." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Steno prüft noch, welche Sprachen dieser Mac transkribieren kann."
+          }
+        }
+      }
+    },
+    "Steno records and transcribes conversations on this Mac. Your recordings stay here. Steno reaches the network for two things only: to download the models you approve in a moment, and to talk to an external language model if you pick one for a render." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Steno zeichnet Gespräche auf diesem Mac auf und transkribiert sie. Deine Aufnahmen bleiben hier. Steno greift nur für zwei Dinge auf das Netzwerk zu: um die gleich von dir genehmigten Modelle herunterzuladen und um ein externes Sprachmodell anzusprechen, wenn du eines zum Erstellen eines Protokolls auswählst."
+          }
+        }
+      }
+    },
+    "Steno refused to remove a temporary location it no longer owns." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Steno hat sich geweigert, einen temporären Speicherort zu entfernen, der ihm nicht mehr gehört."
+          }
+        }
+      }
+    },
+    "Steno validates the received file before changing your library." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Steno überprüft die empfangene Datei, bevor deine Bibliothek geändert wird."
+          }
+        }
+      }
+    },
+    "Still to download: %@." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Noch herunterzuladen: %1$@."
+          }
+        }
+      }
+    },
+    "Stop" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stopp"
+          }
+        }
+      }
+    },
+    "Stop playback" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wiedergabe beenden"
+          }
+        }
+      }
+    },
+    "Stop recording" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aufnahme beenden"
+          }
+        }
+      }
+    },
+    "Stop Recording" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aufnahme beenden"
+          }
+        }
+      }
+    },
+    "Stop recording (Cmd-.)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aufnahme beenden (Cmd-.)"
+          }
+        }
+      }
+    },
+    "Stop the voice sample" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stimmprobe beenden"
+          }
+        }
+      }
+    },
+    "Synthetic Demo" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Synthetische Demo"
+          }
+        }
+      }
+    },
+    "System audio" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Systemaudio"
+          }
+        }
+      }
+    },
+    "Take notes while recording" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Während der Aufnahme Notizen machen"
+          }
+        }
+      }
+    },
+    "Taken over from the legacy Steno app: the timestamps are imprecise and the speaker assignment comes from the old recognition." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aus der alten Steno-App übernommen: Die Zeitstempel sind ungenau und die Sprecherzuordnung stammt aus der alten Erkennung."
+          }
+        }
+      }
+    },
+    "Test connection" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verbindung testen"
+          }
+        }
+      }
+    },
+    "Text content" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Textinhalt"
+          }
+        }
+      }
+    },
+    "The API key could not be deleted from the keychain." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der API-Schlüssel konnte nicht aus dem Schlüsselbund gelöscht werden."
+          }
+        }
+      }
+    },
+    "The API key could not be read from the keychain." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der API-Schlüssel konnte nicht aus dem Schlüsselbund gelesen werden."
+          }
+        }
+      }
+    },
+    "The API key could not be stored in the keychain." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der API-Schlüssel konnte nicht im Schlüsselbund gespeichert werden."
+          }
+        }
+      }
+    },
+    "The Apple Intelligence model is not available yet." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Apple-Intelligence-Modell ist noch nicht verfügbar."
+          }
+        }
+      }
+    },
+    "The commit outcome requires recovery before this package can be handled again." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Ergebnis des Speichervorgangs muss wiederhergestellt werden, bevor dieses Paket erneut verarbeitet werden kann."
+          }
+        }
+      }
+    },
+    "The entire meeting folder (audio, transcripts, runs) moves to the Trash and stays recoverable there. Speakers that are still unnamed cannot be named after deletion, because naming needs the audio file." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der gesamte Meeting-Ordner mit Audio, Transkripten und Läufen wird in den Papierkorb verschoben und bleibt dort wiederherstellbar. Noch unbenannte Sprecher können nach dem Löschen nicht mehr benannt werden, da dafür die Audiodatei benötigt wird."
+          }
+        }
+      }
+    },
+    "The existing meeting was confirmed before cancellation could take effect. Continue to open it." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das vorhandene Meeting wurde bestätigt, bevor der Abbruch wirksam werden konnte. Fahre fort, um es zu öffnen."
+          }
+        }
+      }
+    },
+    "The folder list could not be loaded. Meetings and recording remain available. %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Ordnerliste konnte nicht geladen werden. Meetings und Aufnahme bleiben verfügbar. %1$@"
+          }
+        }
+      }
+    },
+    "The key is stored in the keychain only." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Schlüssel wird ausschließlich im Schlüsselbund gespeichert."
+          }
+        }
+      }
+    },
+    "The last check found bytes that do not match what you approved. The detail is below." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bei der letzten Prüfung wurden Daten gefunden, die nicht mit deiner Freigabe übereinstimmen. Details stehen unten."
+          }
+        }
+      }
+    },
+    "The library commit may be complete, but Steno will not show success or start another action until its private session is removed." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Speichern in der Bibliothek ist möglicherweise abgeschlossen. Steno zeigt jedoch keinen Erfolg an und startet keine weitere Aktion, bis die private Sitzung entfernt wurde."
+          }
+        }
+      }
+    },
+    "The library could not be opened" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Bibliothek konnte nicht geöffnet werden"
+          }
+        }
+      }
+    },
+    "The library is not ready yet." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Bibliothek ist noch nicht bereit."
+          }
+        }
+      }
+    },
+    "The live transcript appears here as soon as someone speaks." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Live-Transkript erscheint hier, sobald jemand spricht."
+          }
+        }
+      }
+    },
+    "The live transcript is unfinished on this path. It never stops the recording, but it can fall silent or lag. Apple stays the safe choice." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Live-Transkript ist auf diesem Pfad noch nicht ausgereift. Es beendet niemals die Aufnahme, kann aber verstummen oder hinterherhinken. Apple bleibt die sichere Wahl."
+          }
+        }
+      }
+    },
+    "The meeting changed while Steno prepared it. Try sharing it again." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Meeting wurde während der Vorbereitung geändert. Versuche erneut, es zu teilen."
+          }
+        }
+      }
+    },
+    "The meeting commit completed before cancellation could take effect. Continue to open the imported meeting." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Meeting wurde gespeichert, bevor der Abbruch wirksam werden konnte. Fahre fort, um das importierte Meeting zu öffnen."
+          }
+        }
+      }
+    },
+    "The meeting contains inconsistent source-language information and cannot be shared." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Meeting enthält widersprüchliche Angaben zur Ausgangssprache und kann nicht geteilt werden."
+          }
+        }
+      }
+    },
+    "The meeting list could not be loaded. Recording remains available. %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Meeting-Liste konnte nicht geladen werden. Die Aufnahme bleibt verfügbar. %1$@"
+          }
+        }
+      }
+    },
+    "The meeting package could not be imported" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Meeting-Paket konnte nicht importiert werden"
+          }
+        }
+      }
+    },
+    "The meeting package is being created." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Meeting-Paket wird erstellt."
+          }
+        }
+      }
+    },
+    "The meeting selection changed. Steno removed the old package; activate Share meeting again to create the current selection." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Meeting-Auswahl hat sich geändert. Steno hat das alte Paket entfernt. Wähle erneut „Meeting teilen“, um die aktuelle Auswahl zu erstellen."
+          }
+        }
+      }
+    },
+    "The model list is not available." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Modellliste ist nicht verfügbar."
+          }
+        }
+      }
+    },
+    "The new name appears in every meeting this person speaks in." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der neue Name erscheint in jedem Meeting, in dem diese Person spricht."
+          }
+        }
+      }
+    },
+    "The new title only affects how the meeting is displayed; the originals stay unchanged." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der neue Titel ändert nur die Anzeige des Meetings. Die Originale bleiben unverändert."
+          }
+        }
+      }
+    },
+    "The original stays in the library; this saves a copy." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Original bleibt in der Bibliothek. Hiermit wird eine Kopie gespeichert."
+          }
+        }
+      }
+    },
+    "The package contains these visible speaker labels:" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Paket enthält diese sichtbaren Sprecherkennungen:"
+          }
+        }
+      }
+    },
+    "The prepared session is retained so cleanup can be retried. Nothing has been imported." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die vorbereitete Sitzung bleibt erhalten, damit die Bereinigung erneut versucht werden kann. Es wurde nichts importiert."
+          }
+        }
+      }
+    },
+    "The received file may remain in Downloads, where search indexing or a configured backup can copy it. Steno does not delete that file." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die empfangene Datei kann in „Downloads“ verbleiben und dort von der Suchindizierung oder einem eingerichteten Backup kopiert werden. Steno löscht diese Datei nicht."
+          }
+        }
+      }
+    },
+    "The recognised text stays available as an earlier version." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der erkannte Text bleibt als frühere Version erhalten."
+          }
+        }
+      }
+    },
+    "The review state changed. The view has been reloaded; please try again." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Prüfstatus hat sich geändert. Die Ansicht wurde neu geladen. Versuche es erneut."
+          }
+        }
+      }
+    },
+    "the selected language" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "die ausgewählte Sprache"
+          }
+        }
+      }
+    },
+    "The selected person no longer exists." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die ausgewählte Person ist nicht mehr vorhanden."
+          }
+        }
+      }
+    },
+    "The selected recording is no longer eligible for export. Reload the preview and select it again." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die ausgewählte Aufnahme kann nicht mehr exportiert werden. Lade die Vorschau neu und wähle sie erneut aus."
+          }
+        }
+      }
+    },
+    "The selected text-model endpoint is no longer available." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der ausgewählte Textmodell-Endpunkt ist nicht mehr verfügbar."
+          }
+        }
+      }
+    },
+    "The system may open AirDrop directly or show the Share menu. If the menu appears, choose AirDrop." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das System öffnet möglicherweise direkt AirDrop oder zeigt das Freigabemenü. Falls das Menü erscheint, wähle AirDrop."
+          }
+        }
+      }
+    },
+    "The system sharing interface is open. The temporary package stays available until the system reports that sharing finished or was cancelled." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Systemfreigabe ist geöffnet. Das temporäre Paket bleibt verfügbar, bis das System den Abschluss oder Abbruch der Freigabe meldet."
+          }
+        }
+      }
+    },
+    "The text model is currently unavailable." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Textmodell ist derzeit nicht verfügbar."
+          }
+        }
+      }
+    },
+    "The transcription language cannot change while a recording is running." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Transkriptionssprache kann während einer laufenden Aufnahme nicht geändert werden."
+          }
+        }
+      }
+    },
+    "The transcription language cannot change while a recording is starting." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Transkriptionssprache kann nicht geändert werden, während eine Aufnahme gestartet wird."
+          }
+        }
+      }
+    },
+    "The transcription language cannot change while transcription is being prepared." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Transkriptionssprache kann nicht geändert werden, während die Transkription vorbereitet wird."
+          }
+        }
+      }
+    },
+    "There is no assignment here that could be changed." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hier gibt es keine Zuordnung, die geändert werden könnte."
+          }
+        }
+      }
+    },
+    "This address looks like Ollama." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Adresse sieht nach Ollama aus."
+          }
+        }
+      }
+    },
+    "This connection is not encrypted." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Verbindung ist nicht verschlüsselt."
+          }
+        }
+      }
+    },
+    "This device does not support Apple Intelligence." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieses Gerät unterstützt Apple Intelligence nicht."
+          }
+        }
+      }
+    },
+    "This exact meeting is already in your library. Importing it again would not change anything." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Genau dieses Meeting befindet sich bereits in deiner Bibliothek. Ein erneuter Import würde nichts ändern."
+          }
+        }
+      }
+    },
+    "This folder contains no importable meetings." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieser Ordner enthält keine importierbaren Meetings."
+          }
+        }
+      }
+    },
+    "This imported meeting has no word-level timestamps. Steno re-transcribes the recording for them; the existing transcript is kept as an earlier version." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieses importierte Meeting enthält keine wortgenauen Zeitstempel. Steno transkribiert die Aufnahme dafür erneut. Das vorhandene Transkript bleibt als frühere Version erhalten."
+          }
+        }
+      }
+    },
+    "This Mac reports no languages for transcription. Steno cannot transcribe until macOS offers one." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieser Mac meldet keine Sprachen für die Transkription. Steno kann erst transkribieren, wenn macOS eine anbietet."
+          }
+        }
+      }
+    },
+    "This meeting currently has no notes, transcript or selected recording to share." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieses Meeting enthält derzeit keine Notizen, kein Transkript und keine ausgewählte Aufnahme zum Teilen."
+          }
+        }
+      }
+    },
+    "This removes them from every meeting's speaker suggestions and deletes their voice profile." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dadurch wird die Person aus den Sprechervorschlägen aller Meetings entfernt und ihr Stimmprofil gelöscht."
+          }
+        }
+      }
+    },
+    "This section is marked as “multiple people” and cannot be assigned to one person." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieser Abschnitt ist als „mehrere Personen“ markiert und kann keiner einzelnen Person zugeordnet werden."
+          }
+        }
+      }
+    },
+    "This speaker belongs to a superseded run. Please reload the view." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieser Sprecher gehört zu einem überholten Lauf. Lade die Ansicht neu."
+          }
+        }
+      }
+    },
+    "This speaker cannot be changed because its cluster provenance is ambiguous." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieser Sprecher kann nicht geändert werden, weil die Herkunft seines Clusters mehrdeutig ist."
+          }
+        }
+      }
+    },
+    "This transfer contains an unencrypted raw recording and may include voices of other people." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Übertragung enthält eine unverschlüsselte Originalaufnahme und kann Stimmen anderer Personen enthalten."
+          }
+        }
+      }
+    },
+    "This transfer contains unencrypted meeting text." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Übertragung enthält unverschlüsselten Meeting-Text."
+          }
+        }
+      }
+    },
+    "Title" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Titel"
+          }
+        }
+      }
+    },
+    "Tokens per request, between %lld and %lld." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Token pro Anfrage, zwischen %1$lld und %2$lld."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Tokens per request, between %1$lld and %2$lld."
+          }
+        }
+      }
+    },
+    "Tokens per request. Must match what the server actually loads. Too small a value splits a long meeting into so many pieces that the summary no longer converges." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Token pro Anfrage. Der Wert muss dem entsprechen, was der Server tatsächlich lädt. Ein zu kleiner Wert teilt ein langes Meeting in so viele Teile, dass die Zusammenfassung nicht mehr zusammenfindet."
+          }
+        }
+      }
+    },
+    "Total, %lld tracks" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gesamt, %lld Spuren"
+          }
+        }
+      }
+    },
+    "Transcribe “%@” again?" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "„%1$@“ erneut transkribieren?"
+          }
+        }
+      }
+    },
+    "Transcribe Again" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erneut transkribieren"
+          }
+        }
+      }
+    },
+    "Transcribe Again…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erneut transkribieren…"
+          }
+        }
+      }
+    },
+    "Transcript" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transkript"
+          }
+        }
+      }
+    },
+    "transcript with speaker names" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transkript mit Sprechernamen"
+          }
+        }
+      }
+    },
+    "Transcription" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transkription"
+          }
+        }
+      }
+    },
+    "Transcription (step 1 of 3) running" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transkription läuft (Schritt 1 von 3)"
+          }
+        }
+      }
+    },
+    "Transcription language" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transkriptionssprache"
+          }
+        }
+      }
+    },
+    "Transcription language is guessed as %@. Confirm it in Settings before you rely on a transcript." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Als Transkriptionssprache wird %1$@ vermutet. Bestätige sie in den Einstellungen, bevor du dich auf ein Transkript verlässt."
+          }
+        }
+      }
+    },
+    "Transcription models" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transkriptionsmodelle"
+          }
+        }
+      }
+    },
+    "Try Again" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erneut versuchen"
+          }
+        }
+      }
+    },
+    "Undo" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rückgängig"
+          }
+        }
+      }
+    },
+    "unknown host" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "unbekannter Host"
+          }
+        }
+      }
+    },
+    "Unknown speaker" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unbekannter Sprecher"
+          }
+        }
+      }
+    },
+    "Use again" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erneut verwenden"
+          }
+        }
+      }
+    },
+    "Use Parakeet for the live transcript" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Parakeet für das Live-Transkript verwenden"
+          }
+        }
+      }
+    },
+    "Use the new one" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Neue Version verwenden"
+          }
+        }
+      }
+    },
+    "Use the Ollama API type" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ollama-API-Typ verwenden"
+          }
+        }
+      }
+    },
+    "Used to tell people apart as the voice database grows - two people with the same name are normal there. Both stay in your library and never reach a language model." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hilft, Personen bei wachsender Stimmdatenbank auseinanderzuhalten. Zwei Personen mit demselben Namen sind dort normal. Beide bleiben in deiner Bibliothek und erreichen niemals ein Sprachmodell."
+          }
+        }
+      }
+    },
+    "Validating audio" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Audio wird geprüft"
+          }
+        }
+      }
+    },
+    "Validating the package" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paket wird geprüft"
+          }
+        }
+      }
+    },
+    "Verifiably spoke in this meeting - click the name for contact details" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hat nachweislich in diesem Meeting gesprochen. Klicke für Kontaktdaten auf den Namen."
+          }
+        }
+      }
+    },
+    "Voice samples" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stimmproben"
+          }
+        }
+      }
+    },
+    "Waiting for speech" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Warten auf Sprache"
+          }
+        }
+      }
+    },
+    "Welcome to Steno" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Willkommen bei Steno"
+          }
+        }
+      }
+    },
+    "Which track?" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Welche Spur?"
+          }
+        }
+      }
+    },
+    "Who is taking the minutes?" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wer führt Protokoll?"
+          }
+        }
+      }
+    },
+    "Without these models Steno cannot transcribe at all. Speech models come from Apple, speaker separation from huggingface.co. Revoking stops future downloads; models already installed keep working." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ohne diese Modelle kann Steno nicht transkribieren. Sprachmodelle stammen von Apple, die Sprechertrennung von huggingface.co. Ein Widerruf stoppt künftige Downloads. Bereits installierte Modelle funktionieren weiter."
+          }
+        }
+      }
+    },
+    "Writing the private import copy" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Private Importkopie wird geschrieben"
+          }
+        }
+      }
+    },
+    "Your consent" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deine Einwilligung"
+          }
+        }
+      }
+    },
+    "Your correction stays stored as an earlier version" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deine Korrektur bleibt als frühere Version gespeichert"
+          }
+        }
+      }
+    },
+    "Your name" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dein Name"
+          }
+        }
+      }
+    },
+    "your notes" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "deine Notizen"
+          }
+        }
+      }
+    },
+    "Your own microphone track is not named as a person." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deine eigene Mikrofonspur wird nicht als Person benannt."
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

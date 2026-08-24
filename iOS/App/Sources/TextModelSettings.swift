@@ -7,13 +7,13 @@ import StenoPipeline
 typealias TextModelProviderBuilding = @Sendable (
     TextModelEndpoint,
     String?
-) -> any TextModelProvider
+) throws -> any TextModelProvider
 
 enum TextModelSettingsMutationError: LocalizedError, Equatable {
     case replacementAPIKeyRequired
 
     var errorDescription: String? {
-        "Enter the API key again before changing this endpoint URL."
+        String(localized: "Enter the API key again before changing this endpoint URL.")
     }
 }
 
@@ -83,7 +83,11 @@ final class TextModelSettings {
             name: validated.name,
             baseURL: validated.baseURL,
             modelID: validated.modelID,
-            requiresAPIKey: validated.requiresAPIKey || hasNewAPIKey
+            requiresAPIKey: validated.requiresAPIKey || hasNewAPIKey,
+            hosting: validated.hosting,
+            dialect: validated.dialect,
+            contextWindowTokens: validated.contextWindowTokens,
+            bedrock: validated.bedrock
         )
         try TextModelSettingsResolutionLock.withLock {
             var state = try TextModelEndpointRegistryRecovery.recover(
@@ -122,7 +126,11 @@ final class TextModelSettings {
                 requiresAPIKey: proposed.requiresAPIKey,
                 configurationRevision: needsNewRevision
                     ? UUID()
-                    : existing?.configurationRevision
+                    : existing?.configurationRevision,
+                hosting: proposed.hosting,
+                dialect: proposed.dialect,
+                contextWindowTokens: proposed.contextWindowTokens,
+                bedrock: proposed.bedrock
             )
             let newSlot = TextModelSecretSlot(endpoint: persisted)
             var candidate = state.endpoints
@@ -191,21 +199,42 @@ final class TextModelSettings {
             endpoints = state.endpoints
             recoveryErrorMessage = nil
             let stored = state.endpoints.first(where: { $0.id == endpoint.id }) ?? endpoint
-            state.journal = .delete(phase: .prepared, previous: stored)
+            let slots = TextModelSecretSlot.allKnownSlots(for: stored)
+            let currentSlot = slots[0]
+            let currentSecretWasPresent = try secrets.value(for: currentSlot) != nil
+            state.journal = .delete(
+                phase: .prepared,
+                previous: stored,
+                currentSecretWasPresent: currentSecretWasPresent
+            )
             try persistReconcilingAmbiguity(state)
             try mutationAction(.deleteJournalPersisted)
             do {
-                try secrets.removeValue(for: TextModelSecretSlot(endpoint: stored))
+                try secrets.removeValue(for: currentSlot)
             } catch {
                 state.journal = nil
-                try? persistReconcilingAmbiguity(state)
+                try? registry.persist(state)
                 throw error
+            }
+            try mutationAction(.deleteCurrentSecretRemoved)
+            state.journal = .delete(
+                phase: .committed,
+                previous: stored,
+                currentSecretWasPresent: currentSecretWasPresent
+            )
+            try persistReconcilingAmbiguity(state)
+            for slot in slots.dropFirst() {
+                try secrets.removeValue(for: slot)
             }
             try mutationAction(.deleteSecretRemoved)
             let candidate = state.endpoints.filter { $0.id != endpoint.id }
             var committed = TextModelEndpointRegistryState(
                 endpoints: candidate,
-                journal: .delete(phase: .committed, previous: stored)
+                journal: .delete(
+                    phase: .committed,
+                    previous: stored,
+                    currentSecretWasPresent: currentSecretWasPresent
+                )
             )
             try persistReconcilingAmbiguity(committed)
             endpoints = candidate
@@ -261,6 +290,10 @@ final class TextModelSettings {
             && lhs.baseURL == rhs.baseURL
             && lhs.modelID == rhs.modelID
             && lhs.requiresAPIKey == rhs.requiresAPIKey
+            && lhs.hosting == rhs.hosting
+            && lhs.dialect == rhs.dialect
+            && lhs.contextWindowTokens == rhs.contextWindowTokens
+            && lhs.bedrock == rhs.bedrock
     }
 
     nonisolated static func resolveProvider(
@@ -282,8 +315,8 @@ final class TextModelSettings {
         secrets: any TextModelSecretStoring,
         registry: any TextModelEndpointRegistryStoring,
         providerFactory: @escaping TextModelProviderBuilding = { endpoint, secret in
-            OpenAICompatibleProvider(
-                endpoint: endpoint,
+            try ExternalTextModelProviderFactory.makeProvider(
+                for: endpoint,
                 resolvingSecret: { _ in secret }
             )
         }
@@ -330,7 +363,7 @@ final class TextModelSettings {
                secret?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
                 throw OpenAICompatibleProviderError.apiKeyRequired
             }
-            return providerFactory(endpoint, secret)
+            return try providerFactory(endpoint, secret)
         }
     }
 }
@@ -437,11 +470,11 @@ private struct TextModelKeychainError: LocalizedError {
     var errorDescription: String? {
         switch operation {
         case .store:
-            "The API key could not be stored in the keychain."
+            String(localized: "The API key could not be stored in the keychain.")
         case .delete:
-            "The API key could not be deleted from the keychain."
+            String(localized: "The API key could not be deleted from the keychain.")
         case .read:
-            "The API key could not be read from the keychain."
+            String(localized: "The API key could not be read from the keychain.")
         }
     }
 }

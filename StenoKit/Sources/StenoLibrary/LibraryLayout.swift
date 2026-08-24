@@ -13,6 +13,11 @@ public struct LibraryLayout: Sendable {
     public var identityDirectory: URL { root.appendingPathComponent("identity", isDirectory: true) }
     public var persons: URL { identityDirectory.appendingPathComponent("persons.json") }
     public var folders: URL { root.appendingPathComponent("folders.json") }
+    /// Reparierbarer Cache fuer die lokale Demo-Installation. Die Meeting-
+    /// Metadaten bleiben die maßgebliche Besitzinformation.
+    public var demoInstallationIndex: URL {
+        root.appendingPathComponent("demo-installation-index.json")
+    }
     public var jobsDirectory: URL { root.appendingPathComponent("jobs", isDirectory: true) }
     public var exportsDirectory: URL { root.appendingPathComponent("exports", isDirectory: true) }
     public var transferValidationRoot: URL {

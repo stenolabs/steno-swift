@@ -30,7 +30,7 @@ Parser werden geprüft.
 - Import prüfen
 
 ## Participants
-Alex, Ada
+Grace, Ada
 
 ## Transcript
 [00:05] [You] Guten Morgen.

@@ -6,12 +6,17 @@ struct MeetingDetailObservationState {
     struct Key: Hashable {
         let meetingID: MeetingID
         let generation: UInt64
+        let jobActivity: UInt64
     }
 
     private var generation: UInt64 = 0
 
-    func key(for meetingID: MeetingID) -> Key {
-        Key(meetingID: meetingID, generation: generation)
+    /// `jobActivity` traegt AppModel.meetingJobActivity[meetingID] herein:
+    /// steigt er, weil irgendwo im Programm ein Job fuer dieses Meeting
+    /// eingereiht wurde, aendert sich der Key genauso wie nach einem
+    /// manuellen Klick, und SwiftUI startet .task(id:) neu.
+    func key(for meetingID: MeetingID, jobActivity: UInt64 = 0) -> Key {
+        Key(meetingID: meetingID, generation: generation, jobActivity: jobActivity)
     }
 
     mutating func restartAfterManualProcessingRequest() {
@@ -37,6 +42,7 @@ enum MeetingDetailObservationPolicy {
 
 struct MeetingDetailView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     let meetingID: MeetingID
 
     @State private var revision: TranscriptRevision?
@@ -86,36 +92,68 @@ struct MeetingDetailView: View {
         }
         .safeAreaInset(edge: .top) {
             VStack(spacing: 0) {
+                if meeting?.isDemo == true {
+                    HStack {
+                        DemoBadge()
+                        Spacer()
+                    }
+                    .padding(.horizontal, Steno.Space.m)
+                    .padding(.vertical, Steno.Space.xs)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.background)
+                    Divider()
+                }
                 meetingTransferTopStatus
                 pendingBanner
                 legacyUpgradeTopStatus
+                jobStatusBar
                 findBar
             }
+            .animation(statusAnimation, value: pipelineStatus.state)
         }
-        .safeAreaInset(edge: .bottom) { jobStatusBar }
         .navigationTitle(meeting?.title ?? "")
         .navigationSubtitle(subtitle)
         .inspector(isPresented: $showInspector) { inspectorContent }
-        .toolbar {
-            ToolbarItem {
+        .toolbar(id: MacToolbarID.meetingDetail.rawValue) {
+            ToolbarItem(
+                id: MacToolbarItemID.findTranscript.rawValue,
+                placement: .primaryAction
+            ) {
                 Button {
                     showFind = true
                     findFocused = true
                 } label: {
                     Label("Find in transcript", systemImage: "magnifyingglass")
                 }
-                .keyboardShortcut("f")
                 .help("Find in this transcript (Cmd-F)")
                 .disabled(revision == nil)
             }
-            ToolbarItem {
+            .defaultCustomization(
+                MacToolbarPresentation.defaultCustomization(
+                    for: .findTranscript,
+                    in: .meetingDetail
+                )
+            )
+            ToolbarItem(
+                id: MacToolbarItemID.inspector.rawValue,
+                placement: .primaryAction
+            ) {
                 Toggle(isOn: $showInspector) {
                     Label("Details", systemImage: "sidebar.right")
                 }
                 .help("Show notes, participants and speaker assignment")
             }
+            .defaultCustomization(
+                MacToolbarPresentation.defaultCustomization(
+                    for: .inspector,
+                    in: .meetingDetail
+                )
+            )
             if MeetingPresentation.canShareMeeting(status: meeting?.status) {
-                ToolbarItem {
+                ToolbarItem(
+                    id: MacToolbarItemID.shareMeeting.rawValue,
+                    placement: .primaryAction
+                ) {
                     Button {
                         showMeetingTransferExport = true
                     } label: {
@@ -123,13 +161,26 @@ struct MeetingDetailView: View {
                     }
                     .help("Share this meeting through AirDrop")
                 }
+                .defaultCustomization(
+                    MacToolbarPresentation.defaultCustomization(
+                        for: .shareMeeting,
+                        in: .meetingDetail
+                    )
+                )
             }
         }
         .sheet(isPresented: $showMeetingTransferExport) {
             MeetingTransferExportView(meetingID: meetingID)
                 .environment(model)
         }
-        .task(id: observationState.key(for: meetingID)) { await refreshLoop() }
+        .focusedSceneValue(
+            \.stenoMeetingDetailCommandContext,
+            detailCommandContext
+        )
+        .task(id: observationState.key(
+            for: meetingID,
+            jobActivity: model.meetingJobActivity[meetingID] ?? 0
+        )) { await refreshLoop() }
         // Eine offene Bearbeitung ueberlebt weder einen Filterwechsel noch
         // einen neuen Transkriptstand: im ersten Fall verschwindet die Zeile
         // unter dem offenen Feld, im zweiten zeigt der Index auf einen anderen
@@ -137,6 +188,28 @@ struct MeetingDetailView: View {
         // Benutzer haette bis dahin in ein totes Feld getippt.
         .onChange(of: transcriptQuery) { editingTurn = nil }
         .onChange(of: revision?.id) { editingTurn = nil }
+    }
+
+    private var detailCommandContext: MacMeetingDetailCommandContext {
+        let capturedMeetingID = meetingID
+        return MacMeetingDetailCommandContext(
+            meetingID: capturedMeetingID,
+            availability: MacMeetingDetailCommandAvailability(
+                hasTranscript: revision != nil,
+                meetingStatus: meeting?.status
+            ),
+            findTranscript: {
+                showFind = true
+                findFocused = true
+            },
+            toggleInspector: {
+                showInspector.toggle()
+            },
+            share: {
+                guard capturedMeetingID == meetingID else { return }
+                showMeetingTransferExport = true
+            }
+        )
     }
 
     @ViewBuilder
@@ -198,6 +271,14 @@ struct MeetingDetailView: View {
                 )
             }
         case .modelMissing(let localeIdentifier):
+            let installation = MacMeetingTransferModelInstallationPresentation.make(
+                canInstall: detail.actions.contains(.installModelAndProcess),
+                isInstallingAny: model.isInstallingModels,
+                isInstallingBaseline: model.isInstallingBaselineModels,
+                showsCancellationAction: model.showsModelInstallationCancellationAction,
+                cancellationState: model.modelInstallationCancellationState,
+                progress: model.modelInstallProgress
+            )
             VStack(alignment: .leading, spacing: Steno.Space.xs) {
                 Label(
                     "Model missing for \(languageName(localeIdentifier))",
@@ -208,19 +289,14 @@ struct MeetingDetailView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                if model.isInstallingModels {
-                    ProgressView(
-                        value: model.modelInstallProgress?.fraction ?? 0,
-                        total: 1
-                    ) {
-                        Text(model.modelInstallProgress?.title ?? "Installing models")
-                    }
-                } else if detail.actions.contains(.installModelAndProcess) {
-                    Button("Install model and process") {
-                        installTransferModelAndProcess(localeIdentifier)
-                    }
-                    .controlSize(.small)
-                    .disabled(isWorkingOnTransfer)
+                if let progress = installation.progress {
+                    meetingTransferModelInstallProgress(progress)
+                }
+                if let action = installation.action {
+                    meetingTransferModelInstallAction(
+                        action,
+                        localeIdentifier: localeIdentifier
+                    )
                 }
                 if let error = model.modelError {
                     Text(error)
@@ -286,6 +362,57 @@ struct MeetingDetailView: View {
                     || transferLocaleIdentifier.isEmpty
                     || !transferLanguageConfirmed
             )
+        }
+    }
+
+    @ViewBuilder
+    private func meetingTransferModelInstallProgress(
+        _ progress: MacModelInstallProgressPresentation
+    ) -> some View {
+        switch progress {
+        case .indeterminate(let title):
+            ProgressView {
+                Text(title)
+            }
+        case .determinate(let title, let fraction):
+            ProgressView(value: fraction, total: 1) {
+                Text(title)
+            } currentValueLabel: {
+                Text("\(Int((fraction * 100).rounded())) %")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func meetingTransferModelInstallAction(
+        _ action: MacModelInstallActionPresentation,
+        localeIdentifier: String
+    ) -> some View {
+        switch action {
+        case .install(let title):
+            Button {
+                installTransferModelAndProcess(localeIdentifier)
+            } label: {
+                Text(title)
+            }
+            .controlSize(.small)
+            .disabled(isWorkingOnTransfer)
+        case .cancel(let title):
+            Button {
+                Task { await model.cancelModelInstallation() }
+            } label: {
+                Text(title)
+            }
+            .controlSize(.small)
+        case .cancelling(let title):
+            Button {} label: {
+                Text(title)
+            }
+            .controlSize(.small)
+            .disabled(true)
         }
     }
 
@@ -358,7 +485,8 @@ struct MeetingDetailView: View {
                     SpeakerReviewSection(
                         meetingID: meetingID,
                         revision: revision,
-                        review: $review
+                        review: $review,
+                        isDemo: meeting?.isDemo ?? false
                     )
                 } else if !isSpeakerProcessing,
                           model.meetingsWithAudio.contains(meetingID) {
@@ -602,6 +730,8 @@ struct MeetingDetailView: View {
                     ProgressView()
                         .controlSize(.small)
                     Text(LegacyUpgradePresentation.stepTitle(for: job.kind))
+                    Text(LegacyUpgradePresentation.modelTitle(for: job))
+                        .foregroundStyle(.secondary)
                     Text("for \(Text(job.createdAt, style: .relative))")
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
@@ -667,7 +797,7 @@ struct MeetingDetailView: View {
             )
             .font(.callout)
             .foregroundStyle(.secondary)
-        case .legacyImport:
+        case .legacyImport, .demo:
             EmptyView()
         case .finalRun, .userEdit, .meetingTransfer:
             EmptyView()
@@ -688,53 +818,88 @@ struct MeetingDetailView: View {
         }
     }
 
-    /// Nur ein Fehlschlag, der nicht schon durch einen spaeteren erfolgreichen
-    /// Lauf derselben Art ueberholt ist. Sonst leuchtet ein alter Fehler
-    /// dauerhaft weiter, obwohl laengst alles durchgelaufen ist.
-    private var lastFailedTranscriptionJob: Job? {
-        let failed = transcriptionJobs
-            .filter { $0.status == .failed }
-            .sorted { $0.createdAt > $1.createdAt }
-        return failed.first { job in
-            !transcriptionJobs.contains {
-                $0.kind == job.kind
-                    && $0.status == .finished
-                    && $0.createdAt > job.createdAt
-            }
-        }
+    private var pipelineStatus: MeetingPipelineStatusPresentation {
+        MeetingPipelineStatusPresentation.make(
+            jobs: jobs,
+            isSuppressed: legacyUpgradeOwnsProcessingStatus
+                || MeetingPipelineStatusPresentation.transferOwnsStatus(
+                    transferDetail?.processingStatus
+                )
+        )
     }
 
     @ViewBuilder
     private var jobStatusBar: some View {
-        if !legacyUpgradeOwnsProcessingStatus {
-            if let job = transcriptionJobs.first(where: { $0.status == .running || $0.status == .queued }) {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text(stepText(job))
+        switch pipelineStatus.state {
+        case .hidden:
+            EmptyView()
+        case .active(let job):
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                if let title = pipelineStatus.activeTitle {
+                    Text(title)
                         .font(.callout)
-                    // Die Kette liefert keinen Fortschrittswert. Die verstrichene
-                    // Zeit ist das Ehrlichste, was sich anzeigen lässt, und sie
-                    // unterscheidet "rechnet noch" von "hängt".
-                    Text("for \(Text(job.createdAt, style: .relative))")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                    Spacer()
                 }
-                .padding(8)
-                .background(.background.secondary)
-            } else if let failed = lastFailedTranscriptionJob {
-                Label(
-                    "Processing failed: \(failed.errorMessage ?? "unknown")",
-                    systemImage: "exclamationmark.triangle"
-                )
+                // Die Kette liefert keinen Fortschrittswert. Die verstrichene
+                // Zeit ist das Ehrlichste, was sich anzeigen lässt, und sie
+                // unterscheidet "rechnet noch" von "hängt".
+                Text("for \(Text(job.createdAt, style: .relative))")
                     .font(.callout)
-                    .foregroundStyle(Steno.Colors.error)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-                    .background(.background.secondary)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                Spacer()
             }
+            .padding(8)
+            .background(.background.secondary)
+            .transition(statusTransition)
+        case .failed(let failed):
+            VStack(alignment: .leading, spacing: Steno.Space.xs) {
+                HStack {
+                    Label {
+                        Text(MeetingPipelineStatusPresentation.failureTitle)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle")
+                    }
+                        .font(.callout)
+                        .foregroundStyle(Steno.Colors.error)
+                    Spacer()
+                    // Ausdrueckliches Angebot, kein stiller Rueckfall: der
+                    // Nutzer entscheidet, nicht das Programm (Falle 3).
+                    if failed.kind == .finalASR,
+                       failed.transcriptionProviderID == .parakeetTDTv3 {
+                        Button("Run with Apple") {
+                            Task {
+                                await model.retryFinalASRWithApple(failed)
+                                jobs = await model.jobs(for: meetingID)
+                            }
+                        }
+                    }
+                }
+                if let detail = failed.errorMessage, !detail.isEmpty {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(8)
+            .background(.background.secondary)
+            .transition(statusTransition)
         }
+    }
+
+    private var statusMotionPolicy: MacStatusMotionPolicy {
+        MacStatusMotionPolicy(reduceMotion: accessibilityReduceMotion)
+    }
+
+    private var statusAnimation: Animation? {
+        statusMotionPolicy == .reduced ? nil : .default
+    }
+
+    private var statusTransition: AnyTransition {
+        guard statusMotionPolicy.usesPositionalMovement else { return .opacity }
+        return .move(edge: .top).combined(with: .opacity)
     }
 
     private var legacyUpgradeOwnsProcessingStatus: Bool {
@@ -742,19 +907,6 @@ struct MeetingDetailView: View {
         case .running, .failed: true
         case .hidden, .unavailable, .ready: false
         }
-    }
-
-    /// Die Kette hat drei Glieder, und sie dauert Minuten. Wer nach der
-    /// Transkription weiter "Transkription läuft" liest, während schon ein
-    /// Transkript dasteht, hält die App für hängengeblieben.
-    private func stepText(_ job: Job) -> String {
-        let step = switch job.kind {
-        case .finalASR: "Transcription (step 1 of 3)"
-        case .diarization: "Detecting speaker changes (step 2 of 3)"
-        case .identitySuggestion: "Comparing voices (step 3 of 3)"
-        default: "Processing"
-        }
-        return job.status == .running ? "\(step) running" : "\(step) queued"
     }
 
     private var pendingDescription: String {
@@ -920,7 +1072,7 @@ struct TranscriptTurnRow: View {
             }
             .frame(width: 52, alignment: .trailing)
             VStack(alignment: .leading, spacing: 2) {
-                if let label = presentation.label {
+                if let label = SpeakerDisplayLocalization.label(presentation) {
                     HStack(spacing: 5) {
                         // Der Marker ist eine Zugabe zum Namen, nie sein
                         // Ersatz: Farbe traegt hier keine Information allein.
@@ -934,7 +1086,7 @@ struct TranscriptTurnRow: View {
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                     }
-                    if let cue = presentation.originCue {
+                    if let cue = SpeakerDisplayLocalization.originCue(presentation) {
                         Label(cue, systemImage: "text.badge.checkmark")
                             .font(.caption2)
                             .foregroundStyle(.secondary)

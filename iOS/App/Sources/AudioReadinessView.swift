@@ -12,6 +12,8 @@ import SwiftUI
 /// rather than inferred from a log file.
 struct AudioReadinessView: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.openURL) private var openURL
+    @Environment(\.scenePhase) private var scenePhase
     @State private var model: AudioReadinessModel
 
     init(session: AudioSessionController) {
@@ -39,11 +41,28 @@ struct AudioReadinessView: View {
         List {
             Section("Microphone") {
                 LabeledContent("Permission", value: model.permissionText)
-                if model.permission != .authorized {
-                    Button("Ask for permission") {
+                switch MicrophonePermissionPresentation.action(for: model.permission) {
+                case .request:
+                    Button {
                         Task { await model.requestPermission() }
+                    } label: {
+                        Text(MicrophonePermissionPresentation.requestTitle)
                     }
-                    .disabled(model.permission == .denied)
+                case .openSettings:
+                    Text(MicrophonePermissionPresentation.deniedExplanation)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button {
+                        openURL(MicrophonePermissionPresentation.settingsURL)
+                    } label: {
+                        Text(MicrophonePermissionPresentation.openSettingsTitle)
+                    }
+                    .accessibilityHint(
+                        Text(MicrophonePermissionPresentation.openSettingsHint)
+                    )
+                    .accessibilityIdentifier("readiness-open-microphone-settings")
+                case nil:
+                    EmptyView()
                 }
             }
 
@@ -62,7 +81,11 @@ struct AudioReadinessView: View {
                     LevelMeter(level: model.level, isActive: model.isMetering)
                         .padding(.vertical, 4)
                     Button(model.isMetering ? "Stop metering" : "Start metering") {
-                        Task { await model.toggleMetering() }
+                        Task {
+                            await model.toggleMetering(
+                                recordingIsActive: app.recording.isActive
+                            )
+                        }
                     }
                     .disabled(model.permission != .authorized)
                 }
@@ -126,10 +149,7 @@ struct AudioReadinessView: View {
                         // Der Unterschied zwischen abgeleitet und gewaehlt ist
                         // der ganze Zweck dieses Bildschirms.
                         Label(
-                            "Steno guessed this from your device. Pick the "
-                                + "language people actually speak in the room, "
-                                + "or a recording will be transcribed into the "
-                                + "wrong language and still look plausible.",
+                            "Steno guessed this from your device. Pick the language people actually speak in the room, or a recording will be transcribed into the wrong language and still look plausible.",
                             systemImage: "exclamationmark.triangle"
                         )
                         .font(.caption)
@@ -151,9 +171,21 @@ struct AudioReadinessView: View {
                     }
                 }
 
-                LabeledContent("Model status", value: modelStatusText)
+                LabeledContent("Model status") {
+                    modelStatusText
+                }
 
-                if app.models.isReady(for: app.language.locale) == false {
+                if let presentation = app.models.installProgressPresentation {
+                    IOSModelInstallationProgressView(
+                        presentation: presentation,
+                        isCancelling: app.models.isCancelling
+                    ) {
+                        Task {
+                            await app.models.cancelInstall()
+                            await model.refreshSpeechAvailability()
+                        }
+                    }
+                } else if app.models.isReady(for: app.language.locale) == false {
                     Button("Allow and install") {
                         Task {
                             await app.allowAndInstallSpeechModel()
@@ -165,12 +197,13 @@ struct AudioReadinessView: View {
                             || !app.language.wasChosenExplicitly
                             || app.models.bundleDescriptions.isEmpty
                     )
+                }
 
-                    if app.recording.isActive {
-                        Text("Stop the recording before installing a model.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                if app.models.isReady(for: app.language.locale) != true,
+                   app.recording.isActive {
+                    Text("Stop the recording before installing a model.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 if let errorMessage = app.models.errorMessage {
@@ -184,8 +217,7 @@ struct AudioReadinessView: View {
                     }
                     LabeledContent("Sources", value: record.sources.joined(separator: ", "))
                     Text(
-                        "Revoking stops future downloads. "
-                            + "Models already installed keep working."
+                        "Revoking stops future downloads. Models already installed keep working."
                     )
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -200,10 +232,7 @@ struct AudioReadinessView: View {
                 // the system locale is exactly what Steno does not follow.
                 if divergesFromSystem {
                     Label(
-                        "Your device is set to \(systemLanguageName). Steno "
-                            + "transcribes in \(app.language.selectedDisplayName) "
-                            + "regardless, because the device setting says "
-                            + "nothing about the language people speak in the room.",
+                        "Your device is set to \(systemLanguageName). Steno transcribes in \(app.language.selectedDisplayName) regardless, because the device setting says nothing about the language people speak in the room.",
                         systemImage: "info.circle"
                     )
                     .font(.caption)
@@ -238,19 +267,27 @@ struct AudioReadinessView: View {
                     }
                 }
 
-                LabeledContent(
-                    "Model status",
-                    value: diarizationModelStatusText
-                )
+                LabeledContent("Model status") {
+                    diarizationModelStatusText
+                }
 
                 if app.diarizationModels.isReady(for: app.language.locale) != true {
-                    Button("Allow and install speaker separation") {
-                        Task { await app.allowAndInstallDiarizationModels() }
+                    if let presentation = app.diarizationModels.installProgressPresentation {
+                        IOSModelInstallationProgressView(
+                            presentation: presentation,
+                            isCancelling: app.diarizationModels.isCancelling
+                        ) {
+                            Task { await app.diarizationModels.cancelInstall() }
+                        }
+                    } else {
+                        Button("Allow and install speaker separation") {
+                            Task { await app.allowAndInstallDiarizationModels() }
+                        }
+                        .disabled(
+                            !app.canInstallDiarizationModels
+                                || app.diarizationModels.bundleDescriptions.isEmpty
+                        )
                     }
-                    .disabled(
-                        !app.canInstallDiarizationModels
-                            || app.diarizationModels.bundleDescriptions.isEmpty
-                    )
                 }
 
                 if let lockMessage = DiarizationModelPresentation.installLockMessage(
@@ -272,8 +309,7 @@ struct AudioReadinessView: View {
                     }
                     LabeledContent("Sources", value: record.sources.joined(separator: ", "))
                     Text(
-                        "Revoking stops future downloads. "
-                            + "Models already installed keep separating speakers."
+                        "Revoking stops future downloads. Models already installed keep separating speakers."
                     )
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -313,54 +349,84 @@ struct AudioReadinessView: View {
             Task { await model.refreshSpeechAvailability() }
         }
         .navigationBarTitleDisplayMode(.inline)
-        .task { await model.start() }
+        .task {
+            await model.start(recordingIsActive: app.recording.isActive)
+        }
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            guard phase == .active else { return }
+            model.refreshMicrophonePermission()
+        }
+        .onChange(of: app.recording.isActive) {
+            Task {
+                await model.recordingStateDidChange(
+                    isActive: app.recording.isActive
+                )
+            }
+        }
+        .onDisappear {
+            Task {
+                await model.stopMetering()
+            }
+        }
     }
 
     private var languageLockMessage: String {
         if app.recording.isActive {
-            return "The language cannot change while a recording runs."
+            return String(localized: "The language cannot change while a recording runs.")
         }
         if app.models.isInstalling {
-            return "The language cannot change while the model is installing."
+            return String(localized: "The language cannot change while the model is installing.")
         }
         if app.diarizationModels.isInstalling {
-            return "The language cannot change while speaker separation installs."
+            return String(localized: "The language cannot change while speaker separation installs.")
         }
-        return "The language cannot change while speech recognition restarts."
+        return String(localized: "The language cannot change while speech recognition restarts.")
     }
 
-    private var modelStatusText: String {
-        if let progress = app.models.progress {
-            return "Installing \(progress.title), "
-                + "\(Int((progress.fraction * 100).rounded())) %"
+    private var modelStatusText: Text {
+        if let presentation = app.models.installProgressPresentation {
+            return installationStatusText(presentation)
         }
         switch app.models.isReady(for: app.language.locale) {
         case true:
-            return "Ready for \(app.language.selectedDisplayName)."
+            return Text("Ready for \(app.language.selectedDisplayName).")
         case false:
-            return "Not installed for \(app.language.selectedDisplayName)."
+            return Text("Not installed for \(app.language.selectedDisplayName).")
         case nil:
-            return "Checking…"
+            return Text("Checking…")
         }
     }
 
-    private var diarizationModelStatusText: String {
-        if let progress = app.diarizationModels.progress {
-            return "Installing \(progress.title), "
-                + "\(Int((progress.fraction * 100).rounded())) %"
+    private var diarizationModelStatusText: Text {
+        if let presentation = app.diarizationModels.installProgressPresentation {
+            return installationStatusText(presentation)
         }
         switch app.diarizationModels.isReady(for: app.language.locale) {
         case true:
-            return "Ready. Future transcripts can be separated into speaker labels."
+            return Text("Ready. Future transcripts can be separated into speaker labels.")
         case false:
-            return "Not installed. Recording and transcription still work."
+            return Text("Not installed. Recording and transcription still work.")
         case nil:
-            return "Checking…"
+            return Text("Checking…")
         }
     }
 
     private static func sizeText(_ bytes: Int) -> String {
         ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+    }
+
+    private func installationStatusText(
+        _ presentation: IOSModelInstallProgressPresentation
+    ) -> Text {
+        switch presentation {
+        case .indeterminate(let title):
+            return Text(title)
+        case .determinate(let title, let fraction):
+            let titleText = Text(LocalizedStringKey(title))
+            return Text(
+                "Installing \(titleText), \(Int((fraction * 100).rounded())) %"
+            )
+        }
     }
 }
 
@@ -369,18 +435,29 @@ enum AudioReadinessPresentation {
         languageName: String,
         wasChosenExplicitly: Bool,
         canChangeLanguage: Bool
-    ) -> String? {
+    ) -> LocalizedStringResource? {
         guard canChangeLanguage, !wasChosenExplicitly else { return nil }
         return "Use \(languageName)"
     }
 }
 
-enum DiarizationModelPresentation {
-    static let explanation = "Separates voices into speaker labels on this device. "
-        + "It does not recognize people or assign names. "
-        + "Installation runs only while Steno is open."
+enum AudioReadinessLifecycle {
+    enum StartAction: Equatable {
+        case configureAndObserve
+        case observeWithoutConfiguration
+    }
 
-    static func downloadDisclosure(_ description: ModelBundleDescription) -> String {
+    static func startAction(recordingIsActive: Bool) -> StartAction {
+        recordingIsActive ? .observeWithoutConfiguration : .configureAndObserve
+    }
+}
+
+enum DiarizationModelPresentation {
+    static let explanation: LocalizedStringResource = "Separates voices into speaker labels on this device. It does not recognize people or assign names. Installation runs only while Steno is open."
+
+    static func downloadDisclosure(
+        _ description: ModelBundleDescription
+    ) -> LocalizedStringResource {
         let exact = NumberFormatter()
         exact.locale = Locale(identifier: "en_US_POSIX")
         exact.numberStyle = .decimal
@@ -396,14 +473,14 @@ enum DiarizationModelPresentation {
             locale: Locale(identifier: "en_US_POSIX"),
             megabytes
         )
-        return "\(description.source.displayHost), \(exactBytes) bytes "
-            + "(about \(roundedMegabytes) MB)"
+        return "\(description.source.displayHost), \(exactBytes) bytes (about \(roundedMegabytes) MB)"
     }
 
-    static func installLockMessage(recordingIsActive: Bool) -> String? {
+    static func installLockMessage(
+        recordingIsActive: Bool
+    ) -> LocalizedStringResource? {
         guard recordingIsActive else { return nil }
-        return "Stop the recording before installing speaker separation models. "
-            + "Recording and transcription work without them."
+        return "Stop the recording before installing speaker separation models. Recording and transcription work without them."
     }
 }
 
@@ -416,7 +493,7 @@ final class AudioReadinessModel {
         let timestamp: Date
     }
 
-    private(set) var permission: RecordPermissionStatus = .notDetermined
+    private(set) var permission: RecordPermissionStatus
     private(set) var inputName: String?
     private(set) var sampleRate: Double = 0
     private(set) var isMetering = false
@@ -429,11 +506,26 @@ final class AudioReadinessModel {
     private(set) var installedLocales: [String] = []
 
     private let controller: AudioSessionController
+    private let microphonePermissionStatus: @MainActor () -> RecordPermissionStatus
+    private let microphonePermissionRequest: @MainActor () async -> RecordPermissionStatus
     private let capture = MicrophoneCapture()
     private var levelTask: Task<Void, Never>?
+    private var meteringGeneration: UInt64 = 0
+    private var meteringLease: AudioSessionController.MeteringLease?
 
-    init(session: AudioSessionController) {
+    init(
+        session: AudioSessionController,
+        microphonePermissionStatus: @escaping @MainActor () -> RecordPermissionStatus = {
+            RecordPermission.status()
+        },
+        microphonePermissionRequest: @escaping @MainActor () async -> RecordPermissionStatus = {
+            await RecordPermission.request()
+        }
+    ) {
         controller = session
+        self.microphonePermissionStatus = microphonePermissionStatus
+        self.microphonePermissionRequest = microphonePermissionRequest
+        permission = microphonePermissionStatus()
     }
 
     var permissionText: String {
@@ -448,12 +540,16 @@ final class AudioReadinessModel {
         sampleRate > 0 ? "\(Int(sampleRate)) Hz" : "unknown"
     }
 
-    func start() async {
-        permission = RecordPermission.status()
-        do {
-            try await controller.configure()
-        } catch {
-            failure = error.localizedDescription
+    func start(recordingIsActive: Bool) async {
+        refreshMicrophonePermission()
+        if AudioReadinessLifecycle.startAction(
+            recordingIsActive: recordingIsActive
+        ) == .configureAndObserve {
+            do {
+                _ = try await controller.configureForReadiness()
+            } catch {
+                failure = error.localizedDescription
+            }
         }
         await refreshRoute()
         await refreshSpeechAvailability()
@@ -469,10 +565,20 @@ final class AudioReadinessModel {
     }
 
     func requestPermission() async {
-        permission = await RecordPermission.request()
+        permission = await microphonePermissionRequest()
     }
 
-    func toggleMetering() async {
+    /// Reads only the current authorization. In particular this never
+    /// configures the shared audio session when a recording is active.
+    func refreshMicrophonePermission() {
+        permission = microphonePermissionStatus()
+    }
+
+    func toggleMetering(recordingIsActive: Bool) async {
+        guard !recordingIsActive else {
+            await stopMetering()
+            return
+        }
         if isMetering {
             await stopMetering()
         } else {
@@ -481,9 +587,26 @@ final class AudioReadinessModel {
         await refreshRoute()
     }
 
+    func recordingStateDidChange(isActive: Bool) async {
+        if isActive {
+            await stopMetering()
+        }
+    }
+
     private func startMetering() async {
+        meteringGeneration &+= 1
+        let generation = meteringGeneration
         do {
-            try await controller.activate()
+            guard let lease = try await controller.beginMetering(
+                stopBeforeRecording: {
+                    await self.recordingWillStart()
+                }
+            ) else { return }
+            guard generation == meteringGeneration else {
+                try? await controller.endMetering(lease)
+                return
+            }
+            meteringLease = lease
 
             let (stream, continuation) = AsyncStream<AudioLevel>.makeStream(
                 // Only the newest level matters; an old one is never worth
@@ -492,6 +615,10 @@ final class AudioReadinessModel {
             )
             try await capture.start { buffer in
                 continuation.yield(AudioLevelCalculator.level(of: buffer))
+            }
+            guard generation == meteringGeneration else {
+                await capture.stop()
+                return
             }
 
             levelTask = Task { [weak self] in
@@ -502,18 +629,29 @@ final class AudioReadinessModel {
             isMetering = true
             failure = nil
         } catch {
+            guard generation == meteringGeneration else { return }
             failure = error.localizedDescription
             await stopMetering()
         }
     }
 
-    private func stopMetering() async {
+    func stopMetering() async {
+        meteringGeneration &+= 1
+        let lease = meteringLease
+        meteringLease = nil
+        guard lease != nil || isMetering else { return }
         levelTask?.cancel()
         levelTask = nil
         await capture.stop()
-        try? await controller.deactivate()
+        if let lease {
+            try? await controller.endMetering(lease)
+        }
         isMetering = false
         level = .silence
+    }
+
+    private func recordingWillStart() async {
+        await stopMetering()
     }
 
     private func refreshRoute() async {

@@ -2,6 +2,7 @@ import Foundation
 import StenoAudioCore
 import StenoDomain
 import StenoMacAudio
+import StenoTranscription
 import Testing
 @testable import steno_macos
 
@@ -190,10 +191,63 @@ struct RecordingStartStateTests {
         #expect(firstStart)
         state.didCreateMeeting(meetingID)
 
-        #expect(state.fail() == meetingID)
+        let failedMeetingID = state.fail()
+        #expect(failedMeetingID == meetingID)
         #expect(!state.isStarting)
         let retry = state.begin()
         #expect(retry)
+    }
+
+    @Test("a meeting created during startup is exposed as active until startup finishes")
+    func exposesCreatedMeetingAsActive() {
+        var state = RecordingStartState()
+        let meetingID = MeetingID()
+
+        // Mutierende Methoden gehoeren vor das Makro. #expect packt seinen
+        // Ausdruck in eine Closure mit unveraenderlichem Empfaenger, ein
+        // direkter Aufruf uebersetzt dort nicht.
+        let started = state.begin()
+        #expect(started)
+        state.didCreateMeeting(meetingID)
+        #expect(state.activeMeetingID == meetingID)
+
+        state.succeed()
+        #expect(state.activeMeetingID == nil)
+    }
+
+    @Test("the language picker explains recording and startup locks")
+    func explainsLanguagePickerLocks() {
+        let recordingLock = String(localized: "The transcription language cannot change while a recording is running.")
+        let startingLock = String(localized: "The transcription language cannot change while a recording is starting.")
+        let preparingLock = String(localized: "The transcription language cannot change while transcription is being prepared.")
+        #expect(
+            TranscriptionLanguagePickerPresentation.lockMessage(
+                isRecording: true,
+                isStartingRecording: false,
+                isPreparingPipeline: false
+            ) == recordingLock
+        )
+        #expect(
+            TranscriptionLanguagePickerPresentation.lockMessage(
+                isRecording: false,
+                isStartingRecording: true,
+                isPreparingPipeline: false
+            ) == startingLock
+        )
+        #expect(
+            TranscriptionLanguagePickerPresentation.lockMessage(
+                isRecording: false,
+                isStartingRecording: false,
+                isPreparingPipeline: true
+            ) == preparingLock
+        )
+        #expect(
+            TranscriptionLanguagePickerPresentation.lockMessage(
+                isRecording: false,
+                isStartingRecording: false,
+                isPreparingPipeline: false
+            ) == nil
+        )
     }
 
     @Test("a completed start releases the pending gate without failing its meeting")
@@ -207,6 +261,56 @@ struct RecordingStartStateTests {
         state.succeed()
 
         #expect(!state.isStarting)
-        #expect(state.fail() == nil)
+        let failedMeetingID = state.fail()
+        #expect(failedMeetingID == nil)
+    }
+
+    @Test("stopping consumes exactly one recording's live transcript tasks")
+    func consumesOneLiveTaskBatchPerRecording() async {
+        let firstOutput = TranscriptOutput(
+            localeIdentifier: "de-DE",
+            blocks: []
+        )
+        let secondOutput = TranscriptOutput(
+            localeIdentifier: "en-US",
+            blocks: []
+        )
+        var tasks = RecordingLiveTaskSet()
+        tasks.append(Task<TranscriptOutput?, Never> { firstOutput })
+
+        let firstBatch = tasks.takeForStop()
+        tasks.append(Task<TranscriptOutput?, Never> { secondOutput })
+        let secondBatch = tasks.takeForStop()
+        let firstResult = await firstBatch[0].value
+        let secondResult = await secondBatch[0].value
+
+        #expect(firstBatch.count == 1)
+        #expect(firstResult == firstOutput)
+        #expect(secondBatch.count == 1)
+        #expect(secondResult == secondOutput)
+        #expect(tasks.isEmpty)
+    }
+
+    @Test("starting a new recording cancels every stale live transcript task")
+    func cancelsStaleLiveTasksBeforeRecording() {
+        let task = Task<TranscriptOutput?, Never> {
+            try? await Task.sleep(for: .seconds(60))
+            return nil
+        }
+        var tasks = RecordingLiveTaskSet()
+        tasks.append(task)
+
+        tasks.cancelAndDiscard()
+
+        #expect(task.isCancelled)
+        #expect(tasks.isEmpty)
+    }
+
+    @Test("a failed stop interrupts the meeting but still schedules final transcription")
+    func failedStopKeepsFinalTranscriptionIndependent() {
+        let followUp = RecordingStopFollowUp.make(stopFailed: true)
+
+        #expect(followUp.meetingStatusCorrection == .interrupted)
+        #expect(followUp.jobKinds == [.finalASR])
     }
 }

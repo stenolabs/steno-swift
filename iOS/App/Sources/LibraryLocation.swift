@@ -4,7 +4,7 @@ import Foundation
 ///
 /// The Mac keeps its library in Application Support. On iOS it goes into
 /// `Documents` instead, so the Files app can reach it: protecting originals
-/// also means the user can get them out without Steno. The price is that the Files
+/// also means users can get them out without Steno. The price is that the Files
 /// app can damage the library too, which the existing validation, schema
 /// versions and corrupt quarantine already handle.
 enum LibraryLocation {

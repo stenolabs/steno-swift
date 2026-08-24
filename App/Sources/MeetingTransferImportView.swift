@@ -208,7 +208,7 @@ struct MeetingTransferImportPresentation: Equatable, Identifiable, Sendable {
         String(sourceMeetingID.description.prefix(8))
     }
 
-    var capabilityLabels: [String] {
+    var capabilityLabels: [LocalizedStringResource] {
         MeetingTransferCapability.allCases.compactMap { capability in
             guard capabilities.contains(capability) else { return nil }
             return switch capability {
@@ -236,7 +236,7 @@ struct MeetingTransferImportPresentation: Equatable, Identifiable, Sendable {
         return localeIdentifier
     }
 
-    var cleartextWarning: String {
+    var cleartextWarning: LocalizedStringResource {
         if containsRawRecording {
             "This transfer contains an unencrypted raw recording and may include voices of other people."
         } else {
@@ -244,7 +244,7 @@ struct MeetingTransferImportPresentation: Equatable, Identifiable, Sendable {
         }
     }
 
-    var downloadsWarning: String {
+    var downloadsWarning: LocalizedStringResource {
         "The received file may remain in Downloads, where search indexing or a configured backup can copy it. Steno does not delete that file."
     }
 
@@ -548,7 +548,7 @@ struct MeetingTransferImportView: View {
 
     private func completedImportMessage(
         _ result: MeetingTransferImportResult
-    ) -> String {
+    ) -> LocalizedStringResource {
         switch result {
         case .imported:
             "The meeting commit completed before cancellation could take effect. Continue to open the imported meeting."
@@ -566,18 +566,17 @@ struct MeetingTransferImportView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: Steno.Space.m) {
             Text(title).font(.headline)
-            ProgressView(value: progressFraction(progress), total: 1) {
-                Text(progress.map(progressTitle) ?? "Preparing private validation copy")
-            } currentValueLabel: {
-                if let progress, progress.totalBytes > 0 {
-                    Text(
-                        ByteCountFormatter.string(
-                            fromByteCount: progress.processedBytes,
-                            countStyle: .file
-                        )
+            let progressPresentation = MeetingTransferProgressPresentation.make(progress)
+            progressIndicator(progressPresentation)
+            Text(progress.map(progressTitle) ?? "Preparing private validation copy")
+            if let progress, progress.totalBytes > 0 {
+                Text(
+                    ByteCountFormatter.string(
+                        fromByteCount: progress.processedBytes,
+                        countStyle: .file
                     )
-                    .monospacedDigit()
-                }
+                )
+                .monospacedDigit()
             }
             Text("Closing stops the current check or import and removes Steno's private prepared copy.")
                 .font(.caption)
@@ -654,7 +653,11 @@ struct MeetingTransferImportView: View {
                     .help(presentation.sourceMeetingID.description)
             }
             LabeledContent("Contents") {
-                Text(presentation.capabilityLabels.joined(separator: ", "))
+                Text(
+                    presentation.capabilityLabels
+                        .map { String(localized: $0) }
+                        .joined(separator: ", ")
+                )
             }
             LabeledContent("Source language") {
                 Text(sourceLanguageText(presentation))
@@ -858,35 +861,47 @@ struct MeetingTransferImportView: View {
     ) -> String {
         let source = presentation.localeIdentifier.map {
             Locale.current.localizedString(forIdentifier: $0) ?? $0
-        } ?? "Not included"
-        let origin = switch presentation.localeOrigin {
-        case .explicit: "selected on the source device"
-        case .estimated: "estimated on the source device"
-        case .absent: "no source language"
+        } ?? String(localized: "Not included")
+        switch presentation.localeOrigin {
+        case .explicit:
+            return String(localized: "\(source) (selected on the source device)")
+        case .estimated:
+            return String(localized: "\(source) (estimated on the source device)")
+        case .absent:
+            return String(localized: "\(source) (no source language)")
         }
-        return "\(source) (\(origin))"
     }
 
     private func confirmationText(
         _ presentation: MeetingTransferImportPresentation
     ) -> String {
         let locale = model.meetingTransferLocale(identifier: selectedLocaleIdentifier)
-        let name = locale.map(model.localizedLanguageName) ?? "the selected language"
-        return "I confirm that \(name) is spoken in this recording."
+        let name = locale.map(model.localizedLanguageName)
+            ?? String(localized: "the selected language")
+        return String(localized: "I confirm that \(name) is spoken in this recording.")
     }
 
-    private func progressFraction(_ progress: MeetingTransferProgress?) -> Double {
-        guard let progress, progress.totalBytes > 0 else { return 0 }
-        return min(max(Double(progress.processedBytes) / Double(progress.totalBytes), 0), 1)
+    @ViewBuilder
+    private func progressIndicator(
+        _ presentation: MeetingTransferProgressPresentation
+    ) -> some View {
+        switch presentation {
+        case .indeterminate:
+            ProgressView()
+                .accessibilityLabel(Text(presentation.accessibilityLabel))
+        case .determinate(let value):
+            ProgressView(value: value, total: 1)
+                .accessibilityLabel(Text(presentation.accessibilityLabel))
+        }
     }
 
     private func progressTitle(_ progress: MeetingTransferProgress) -> String {
         switch progress.phase {
-        case .enumerating: "Reading package contents"
-        case .hashing: "Hashing the received file"
-        case .readingArchive: "Validating the package"
-        case .validatingAudio: "Validating audio"
-        case .writing: "Writing the private import copy"
+        case .enumerating: String(localized: "Reading package contents")
+        case .hashing: String(localized: "Hashing the received file")
+        case .readingArchive: String(localized: "Validating the package")
+        case .validatingAudio: String(localized: "Validating audio")
+        case .writing: String(localized: "Writing the private import copy")
         }
     }
 

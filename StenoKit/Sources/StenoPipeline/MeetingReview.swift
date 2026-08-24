@@ -65,11 +65,26 @@ public struct MeetingReviewStore: Sendable {
     }
 
     public func save(_ document: MeetingReviewDocument, meetingID: MeetingID) throws {
+        try LibraryMutationCoordination.withExclusiveTransaction(
+            layout: layout
+        ) { transaction in
+            try save(
+                document,
+                meetingID: meetingID,
+                transaction: transaction
+            )
+        }
+    }
+
+    func save(
+        _ document: MeetingReviewDocument,
+        meetingID: MeetingID,
+        transaction: LibraryMutationTransaction
+    ) throws {
+        try transaction.validate(layout: layout)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        try LibraryMutationCoordination.withExclusiveAccess(layout: layout) {
-            try AtomicFile.write(try encoder.encode(document), to: url(meetingID))
-        }
+        try AtomicFile.write(try encoder.encode(document), to: url(meetingID))
     }
 }
 
@@ -80,6 +95,7 @@ public struct MeetingReviewData: Sendable {
     public var suggestions: [ClusterSuggestion]
     public let resolutions: [IdentityClusterResolution]
     public var persons: [Person]
+    public var personsRevision: UUID? = nil
 
     /// Die bestaetigte Person selbst, nicht nur ihr Name - fuer Stellen, die
     /// mehr als den Namen brauchen (etwa die Firma zur Unterscheidung).
@@ -141,6 +157,15 @@ public struct MeetingReviewData: Sendable {
             }
         )
     }
+}
+
+/// Meeting und Review-Stand aus einer Transaktion, fuer Aufrufer, die beide
+/// zusammen brauchen (etwa der iPad-Inspector): getrennte Aufrufe koennten
+/// zwischen den beiden Lesevorgaengen eine fremde Aenderung sehen und dann
+/// eine Teilnehmerliste zeigen, die zu keinem der beiden Staende passt.
+public struct MeetingReviewSnapshot: Sendable {
+    public let meeting: Meeting
+    public let review: MeetingReviewData?
 }
 
 public enum MeetingReviewAssembler {
@@ -236,7 +261,7 @@ public enum MeetingReviewAssembler {
             }
         }
 
-        let persons = try IdentityStore.listPersons(
+        let identitySnapshot = try IdentityStore.snapshot(
             layout: layout,
             transaction: transaction
         )
@@ -245,8 +270,62 @@ public enum MeetingReviewAssembler {
             clusters: clusters,
             suggestions: suggestionArtifact.suggestions,
             resolutions: suggestionArtifact.clusterResolutions,
-            persons: persons
+            persons: identitySnapshot.persons,
+            personsRevision: identitySnapshot.revision
         )
+    }
+
+    /// Meeting und Review-Stand aus derselben Transaktion, fuer Aufrufer, die
+    /// aus beiden zusammen eine Teilnehmerliste ableiten (der iPad-Inspector).
+    /// Zwei getrennte Aufrufe koennten zwischen den Lesevorgaengen eine fremde
+    /// Aenderung sehen und dann ein Meeting mit einem Review zeigen, das nicht
+    /// mehr zusammenpasst.
+    public static func loadMeetingAndReview(
+        library: Library,
+        engine: SpeakerSuggestionEngine = SpeakerSuggestionEngine(),
+        meetingID: MeetingID
+    ) async throws -> MeetingReviewSnapshot {
+        try LibraryMutationCoordination.withExclusiveTransaction(
+            layout: library.layout
+        ) { transaction in
+            let meeting = try library.loadMeeting(meetingID, transaction: transaction)
+            let review = try load(
+                layout: library.layout,
+                engine: engine,
+                meetingID: meetingID,
+                transaction: transaction
+            )
+            return MeetingReviewSnapshot(meeting: meeting, review: review)
+        }
+    }
+}
+
+/// Leitet den Diarisierungslauf ab, aus dem eine Revision hervorgegangen
+/// ist. Wird sowohl beim Nachziehen der Stimmenvorschlaege als auch beim
+/// gepinnten Rendern eines Reports gebraucht: in beiden Faellen darf nur
+/// der Lauf zaehlen, der genau diese Revision erzeugt hat, nie der
+/// juengste. Bei einer Herkunft ohne Diarisierungslauf oder bei
+/// widerspruechlichen Clusterverweisen innerhalb einer bearbeiteten
+/// Revision liefert sie nil - lieber nichts als das Falsche.
+func diarizationRunID(
+    in revision: TranscriptRevision
+) -> RunID? {
+    switch revision.origin {
+    case .finalRun(let runID):
+        return runID
+    case .userEdit:
+        let runIDs = revision.turns.compactMap { turn -> RunID? in
+            guard let speaker = turn.speaker,
+                  case .cluster(let runID, _) = speaker
+            else { return nil }
+            return runID
+        }
+        guard let first = runIDs.first,
+              runIDs.allSatisfy({ $0 == first })
+        else { return nil }
+        return first
+    case .liveProvisional, .legacyImport, .meetingTransfer, .demo:
+        return nil
     }
 }
 
@@ -264,8 +343,10 @@ public enum DiarizationRequest {
             library: library,
             meetingID: meetingID
         )
+        let meeting = try await library.loadMeeting(meetingID)
         let jobs = try await jobStore.list().filter {
             $0.meetingID == meetingID
+                && $0.processingGenerationID == meeting.processingGenerationID
         }
         let revision = try await library.loadCurrentRevision(meetingID: meetingID)
         guard let currentRunID = diarizationRunID(in: revision),
@@ -291,32 +372,11 @@ public enum DiarizationRequest {
             Job(
                 kind: .identitySuggestion,
                 meetingID: meetingID,
-                sourceRunID: currentRunID
+                sourceRunID: currentRunID,
+                importGenerationID: meeting.processingGenerationID
             ),
             blockingStatuses: [.queued, .running]
         )
-    }
-
-    private static func diarizationRunID(
-        in revision: TranscriptRevision
-    ) -> RunID? {
-        switch revision.origin {
-        case .finalRun(let runID):
-            return runID
-        case .userEdit:
-            let runIDs = revision.turns.compactMap { turn -> RunID? in
-                guard let speaker = turn.speaker,
-                      case .cluster(let runID, _) = speaker
-                else { return nil }
-                return runID
-            }
-            guard let first = runIDs.first,
-                  runIDs.allSatisfy({ $0 == first })
-            else { return nil }
-            return first
-        case .liveProvisional, .legacyImport, .meetingTransfer:
-            return nil
-        }
     }
 
     /// Stößt die Sprechererkennung für ein Meeting nachträglich an
@@ -334,6 +394,7 @@ public enum DiarizationRequest {
             library: library,
             meetingID: meetingID
         )
+        let meeting = try await library.loadMeeting(meetingID)
         let layout = await library.layout
         let decoder = JSONDecoder()
         var latestFinalASR: ProcessingRun?
@@ -358,7 +419,8 @@ public enum DiarizationRequest {
             Job(
                 kind: .diarization,
                 meetingID: meetingID,
-                sourceRunID: sourceRun.id
+                sourceRunID: sourceRun.id,
+                importGenerationID: meeting.processingGenerationID
             ),
             blockingStatuses: [.queued, .running, .finished]
         )

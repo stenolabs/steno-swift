@@ -4,11 +4,13 @@ import SwiftUI
 
 enum MeetingTransferExportPresentation {
     static let initialAudioSelection: Set<MediaAssetID> = []
-    static let airDropInstruction = "Choose AirDrop in the share sheet."
-    static let shareActionLabel = "Share meeting"
+    static let airDropInstruction: LocalizedStringResource = "Choose AirDrop in the share sheet."
+    static let shareActionLabel: LocalizedStringResource = "Share meeting"
 
-    static func textContent(for preview: MeetingTransferExportPreview) -> [String] {
-        var content: [String] = []
+    static func textContent(
+        for preview: MeetingTransferExportPreview
+    ) -> [LocalizedStringResource] {
+        var content: [LocalizedStringResource] = []
         if preview.includesNotes {
             content.append("Notes, including any time markers")
         }
@@ -28,7 +30,7 @@ enum MeetingTransferExportPresentation {
     static func audioSummary(
         for preview: MeetingTransferExportPreview,
         selectedAudioAssetIDs: Set<MediaAssetID>
-    ) -> String {
+    ) -> LocalizedStringResource {
         let tracks = selectedAudioTracks(
             for: preview,
             selectedAudioAssetIDs: selectedAudioAssetIDs
@@ -36,32 +38,35 @@ enum MeetingTransferExportPresentation {
         guard !tracks.isEmpty else {
             return "Audio off - 0 tracks selected"
         }
-        let count = tracks.count
-        let noun = count == 1 ? "track" : "tracks"
         let total = tracks.reduce(Int64(0)) { $0 + $1.byteCount }
-        return "\(count) \(noun) selected, \(byteSize(total)) total"
+        if tracks.count == 1 {
+            return "1 track selected, \(byteSize(total)) total"
+        }
+        return "\(tracks.count) tracks selected, \(byteSize(total)) total"
     }
 
     static func audioWarning(
         for preview: MeetingTransferExportPreview,
         selectedAudioAssetIDs: Set<MediaAssetID>
-    ) -> String? {
+    ) -> LocalizedStringResource? {
         let tracks = selectedAudioTracks(
             for: preview,
             selectedAudioAssetIDs: selectedAudioAssetIDs
         )
         guard !tracks.isEmpty else { return nil }
         let totalBytes = tracks.reduce(Int64(0)) { $0 + $1.byteCount }
-        return "Adding \(byteSize(totalBytes)) sends an unencrypted raw recording. "
-            + "Microphone tracks may contain other voices in the room. "
-            + "The package may remain as a cleartext file on the receiving device."
+        return "Adding \(byteSize(totalBytes)) sends an unencrypted raw recording. Microphone tracks may contain other voices in the room. The package may remain as a cleartext file on the receiving device."
     }
 
-    static func shareAccessibilityValue(isPreparing: Bool) -> String {
+    static func shareAccessibilityValue(
+        isPreparing: Bool
+    ) -> LocalizedStringResource {
         isPreparing ? "Preparing package" : ""
     }
 
-    static func shareAccessibilityHint(isPreparing: Bool) -> String {
+    static func shareAccessibilityHint(
+        isPreparing: Bool
+    ) -> LocalizedStringResource {
         if isPreparing {
             return "The meeting package is being created."
         }
@@ -141,7 +146,7 @@ struct MeetingTransferExportSheet: View {
                                 Text("No notes or transcript")
                                     .foregroundStyle(.secondary)
                             } else {
-                                ForEach(content, id: \.self) { label in
+                                ForEach(Array(content.enumerated()), id: \.offset) { _, label in
                                     Label(label, systemImage: "checkmark.circle")
                                 }
                             }

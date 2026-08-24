@@ -22,7 +22,7 @@ struct MeetingTransferExportPresentationTests {
             visibleSpeakerLabels: ["Ada", "Speaker 2"]
         )
 
-        #expect(MeetingTransferExportPresentation.textContent(for: preview) == [
+        #expect(MeetingTransferExportPresentation.textContent(for: preview).map(english) == [
             "Notes, including any time markers",
             "Transcript",
             "Speakers: Ada, Speaker 2",
@@ -38,31 +38,31 @@ struct MeetingTransferExportPresentationTests {
             .init(assetID: systemAudioID, label: "System audio", byteCount: 2_097_152),
         ])
 
-        #expect(MeetingTransferExportPresentation.audioSummary(
+        #expect(english(MeetingTransferExportPresentation.audioSummary(
             for: preview,
             selectedAudioAssetIDs: [microphoneID]
-        ) == "1 track selected, 1 MB total")
+        )) == "1 track selected, 1 MB total")
         let microphoneWarning = MeetingTransferExportPresentation.audioWarning(
             for: preview,
             selectedAudioAssetIDs: [microphoneID]
         )
-        #expect(microphoneWarning?.contains("Adding 1 MB") == true)
-        #expect(microphoneWarning?.contains("2 MB") == false)
-        #expect(microphoneWarning?.contains("3 MB") == false)
+        #expect(microphoneWarning.map { english($0).contains("Adding 1 MB") } == true)
+        #expect(microphoneWarning.map { english($0).contains("2 MB") } == false)
+        #expect(microphoneWarning.map { english($0).contains("3 MB") } == false)
 
-        #expect(MeetingTransferExportPresentation.audioSummary(
+        #expect(english(MeetingTransferExportPresentation.audioSummary(
             for: preview,
             selectedAudioAssetIDs: [systemAudioID]
-        ) == "1 track selected, 2 MB total")
+        )) == "1 track selected, 2 MB total")
         #expect(MeetingTransferExportPresentation.audioWarning(
             for: preview,
             selectedAudioAssetIDs: [systemAudioID]
-        )?.contains("Adding 2 MB") == true)
+        ).map { english($0).contains("Adding 2 MB") } == true)
 
-        #expect(MeetingTransferExportPresentation.audioSummary(
+        #expect(english(MeetingTransferExportPresentation.audioSummary(
             for: preview,
             selectedAudioAssetIDs: [microphoneID, systemAudioID]
-        ) == "2 tracks selected, 3 MB total")
+        )) == "2 tracks selected, 3 MB total")
         #expect(MeetingTransferExportPresentation.audioRows(for: preview) == [
             "Microphone - 1 MB",
             "System audio - 2 MB",
@@ -76,10 +76,10 @@ struct MeetingTransferExportPresentationTests {
             .init(assetID: audioID, label: "Microphone", byteCount: 1_048_576),
         ])
 
-        #expect(MeetingTransferExportPresentation.audioSummary(
+        #expect(english(MeetingTransferExportPresentation.audioSummary(
             for: preview,
             selectedAudioAssetIDs: []
-        ) == "Audio off - 0 tracks selected")
+        )) == "Audio off - 0 tracks selected")
         #expect(MeetingTransferExportPresentation.audioWarning(
             for: preview,
             selectedAudioAssetIDs: []
@@ -96,10 +96,10 @@ struct MeetingTransferExportPresentationTests {
         let preview = makePreview(audioTracks: [
             .init(assetID: audioID, label: "Microphone", byteCount: 1_048_576),
         ])
-        let text = try #require(MeetingTransferExportPresentation.audioWarning(
+        let text = english(try #require(MeetingTransferExportPresentation.audioWarning(
             for: preview,
             selectedAudioAssetIDs: [audioID]
-        ))
+        )))
 
         #expect(text.contains("1 MB"))
         #expect(text.contains("unencrypted raw recording"))
@@ -109,16 +109,16 @@ struct MeetingTransferExportPresentationTests {
 
     @Test("preparing keeps the share action name and exposes its progress separately")
     func preparingShareAccessibilityIsStable() {
-        #expect(MeetingTransferExportPresentation.shareActionLabel == "Share meeting")
+        #expect(english(MeetingTransferExportPresentation.shareActionLabel) == "Share meeting")
         #expect(
-            MeetingTransferExportPresentation.shareAccessibilityValue(isPreparing: false).isEmpty
+            english(MeetingTransferExportPresentation.shareAccessibilityValue(isPreparing: false)).isEmpty
         )
         #expect(
-            MeetingTransferExportPresentation.shareAccessibilityValue(isPreparing: true)
+            english(MeetingTransferExportPresentation.shareAccessibilityValue(isPreparing: true))
                 == "Preparing package"
         )
         #expect(
-            MeetingTransferExportPresentation.shareAccessibilityHint(isPreparing: true)
+            english(MeetingTransferExportPresentation.shareAccessibilityHint(isPreparing: true))
                 .contains("being created")
         )
     }
@@ -153,9 +153,15 @@ struct MeetingTransferExportPresentationTests {
     @Test("the sheet explicitly directs the user to AirDrop")
     func airDropInstructionIsExplicit() {
         #expect(
-            MeetingTransferExportPresentation.airDropInstruction
+            english(MeetingTransferExportPresentation.airDropInstruction)
                 == "Choose AirDrop in the share sheet."
         )
+    }
+
+    private func english(_ resource: LocalizedStringResource) -> String {
+        var resource = resource
+        resource.locale = Locale(identifier: "en")
+        return String(localized: resource)
     }
 
     @Test("the local document type is the shareable archive from the approved contract")

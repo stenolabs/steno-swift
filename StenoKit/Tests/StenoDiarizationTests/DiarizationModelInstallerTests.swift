@@ -79,6 +79,56 @@ struct DiarizationModelInstallerTests {
         ))
     }
 
+    @Test("an already verified installation is not touched by another install request")
+    func verifiedInstallationSkipsDownload() async throws {
+        let directory = try emptyDirectory()
+        try makeCompleteModelBundles(in: directory)
+        let checksumFile = directory.appendingPathComponent("weights.bin")
+        try Data("gut".utf8).write(to: checksumFile)
+        let counter = DownloadCounter()
+        let installer = DiarizationModelInstaller(
+            modelCacheDirectory: directory,
+            manifest: ModelChecksumManifest(entries: [
+                "weights.bin": "77562953d4c8dc074e55e73375e64f65fef94dcddd39381abb5be1ee250e2b1f",
+            ]),
+            download: { _, _ in
+                await counter.increment()
+                throw DiarizationError.modelInstallationFailed("no network")
+            }
+        )
+
+        try await installer.install(for: locale) { _ in }
+
+        #expect(await counter.value == 0)
+        #expect(await installer.readiness(for: [locale]).isReady(for: locale))
+        #expect(!diarizationModelInstallationIsIncomplete(in: directory))
+    }
+
+    @Test("a failed install exposes model files that completed and passed verification")
+    func failedInstallRestoresVerifiedInstallation() async throws {
+        let directory = try emptyDirectory()
+        let installer = DiarizationModelInstaller(
+            modelCacheDirectory: directory,
+            manifest: ModelChecksumManifest(entries: [
+                "weights.bin": "77562953d4c8dc074e55e73375e64f65fef94dcddd39381abb5be1ee250e2b1f",
+            ]),
+            download: { baseDirectory, _ in
+                try makeCompleteModelBundles(in: baseDirectory)
+                try Data("gut".utf8).write(
+                    to: baseDirectory.appendingPathComponent("weights.bin")
+                )
+                throw DiarizationError.modelInstallationFailed("connection lost")
+            }
+        )
+
+        await #expect(throws: DiarizationError.self) {
+            try await installer.install(for: locale) { _ in }
+        }
+
+        #expect(await installer.readiness(for: [locale]).isReady(for: locale))
+        #expect(!diarizationModelInstallationIsIncomplete(in: directory))
+    }
+
     @Test("the provider reports missing models while a partial install is marked")
     func providerCannotLoadPartialInstallation() async throws {
         let directory = try emptyDirectory()
@@ -295,6 +345,18 @@ struct DiarizationModelInstallerTests {
         // Genau ein Reparaturversuch. Ohne diese Zusicherung koennte die
         // Reparatur endlos weiterlaufen und der Nutzer saehe nie einen Fehler.
         #expect(await counter.value == 2)
+    }
+}
+
+private func makeCompleteModelBundles(in directory: URL) throws {
+    for bundle in try requiredBundleURLs(baseDirectory: directory) {
+        try FileManager.default.createDirectory(
+            at: bundle,
+            withIntermediateDirectories: true
+        )
+        try Data("complete".utf8).write(
+            to: bundle.appendingPathComponent("coremldata.bin")
+        )
     }
 }
 

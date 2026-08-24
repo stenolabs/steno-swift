@@ -5,6 +5,110 @@ import Testing
 
 @Suite("FolderStore")
 struct FolderStoreTests {
+    @Test("specialized cleanup deletes only an exactly empty folder")
+    func deletesOnlyExactlyEmptyFolder() async throws {
+        try await withTemporaryDirectory { root in
+            let library = try Library.open(at: root)
+            let store = try FolderStore.open(layout: library.layout)
+            let empty = try await store.createFolder(name: "Empty")
+
+            #expect(try await store.deleteFolderIfEmpty(empty.id) == .deleted)
+            #expect(try await store.deleteFolderIfEmpty(empty.id) == .notFound)
+        }
+    }
+
+    @Test("specialized cleanup preserves a folder with a child or assigned meeting")
+    func preservesNonemptyFolderWithoutPromotionOrMovement() async throws {
+        try await withTemporaryDirectory { root in
+            let library = try Library.open(at: root)
+            let store = try FolderStore.open(layout: library.layout)
+            let parent = try await store.createFolder(name: "Parent")
+            let child = try await store.createFolder(name: "Child", parentFolderID: parent.id)
+
+            #expect(try await store.deleteFolderIfEmpty(parent.id) == .notEmpty)
+            #expect(try await store.folder(child.id)?.parentFolderID == parent.id)
+
+            let assigned = try await store.createFolder(name: "Assigned")
+            let meeting = try await library.createMeeting(title: "Meeting", status: .ready)
+            _ = try await library.setMeetingFolder(meeting.id, folderID: assigned.id)
+
+            #expect(try await store.deleteFolderIfEmpty(assigned.id) == .notEmpty)
+            #expect(try await library.loadMeeting(meeting.id).folderID == assigned.id)
+        }
+    }
+
+    @Test("empty-folder read, child scan, meeting scan, and deletion share one transaction")
+    func emptyFolderCleanupUsesOneRootTransaction() async throws {
+        try await withTemporaryDirectory { root in
+            let library = try Library.open(at: root)
+            let recorder = FolderMutationCheckpointRecorder()
+            let store = try FolderStore.open(
+                layout: library.layout,
+                mutationAction: { checkpoint, transaction in
+                    try transaction.validate(layout: library.layout)
+                    recorder.record(checkpoint)
+                }
+            )
+            let folder = try await store.createFolder(name: "Empty")
+
+            #expect(try await store.deleteFolderIfEmpty(folder.id) == .deleted)
+            #expect(recorder.values.suffix(3) == [
+                .afterEmptyFolderDocumentRead,
+                .afterEmptyFolderChildInspection,
+                .afterEmptyFolderMeetingInspectionBeforeDelete,
+            ])
+        }
+    }
+    @Test("preparation and mutations read folders inside an exclusive transaction")
+    func readsInsideTransaction() async throws {
+        try await withTemporaryDirectory { root in
+            let library = try Library.open(at: root)
+            let initialStore = try FolderStore.open(layout: library.layout)
+            _ = try await initialStore.createFolder(name: "Vorhanden")
+            let recorder = FolderMutationCheckpointRecorder()
+
+            let store = try FolderStore.open(
+                layout: library.layout,
+                mutationAction: { checkpoint, transaction in
+                    try transaction.validate(layout: library.layout)
+                    recorder.record(checkpoint)
+                }
+            )
+            _ = try await store.createFolder(name: "Neu")
+
+            #expect(recorder.values == [
+                .afterExclusiveTransactionBeforePreparationRead,
+                .afterExclusiveTransactionBeforeMutationRead,
+            ])
+        }
+    }
+
+    @Test("top-level import resolution reports creation exactly once inside one transaction")
+    func resolvesTopLevelFolderAtomically() async throws {
+        try await withTemporaryDirectory { root in
+            let library = try Library.open(at: root)
+            let store = try FolderStore.open(layout: library.layout)
+
+            let result = try await library.withExclusiveMutationTransaction { _, transaction in
+                let created = try store.resolveTopLevelFolder(
+                    named: " Demo   Meetings ",
+                    transaction: transaction
+                )
+                let reused = try store.resolveTopLevelFolder(
+                    named: "demo meetings",
+                    transaction: transaction
+                )
+                return (created.folder, created.wasCreated, reused.folder, reused.wasCreated)
+            }
+
+            #expect(result.0.id == result.2.id)
+            #expect(result.0.name == "Demo Meetings")
+            #expect(result.1)
+            #expect(!result.3)
+            #expect(try await store.listFolders().map(\.id) == [result.0.id])
+        }
+    }
+
     @Test("folders persist with a schema version and keep their order")
     func persistsFolders() async throws {
         try await withTemporaryDirectory { root in
@@ -583,5 +687,18 @@ struct FolderStoreTests {
 
             #expect(try await library.loadMeeting(meeting.id).folderID == nil)
         }
+    }
+}
+
+private final class FolderMutationCheckpointRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValues: [FolderStoreMutationCheckpoint] = []
+
+    var values: [FolderStoreMutationCheckpoint] {
+        lock.withLock { storedValues }
+    }
+
+    func record(_ value: FolderStoreMutationCheckpoint) {
+        lock.withLock { storedValues.append(value) }
     }
 }

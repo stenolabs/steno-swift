@@ -165,6 +165,84 @@ struct MeetingNotesEditingSessionTests {
         #expect(await second.value == "Vorhandene Notiz")
         #expect(await store.numberOfReads() == 1)
     }
+
+    @Test("a failed load disables editing and never overwrites existing notes")
+    @MainActor
+    func failedLoadPreventsEveryWrite() async {
+        let store = FailedReadNotesPersistence(notes: "Vorhandene Notiz")
+        let session = MeetingNotesEditingSession(
+            meetingID: MeetingID(),
+            store: store,
+            autosaveDelay: .milliseconds(1)
+        )
+
+        await session.load()
+        session.update("Ersatz")
+        await session.appendMarker(elapsed: 7)
+        await session.flush()
+        try? await Task.sleep(for: .milliseconds(10))
+
+        #expect(session.loadFailed)
+        #expect(!session.canEdit)
+        #expect(session.text.isEmpty)
+        #expect(await store.currentNotes() == "Vorhandene Notiz")
+        #expect(await store.numberOfWrites() == 0)
+    }
+
+    @Test("preparing for removal saves pending text and rejects later edits")
+    @MainActor
+    func preparationSavesPendingTextAndRejectsLaterEdits() async throws {
+        let store = InMemoryNotesPersistence()
+        let session = MeetingNotesEditingSession(
+            meetingID: MeetingID(),
+            store: store,
+            autosaveDelay: .seconds(60)
+        )
+
+        await session.load()
+        session.update("Noch nicht gespeichert")
+        try await session.prepareForMeetingRemoval()
+
+        #expect(await store.currentNotes() == "Noch nicht gespeichert")
+        #expect(!session.canEdit)
+
+        session.update("Darf nicht gespeichert werden")
+        await session.flush()
+        session.completeMeetingRemoval()
+        session.cancelMeetingRemoval()
+        session.update("Auch nach Abschluss gesperrt")
+        await session.flush()
+
+        #expect(session.text == "Noch nicht gespeichert")
+        #expect(!session.canEdit)
+        #expect(await store.currentNotes() == "Noch nicht gespeichert")
+    }
+
+    @Test("a failed removal preparation restores editing and can be retried")
+    @MainActor
+    func failedPreparationRestoresEditingAndCanBeRetried() async throws {
+        let store = InMemoryNotesPersistence(failsWrites: true)
+        let session = MeetingNotesEditingSession(
+            meetingID: MeetingID(),
+            store: store,
+            autosaveDelay: .seconds(60)
+        )
+
+        await session.load()
+        session.update("Erster Entwurf")
+
+        await #expect(throws: (any Error).self) {
+            try await session.prepareForMeetingRemoval()
+        }
+        #expect(session.canEdit)
+
+        session.update("Geretteter Entwurf")
+        await store.allowWrites()
+        try await session.prepareForMeetingRemoval()
+
+        #expect(await store.currentNotes() == "Geretteter Entwurf")
+        #expect(!session.canEdit)
+    }
 }
 
 private enum NotesPersistenceFailure: Error {
@@ -195,6 +273,31 @@ private actor InMemoryNotesPersistence: MeetingNotesPersistence {
 
     func allowWrites() {
         failsWrites = false
+    }
+}
+
+private actor FailedReadNotesPersistence: MeetingNotesPersistence {
+    private let storedNotes: String
+    private var writeCount = 0
+
+    init(notes: String) {
+        storedNotes = notes
+    }
+
+    func notes(_ meetingID: MeetingID) async throws -> String? {
+        throw NotesPersistenceFailure.refused
+    }
+
+    func setNotes(_ meetingID: MeetingID, to notes: String?) async throws {
+        writeCount += 1
+    }
+
+    func currentNotes() -> String {
+        storedNotes
+    }
+
+    func numberOfWrites() -> Int {
+        writeCount
     }
 }
 

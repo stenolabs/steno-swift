@@ -25,6 +25,7 @@ public final class TemplateRenderPinsFailureObservationLedger:
             })),
             latest.status == .failed,
             latest.failureReason == .templateRenderPinsRequired
+                || latest.failureReason == .textModelEndpointConfigurationIncomplete
         else { return nil }
 
         lock.lock()

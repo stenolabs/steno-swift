@@ -49,9 +49,9 @@ enum LibraryBackupPolicyError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .privateValidationRootRejected:
-            "Steno could not secure its private transfer validation directory."
+            String(localized: "Steno could not secure its private transfer validation directory.")
         case .exclusionNotPersisted:
-            "Steno could not exclude its local library from device backup."
+            String(localized: "Steno could not exclude its local library from device backup.")
         }
     }
 }

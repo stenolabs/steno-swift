@@ -7,6 +7,7 @@ public enum AudioRecordingError: Error, Equatable, Sendable {
     case notRecording
     case writerFailed(track: AudioTrack, message: String)
     case ringBufferOverflow(track: AudioTrack)
+    case diskSpaceMonitoringFailed(message: String)
     case systemAudioPermissionDenied
     case coreAudio(operation: String, status: Int32)
 }
@@ -26,6 +27,8 @@ extension AudioRecordingError: LocalizedError {
             "Writing the \(track.rawValue) track failed: \(message)"
         case .ringBufferOverflow(let track):
             "The \(track.rawValue) recording buffer could not keep up."
+        case .diskSpaceMonitoringFailed(let message):
+            "Free disk space could not be monitored continuously: \(message)"
         case .systemAudioPermissionDenied:
             "System audio capture is not permitted. Allow Audio Recording in System Settings, then try again."
         case .coreAudio(let operation, let status):

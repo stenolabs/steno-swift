@@ -8,12 +8,16 @@ struct SettingsView: View {
         TabView {
             GeneralSettingsView()
                 .tabItem { Label("General", systemImage: "gearshape") }
+            TranscriptionModelSettingsView()
+                .tabItem { Label("Transcription", systemImage: "waveform.and.mic") }
             PeopleSettingsView()
                 .tabItem { Label("People", systemImage: "person.2") }
             TextModelSettingsView()
                 .tabItem { Label("Language Models", systemImage: "brain") }
             ModelStatusView()
                 .tabItem { Label("Models", systemImage: "arrow.down.circle") }
+            DemoDataSettingsView()
+                .tabItem { Label(DemoDataPresentation.tabTitle, systemImage: "sparkles") }
         }
         .frame(width: 560)
     }
@@ -52,17 +56,61 @@ struct TranscriptionLanguagePicker: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        Picker("Transcription language", selection: Binding(
-            get: { model.selectedLanguageID },
-            set: { newValue in
-                Task { await model.setLanguage(newValue) }
+        VStack(alignment: .leading, spacing: 4) {
+            Picker("Transcription language", selection: Binding(
+                get: { model.effectiveTranscriptionLanguageID },
+                set: { newValue in
+                    Task { await model.setLanguage(newValue) }
+                }
+            )) {
+                ForEach(model.availableLocales, id: \.identifier) { locale in
+                    Text(model.localizedLanguageName(locale))
+                        .tag(locale.identifier)
+                }
             }
-        )) {
-            ForEach(model.availableLocales, id: \.identifier) { locale in
-                Text(model.localizedLanguageName(locale))
-                    .tag(locale.identifier)
+            .disabled(
+                model.availableLocales.isEmpty
+                    || model.isRecording
+                    || model.isStartingRecording
+                    || model.isBootstrappingPipeline
+                    || model.isSwitchingTranscriptionLanguage
+                    || model.isManagingDemoData
+            )
+
+            if let message = TranscriptionLanguagePickerPresentation.lockMessage(
+                isRecording: model.isRecording,
+                isStartingRecording: model.isStartingRecording,
+                isPreparingPipeline: model.isBootstrappingPipeline
+                    || model.isSwitchingTranscriptionLanguage,
+                isManagingDemoData: model.isManagingDemoData
+            ) {
+                Label(message, systemImage: "lock")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
-        .disabled(model.availableLocales.isEmpty)
+    }
+}
+
+enum TranscriptionLanguagePickerPresentation {
+    static func lockMessage(
+        isRecording: Bool,
+        isStartingRecording: Bool,
+        isPreparingPipeline: Bool,
+        isManagingDemoData: Bool = false
+    ) -> String? {
+        if isRecording {
+            return String(localized: "The transcription language cannot change while a recording is running.")
+        }
+        if isStartingRecording {
+            return String(localized: "The transcription language cannot change while a recording is starting.")
+        }
+        if isPreparingPipeline {
+            return String(localized: "The transcription language cannot change while transcription is being prepared.")
+        }
+        if isManagingDemoData {
+            return String(localized: DemoDataPresentation.languageChangeLocked)
+        }
+        return nil
     }
 }

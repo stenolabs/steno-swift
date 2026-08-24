@@ -14,12 +14,12 @@ struct MeetingNotesStoreTests {
 
             #expect(try await store.notes(meeting.id) == nil)
 
-            try await store.setNotes(meeting.id, to: "Thema: Testplanung\nGrace Hopper kommt später.")
+            try await store.setNotes(meeting.id, to: "Thema: Haushalt 2027\nFrau Lovelace kommt später.")
 
             let reopened = MeetingNotesStore(layout: library.layout)
             #expect(
                 try await reopened.notes(meeting.id)
-                    == "Thema: Testplanung\nGrace Hopper kommt später."
+                    == "Thema: Haushalt 2027\nFrau Lovelace kommt später."
             )
             // Kein Temp-Rest neben der Datei.
             let files = try FileManager.default.contentsOfDirectory(

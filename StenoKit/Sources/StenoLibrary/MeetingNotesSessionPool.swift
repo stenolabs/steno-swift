@@ -9,7 +9,9 @@ import StenoDomain
 public final class MeetingNotesSessionPool {
     private let store: any MeetingNotesPersistence
     private let autosaveDelay: Duration
+    private let afterRemovalMarkedPreparing: @MainActor @Sendable () async -> Void
     private var sessions: [MeetingID: MeetingNotesEditingSession] = [:]
+    private var removalStates: [MeetingID: RemovalState] = [:]
 
     public init(
         store: any MeetingNotesPersistence,
@@ -17,12 +19,24 @@ public final class MeetingNotesSessionPool {
     ) {
         self.store = store
         self.autosaveDelay = autosaveDelay
+        afterRemovalMarkedPreparing = {}
     }
 
-    public func session(for meetingID: MeetingID) async -> MeetingNotesEditingSession {
+    init(
+        store: any MeetingNotesPersistence,
+        autosaveDelay: Duration = .seconds(1),
+        afterRemovalMarkedPreparing: @escaping @MainActor @Sendable () async -> Void
+    ) {
+        self.store = store
+        self.autosaveDelay = autosaveDelay
+        self.afterRemovalMarkedPreparing = afterRemovalMarkedPreparing
+    }
+
+    public func session(for meetingID: MeetingID) async -> MeetingNotesEditingSession? {
+        guard removalStates[meetingID] == nil else { return nil }
         if let session = sessions[meetingID] {
             await session.load()
-            return session
+            return removalStates[meetingID] == nil ? session : nil
         }
 
         let session = MeetingNotesEditingSession(
@@ -32,6 +46,37 @@ public final class MeetingNotesSessionPool {
         )
         sessions[meetingID] = session
         await session.load()
-        return session
+        return removalStates[meetingID] == nil ? session : nil
+    }
+
+    public func prepareForMeetingRemoval(_ meetingID: MeetingID) async throws {
+        switch removalStates[meetingID] {
+        case .completed:
+            return
+        case .preparing:
+            try await sessions[meetingID]?.prepareForMeetingRemoval()
+            return
+        case nil:
+            removalStates[meetingID] = .preparing
+        }
+        await afterRemovalMarkedPreparing()
+        try await sessions[meetingID]?.prepareForMeetingRemoval()
+    }
+
+    public func cancelMeetingRemoval(_ meetingID: MeetingID) {
+        guard removalStates[meetingID] == .preparing else { return }
+        removalStates[meetingID] = nil
+        sessions[meetingID]?.cancelMeetingRemoval()
+    }
+
+    public func completeMeetingRemoval(_ meetingID: MeetingID) {
+        removalStates[meetingID] = .completed
+        sessions[meetingID]?.completeMeetingRemoval()
+        sessions[meetingID] = nil
+    }
+
+    private enum RemovalState: Equatable {
+        case preparing
+        case completed
     }
 }

@@ -1,0 +1,76 @@
+{
+  "sourceLanguage":  "en",
+  "strings":  {
+    "CFBundleDisplayName":  {
+      "comment":  "Bundle display name",
+      "extractionState":  "extracted_with_value",
+      "localizations":  {
+        "en":  {
+          "stringUnit":  {
+            "state":  "new",
+            "value":  "Steno"
+          }
+        }
+      },
+      "shouldTranslate":  false
+    },
+    "CFBundleName":  {
+      "comment":  "Bundle name",
+      "extractionState":  "extracted_with_value",
+      "localizations":  {
+        "en":  {
+          "stringUnit":  {
+            "state":  "new",
+            "value":  "Steno"
+          }
+        }
+      },
+      "shouldTranslate":  false
+    },
+    "NSLocalNetworkUsageDescription":  {
+      "extractionState":  "manual",
+      "localizations":  {
+        "de":  {
+          "stringUnit":  {
+            "state":  "translated",
+            "value":  "Steno verbindet sich mit einem Sprachmodellserver nur, wenn du ihn testest oder ausdrücklich ein Protokoll erstellst."
+          }
+        },
+        "en":  {
+          "stringUnit":  {
+            "state":  "translated",
+            "value":  "Steno connects to a language model server only when you test it or explicitly generate minutes with it."
+          }
+        }
+      }
+    },
+    "NSMicrophoneUsageDescription":  {
+      "extractionState":  "manual",
+      "localizations":  {
+        "de":  {
+          "stringUnit":  {
+            "state":  "translated",
+            "value":  "Steno zeichnet dein Mikrofon auf, damit Gespräche lokal auf diesem Gerät transkribiert werden können."
+          }
+        },
+        "en":  {
+          "stringUnit":  {
+            "state":  "translated",
+            "value":  "Steno records your microphone so it can transcribe conversations locally on this device."
+          }
+        }
+      }
+    },
+    "Steno Meeting":  {
+      "localizations":  {
+        "de":  {
+          "stringUnit":  {
+            "state":  "translated",
+            "value":  "Steno-Meeting"
+          }
+        }
+      }
+    }
+  },
+  "version":  "1.0"
+}

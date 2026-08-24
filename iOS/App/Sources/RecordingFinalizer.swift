@@ -14,11 +14,12 @@ actor RecordingFinalizer {
     private var completed: Set<MeetingID> = []
 
     func finalize(
-        meetingID: MeetingID,
+        meeting: Meeting,
         output: TranscriptOutput?,
         library: Library,
         jobStore: JobStore
     ) async throws {
+        let meetingID = meeting.id
         if completed.contains(meetingID) {
             return
         }
@@ -28,7 +29,7 @@ actor RecordingFinalizer {
         }
 
         let work = prepared[meetingID] ?? Self.prepare(
-            meetingID: meetingID,
+            meeting: meeting,
             output: output
         )
         prepared[meetingID] = work
@@ -53,14 +54,14 @@ actor RecordingFinalizer {
     }
 
     private static func prepare(
-        meetingID: MeetingID,
+        meeting: Meeting,
         output: TranscriptOutput?
     ) -> Prepared {
         let revision: TranscriptRevision?
         if let output, !output.blocks.isEmpty {
             revision = TranscriptMapper.revision(
                 from: output,
-                meetingID: meetingID,
+                meetingID: meeting.id,
                 origin: .liveProvisional
             )
         } else {
@@ -68,7 +69,7 @@ actor RecordingFinalizer {
         }
         return Prepared(
             revision: revision,
-            job: Job(kind: .finalASR, meetingID: meetingID)
+            job: Job.finalASR(for: meeting)
         )
     }
 

@@ -19,6 +19,7 @@ struct MeetingReportsSection: View {
     @State private var informationMessage: String?
     @State private var selectedEndpointSnapshot: TextModelEndpointSnapshot?
     @State private var identity = ViewIdentityGeneration<MeetingID>()
+    @State private var shareDisclosure = ReportShareDisclosureState()
 
     private static let readableWidth: CGFloat = 720
 
@@ -36,9 +37,20 @@ struct MeetingReportsSection: View {
             preflight = nil
             preflightError = nil
             informationMessage = nil
+            shareDisclosure.discardRequests(notMatching: meetingID)
             selectedEndpointSnapshot = textModels.selectedEndpoint?.snapshot
             await loadPreflight(token)
             await refresh(token)
+        }
+        // Die Wahl bleibt, ihr Inhalt wird nachgezogen. Ohne das behaelt eine
+        // offene Ansicht die Kopie vom Oeffnen: der Bericht ginge mit der
+        // alten `configurationRevision` in die Warteschlange und wuerde
+        // abgewiesen, und der Hinweis darueber naennte ein Ziel von gestern.
+        .onChange(of: textModels.endpoints) {
+            selectedEndpointSnapshot = ReportTextModelDisplay.refreshedSelection(
+                selectedEndpointSnapshot,
+                in: textModels.endpoints
+            )
         }
         .task(id: ReportPollingKey(
             meetingID: meetingID,
@@ -48,6 +60,35 @@ struct MeetingReportsSection: View {
                   presentation.pendingJobID != nil
             else { return }
             await refreshLoop(token)
+        }
+        .alert(
+            Text(ReportShareDisclosurePresentation.title),
+            isPresented: shareDisclosureIsPresented,
+            presenting: shareDisclosure.pendingPayload
+        ) { _ in
+            Button {
+                shareDisclosure.proceed(
+                    meetingID: meetingID,
+                    store: ReportShareDisclosureStore()
+                )
+            } label: {
+                Text(ReportShareDisclosurePresentation.proceedLabel)
+            }
+            Button(role: .cancel) {
+                shareDisclosure.cancelDisclosure()
+            } label: {
+                Text(ReportShareDisclosurePresentation.cancelLabel)
+            }
+        } message: { _ in
+            Text(ReportShareDisclosurePresentation.message)
+        }
+        .sheet(isPresented: reportShareSheetIsPresented) {
+            if let request = shareDisclosure.activeRequest,
+               request.meetingID == meetingID {
+                ReportShareSheet(text: request.payload.text) {
+                    shareDisclosure.finishSharing()
+                }
+            }
         }
     }
 
@@ -82,7 +123,7 @@ struct MeetingReportsSection: View {
 
         if let speakerHint = viewState.speakerHint {
             reportMessage(
-                speakerHint,
+                String(localized: speakerHint),
                 systemImage: "person.crop.circle.badge.questionmark",
                 color: Color(uiColor: .secondaryLabel)
             )
@@ -156,7 +197,8 @@ struct MeetingReportsSection: View {
                 Picker("Language model", selection: selectedEndpointID) {
                     Text("Apple Intelligence (on device)").tag(UUID?.none)
                     ForEach(textModels.endpoints, id: \.id) { endpoint in
-                        Text("\(endpoint.name) (external)").tag(Optional(endpoint.id))
+                        Text("\(endpoint.name) (\(endpoint.hosting.displayName))")
+                            .tag(Optional(endpoint.id))
                     }
                 }
             }
@@ -238,7 +280,14 @@ struct MeetingReportsSection: View {
                 if let payload = MeetingReportsViewState.sharePayload(
                     for: presentation.shownReport
                 ) {
-                    ShareLink(item: payload.text) {
+                    Button {
+                        shareDisclosure.request(
+                            payload,
+                            meetingID: meetingID,
+                            disclosureSeen: ReportShareDisclosureStore()
+                                .hasSeenDisclosure
+                        )
+                    } label: {
                         Label("Share", systemImage: "square.and.arrow.up")
                     }
                 }
@@ -268,6 +317,20 @@ struct MeetingReportsSection: View {
         }
     }
 
+    private var shareDisclosureIsPresented: Binding<Bool> {
+        Binding(
+            get: { shareDisclosure.isDisclosurePresented(for: meetingID) },
+            set: { if !$0 { shareDisclosure.cancelDisclosure() } }
+        )
+    }
+
+    private var reportShareSheetIsPresented: Binding<Bool> {
+        Binding(
+            get: { shareDisclosure.isSharePresented(for: meetingID) },
+            set: { if !$0 { shareDisclosure.finishSharing() } }
+        )
+    }
+
     private func reportMessage(
         _ message: String,
         systemImage: String,
@@ -291,9 +354,10 @@ struct MeetingReportsSection: View {
 
     private var blockingMessage: String? {
         if !hasTranscript {
-            return viewState.availabilityMessage
+            return viewState.availabilityMessage.map { String(localized: $0) }
         }
-        return preflightError ?? viewState.availabilityMessage
+        if let preflightError { return preflightError }
+        return viewState.availabilityMessage.map { String(localized: $0) }
     }
 
     private var hasUnconfirmedSpeakers: Bool {
@@ -308,11 +372,11 @@ struct MeetingReportsSection: View {
         } ?? false
     }
 
-    private var externalNotice: ExternalModelNotice? {
+    private var externalNotice: LocalizedExternalModelNotice? {
         guard let snapshot = endpointDisplay.endpointSnapshot,
               let preflight
         else { return nil }
-        return try? ExternalModelNotice(
+        return try? LocalizedExternalModelNotice.make(
             endpoint: TextModelEndpoint(snapshot: snapshot),
             disclosure: preflight.disclosure,
             localDeviceDescription: localDeviceDescription
@@ -321,7 +385,7 @@ struct MeetingReportsSection: View {
 
     private var externalNoticeError: String? {
         if case .unavailableExternal = endpointDisplay {
-            return "The selected text-model endpoint is no longer available."
+            return String(localized: "The selected text-model endpoint is no longer available.")
         }
         guard let snapshot = endpointDisplay.endpointSnapshot,
               let preflight else { return nil }

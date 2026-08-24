@@ -7,11 +7,21 @@ public struct LegacyImporter: Sendable {
         Library,
         PreparedMeetingImport
     ) async throws -> PreparedMeetingCommitResult
+    typealias PrepareMeeting = @Sendable (
+        LegacyStemEntry,
+        [String: String],
+        [String: String],
+        LegacyTimestampParser,
+        URL
+    ) async throws -> PreparedLegacyMeeting
+    typealias RepairUnitStarted = @Sendable () async -> Void
 
     public let sourceRoot: URL
     public let library: Library
     public let folders: FolderStore
     public let timestampParser: LegacyTimestampParser
+    private let prepareMeeting: PrepareMeeting
+    private let repairUnitStarted: RepairUnitStarted
     private let commitPreparedMeeting: CommitPreparedMeeting
 
     public init(
@@ -24,6 +34,8 @@ public struct LegacyImporter: Sendable {
         self.library = library
         self.folders = folders
         self.timestampParser = timestampParser
+        prepareMeeting = Self.defaultPrepareMeeting
+        repairUnitStarted = {}
         commitPreparedMeeting = { library, prepared in
             try await library.commitPreparedMeeting(prepared)
         }
@@ -34,138 +46,248 @@ public struct LegacyImporter: Sendable {
         library: Library,
         folders: FolderStore,
         timestampParser: LegacyTimestampParser = LegacyTimestampParser(),
+        prepareMeeting: @escaping PrepareMeeting = Self.defaultPrepareMeeting,
+        repairUnitStarted: @escaping RepairUnitStarted = {},
         commitPreparedMeeting: @escaping CommitPreparedMeeting
     ) {
         self.sourceRoot = sourceRoot
         self.library = library
         self.folders = folders
         self.timestampParser = timestampParser
+        self.prepareMeeting = prepareMeeting
+        self.repairUnitStarted = repairUnitStarted
         self.commitPreparedMeeting = commitPreparedMeeting
+    }
+
+    init(
+        sourceRoot: URL,
+        library: Library,
+        folders: FolderStore,
+        timestampParser: LegacyTimestampParser = LegacyTimestampParser(),
+        prepareMeeting: @escaping PrepareMeeting
+    ) {
+        self.init(
+            sourceRoot: sourceRoot,
+            library: library,
+            folders: folders,
+            timestampParser: timestampParser,
+            prepareMeeting: prepareMeeting,
+            repairUnitStarted: {},
+            commitPreparedMeeting: { library, prepared in
+                try await library.commitPreparedMeeting(prepared)
+            }
+        )
+    }
+
+    init(
+        sourceRoot: URL,
+        library: Library,
+        folders: FolderStore,
+        timestampParser: LegacyTimestampParser = LegacyTimestampParser(),
+        repairUnitStarted: @escaping RepairUnitStarted
+    ) {
+        self.init(
+            sourceRoot: sourceRoot,
+            library: library,
+            folders: folders,
+            timestampParser: timestampParser,
+            repairUnitStarted: repairUnitStarted,
+            commitPreparedMeeting: { library, prepared in
+                try await library.commitPreparedMeeting(prepared)
+            }
+        )
+    }
+
+    private static func defaultPrepareMeeting(
+        entry: LegacyStemEntry,
+        folderNames: [String: String],
+        customTemplateNames: [String: String],
+        timestampParser: LegacyTimestampParser,
+        audioWorkspaceDirectory: URL
+    ) async throws -> PreparedLegacyMeeting {
+        try await prepareLegacyMeeting(
+            entry: entry,
+            folderNames: folderNames,
+            customTemplateNames: customTemplateNames,
+            timestampParser: timestampParser,
+            audioWorkspaceDirectory: audioWorkspaceDirectory
+        )
     }
 
     public func performImport(
         progress: (@Sendable (LegacyImportProgress) -> Void)? = nil
-    ) async throws -> ImportReport {
+    ) async throws -> LegacyImportOutcome {
         let audioWorkspaceDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(
                 "StenoLegacyImport-\(UUID().uuidString)",
                 isDirectory: true
-            )
+        )
         defer { try? FileManager.default.removeItem(at: audioWorkspaceDirectory) }
-        let snapshot = try LegacyStore(rootURL: sourceRoot).scan()
-        var report = ImportReport(
-            orphans: snapshot.orphans,
-            pendingDeleteFindings: snapshot.pendingDeleteFiles
-        )
-        let importable = snapshot.entries.filter {
-            $0.summary != nil && $0.transcript != nil
-        }
-        var completed = 0
-        let folderNames = try readFolderNames()
-        let customTemplateNames = try readCustomTemplateNames()
-        var meetingIDsByStem: [String: MeetingID] = [:]
-        var runIDsByStem: [String: RunID] = [:]
-
-        // Fortschritt wird erst nach erfolgreicher Verarbeitung gemeldet:
-        // Ein defer würde auch einen abbrechenden Stem als erledigt zeigen.
-        func reportProgress(_ stem: String) {
-            completed += 1
-            progress?(LegacyImportProgress(
-                completed: completed,
-                total: importable.count,
-                stem: stem
-            ))
-        }
-
-        for entry in importable {
-            let provenanceKey = "legacy:\(entry.stem)"
-            if let existingMeetingID = try await library.meetingID(
-                forProvenanceKey: provenanceKey
-            ) {
-                report.duplicates.append(entry.stem)
-                meetingIDsByStem[entry.stem] = existingMeetingID
-                let repair = try await repairUnreadableAudio(
-                    entry: entry,
-                    meetingID: existingMeetingID,
-                    audioWorkspaceDirectory: audioWorkspaceDirectory
-                )
-                report.audioRepaired += repair.repaired
-                report.audioMissing += repair.missing
-                report.warnings.append(contentsOf: repair.warnings)
-                if let runID = try legacyRunID(
-                    layout: library.layout,
-                    meetingID: existingMeetingID
-                ) {
-                    runIDsByStem[entry.stem] = runID
-                }
-                reportProgress(entry.stem)
-                continue
-            }
-
-            let prepared = try await prepareLegacyMeeting(
-                entry: entry,
-                folderNames: folderNames,
-                customTemplateNames: customTemplateNames,
-                timestampParser: timestampParser,
-                audioWorkspaceDirectory: audioWorkspaceDirectory
+        var report = ImportReport()
+        do {
+            try Task.checkCancellation()
+            let snapshot = try LegacyStore(rootURL: sourceRoot).scan()
+            report = ImportReport(
+                orphans: snapshot.orphans,
+                pendingDeleteFindings: snapshot.pendingDeleteFiles
             )
-            let commitResult = try await commitPreparedMeeting(library, prepared.bundle)
-            switch commitResult {
-            case .imported:
-                break
-            case .alreadyPresent(let existingMeetingID, _):
-                report.duplicates.append(entry.stem)
-                meetingIDsByStem[entry.stem] = existingMeetingID
-                let repair = try await repairUnreadableAudio(
-                    entry: entry,
-                    meetingID: existingMeetingID,
-                    audioWorkspaceDirectory: audioWorkspaceDirectory
-                )
-                report.audioRepaired += repair.repaired
-                report.audioMissing += repair.missing
-                report.warnings.append(contentsOf: repair.warnings)
-                if let runID = try legacyRunID(
-                    layout: library.layout,
-                    meetingID: existingMeetingID
+            let importable = snapshot.entries.filter {
+                $0.summary != nil && $0.transcript != nil
+            }
+            var completed = 0
+            let folderLookup: LegacyNameLookup
+            do {
+                folderLookup = try readFolderNames()
+            } catch {
+                folderLookup = .empty
+                report.warnings.append("folders.json could not be read and was ignored: \(error)")
+            }
+            report.warnings.append(contentsOf: folderLookup.warnings)
+            let legacyPersonProfiles: LegacyPersonProfiles?
+            do {
+                legacyPersonProfiles = try readPersonProfiles()
+            } catch {
+                legacyPersonProfiles = nil
+                report.warnings.append("config.json could not be read and was ignored: \(error)")
+            }
+            let customTemplateLookup = legacyNamesByID(
+                legacyPersonProfiles?.customTemplates.map { (id: $0.id, name: $0.name) } ?? [],
+                itemDescription: "custom template"
+            )
+            report.warnings.append(contentsOf: customTemplateLookup.warnings)
+            var meetingIDsByStem: [String: MeetingID] = [:]
+            var runIDsByStem: [String: RunID] = [:]
+
+            // Fortschritt wird erst nach vollstaendiger Behandlung gemeldet. Dazu
+            // zaehlen sichtbare Duplikate und uebersprungene beschaedigte Stems,
+            // nicht aber ein Import mit ungewissem Commit-Ausgang.
+            func reportProgress(_ stem: String) {
+                completed += 1
+                progress?(LegacyImportProgress(
+                    completed: completed,
+                    total: importable.count,
+                    stem: stem
+                ))
+            }
+
+            for entry in importable {
+                try Task.checkCancellation()
+                let provenanceKey = "legacy:\(entry.stem)"
+                if let existingMeetingID = try await library.meetingID(
+                    forProvenanceKey: provenanceKey
                 ) {
+                    report.duplicates.append(entry.stem)
+                    meetingIDsByStem[entry.stem] = existingMeetingID
+                    let repair = try await completeAudioRepairUnit(
+                        entry: entry,
+                        meetingID: existingMeetingID,
+                        audioWorkspaceDirectory: audioWorkspaceDirectory
+                    )
+                    report.audioRepaired += repair.repaired
+                    report.audioMissing += repair.missing
+                    report.warnings.append(contentsOf: repair.warnings)
+                    if let runID = try legacyRunID(
+                        layout: library.layout,
+                        meetingID: existingMeetingID
+                    ) {
+                        runIDsByStem[entry.stem] = runID
+                    }
+                    reportProgress(entry.stem)
+                    try Task.checkCancellation()
+                    continue
+                }
+
+                let prepared: PreparedLegacyMeeting
+                try Task.checkCancellation()
+                do {
+                    prepared = try await prepareMeeting(
+                        entry,
+                        folderLookup.names,
+                        customTemplateLookup.names,
+                        timestampParser,
+                        audioWorkspaceDirectory
+                    )
+                } catch let error where !(error is CancellationError) {
+                    report.warnings.append(
+                        "Stem \(entry.stem) could not be imported and was skipped: \(error)"
+                    )
+                    reportProgress(entry.stem)
+                    try Task.checkCancellation()
+                    continue
+                }
+                try Task.checkCancellation()
+                let commitResult = try await commitPreparedMeeting(library, prepared.bundle)
+                switch commitResult {
+                case .imported:
+                    break
+                case .alreadyPresent(let existingMeetingID, _):
+                    report.duplicates.append(entry.stem)
+                    meetingIDsByStem[entry.stem] = existingMeetingID
+                    let repair = try await completeAudioRepairUnit(
+                        entry: entry,
+                        meetingID: existingMeetingID,
+                        audioWorkspaceDirectory: audioWorkspaceDirectory
+                    )
+                    report.audioRepaired += repair.repaired
+                    report.audioMissing += repair.missing
+                    report.warnings.append(contentsOf: repair.warnings)
+                    if let runID = try legacyRunID(
+                        layout: library.layout,
+                        meetingID: existingMeetingID
+                    ) {
+                        runIDsByStem[entry.stem] = runID
+                    }
+                    reportProgress(entry.stem)
+                    try Task.checkCancellation()
+                    continue
+                case .commitOutcomeUncertain(let meetingID, _):
+                    throw LegacyImportError.commitOutcomeUncertain(
+                        stem: entry.stem,
+                        meetingID: meetingID
+                    )
+                }
+                // Der Ordner wird sofort gesetzt und nicht der einmaligen
+                // Uebernahme ueberlassen: die ist beim zweiten Import laengst
+                // gelaufen, und ohne das kaeme jedes spaeter importierte Meeting
+                // ohne Ordner an.
+                await fileIntoLegacyFolder(prepared.bundle.meeting)
+                meetingIDsByStem[entry.stem] = prepared.bundle.meeting.id
+                if let runID = prepared.diarizationRunID {
                     runIDsByStem[entry.stem] = runID
                 }
+                report.meetingsCreated += 1
+                report.audioCopied += prepared.bundle.media.count
+                if prepared.bundle.media.isEmpty { report.audioMissing += 1 }
+                report.revisionsCreated += 1
+                report.clustersCreated += prepared.clusterCount
+                report.reportsCreated += prepared.bundle.templateResults.count
+                report.notesCreated += prepared.bundle.notes.count
+                report.warnings.append(contentsOf: prepared.warnings)
                 reportProgress(entry.stem)
-                continue
-            case .commitOutcomeUncertain(let meetingID, _):
-                throw LegacyImportError.commitOutcomeUncertain(
-                    stem: entry.stem,
-                    meetingID: meetingID
-                )
+                try Task.checkCancellation()
             }
-            // Der Ordner wird sofort gesetzt und nicht der einmaligen
-            // Uebernahme ueberlassen: die ist beim zweiten Import laengst
-            // gelaufen, und ohne das kaeme jedes spaeter importierte Meeting
-            // ohne Ordner an.
-            await fileIntoLegacyFolder(prepared.bundle.meeting)
-            meetingIDsByStem[entry.stem] = prepared.bundle.meeting.id
-            if let runID = prepared.diarizationRunID {
-                runIDsByStem[entry.stem] = runID
-            }
-            report.meetingsCreated += 1
-            report.audioCopied += prepared.bundle.media.count
-            if prepared.bundle.media.isEmpty { report.audioMissing += 1 }
-            report.revisionsCreated += 1
-            report.clustersCreated += prepared.clusterCount
-            report.reportsCreated += prepared.bundle.templateResults.count
-            report.notesCreated += prepared.bundle.notes.count
-            report.warnings.append(contentsOf: prepared.warnings)
-            reportProgress(entry.stem)
-        }
 
-        try await importPersonProfiles(
-            meetingIDsByStem: meetingIDsByStem,
-            runIDsByStem: runIDsByStem,
-            report: &report
-        )
+            if let legacyPersonProfiles {
+                try Task.checkCancellation()
+                try await importPersonProfiles(
+                    legacyProfiles: legacyPersonProfiles.profiles,
+                    meetingIDsByStem: meetingIDsByStem,
+                    runIDsByStem: runIDsByStem,
+                    report: &report
+                )
+                try Task.checkCancellation()
+            }
+            normalize(&report)
+            return .finished(report)
+        } catch is CancellationError {
+            normalize(&report)
+            return .cancelled(report)
+        }
+    }
+
+    private func normalize(_ report: inout ImportReport) {
         report.duplicates.sort()
         report.warnings.sort()
-        return report
     }
 
     /// Legt das frisch importierte Meeting in den Ordner, den es aus der alten
@@ -182,13 +304,35 @@ public struct LegacyImporter: Sendable {
         _ = try? await library.setMeetingFolder(meeting.id, folderID: folder.id)
     }
 
-    private func readFolderNames() throws -> [String: String] {
+    private func readFolderNames() throws -> LegacyNameLookup {
         let url = sourceRoot.appending(path: "folders.json")
-        guard FileManager.default.fileExists(atPath: url.path) else { return [:] }
-        return Dictionary(uniqueKeysWithValues: try LegacyFolders.read(
+        guard FileManager.default.fileExists(atPath: url.path) else { return .empty }
+        return legacyNamesByID(try LegacyFolders.read(
             from: url,
             timestampParser: timestampParser
-        ).folders.map { ($0.id, $0.name) })
+        ).folders.map { (id: $0.id, name: $0.name) }, itemDescription: "folder")
+    }
+
+    /// Eine Duplikat-Reparatur ist eine vollständige Nacharbeitseinheit.
+    /// Der lokal gehaltene unstrukturierte Task erbt keine spätere
+    /// Cancellation des aufrufenden Import-Tasks und wird immer abgewartet.
+    /// Erst danach beobachtet `performImport` den Abbruch am nächsten
+    /// expliziten Checkpoint.
+    private func completeAudioRepairUnit(
+        entry: LegacyStemEntry,
+        meetingID: MeetingID,
+        audioWorkspaceDirectory: URL
+    ) async throws -> LegacyAudioRepairResult {
+        let repairUnitStarted = self.repairUnitStarted
+        let repairTask = Task {
+            await repairUnitStarted()
+            return try await repairUnreadableAudio(
+                entry: entry,
+                meetingID: meetingID,
+                audioWorkspaceDirectory: audioWorkspaceDirectory
+            )
+        }
+        return try await repairTask.value
     }
 
     private func repairUnreadableAudio(
@@ -247,7 +391,7 @@ public struct LegacyImporter: Sendable {
                 )
                 repaired += 1
                 hasReadableAsset = true
-            } catch {
+            } catch let error where !(error is CancellationError) {
                 warnings.append(
                     "Stem \(entry.stem) audio \(sourceURL.lastPathComponent) "
                         + "could not be repaired: \(error)"
@@ -261,27 +405,27 @@ public struct LegacyImporter: Sendable {
         )
     }
 
-    private func readCustomTemplateNames() throws -> [String: String] {
+    private func readPersonProfiles() throws -> LegacyPersonProfiles? {
         let url = sourceRoot.appending(path: "config.json")
-        guard FileManager.default.fileExists(atPath: url.path) else { return [:] }
-        return Dictionary(uniqueKeysWithValues: try LegacyPersonProfiles.read(
-            from: url
-        ).customTemplates.map { ($0.id, $0.name) })
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try LegacyPersonProfiles.read(from: url)
     }
 
     private func importPersonProfiles(
+        legacyProfiles: [LegacyPersonProfile],
         meetingIDsByStem: [String: MeetingID],
         runIDsByStem: [String: RunID],
         report: inout ImportReport
     ) async throws {
-        let configURL = sourceRoot.appending(path: "config.json")
-        guard FileManager.default.fileExists(atPath: configURL.path) else { return }
-        let legacyProfiles = try LegacyPersonProfiles.read(from: configURL).profiles
         let store = try IdentityStore(layout: library.layout)
-        var persons = try await store.listPersons()
+        let identitySnapshot = try await store.snapshot()
+        var persons = identitySnapshot.persons
         var changed = false
+        var personsCreated = 0
+        var prototypesCreated = 0
 
         for legacy in legacyProfiles {
+            try Task.checkCancellation()
             let key = normalizedPersonName(legacy.displayName)
             let existingIndex = persons.firstIndex {
                 normalizedPersonName($0.displayName) == key
@@ -301,7 +445,7 @@ public struct LegacyImporter: Sendable {
                     updatedAt: legacy.updatedAt
                 ))
                 index = persons.index(before: persons.endIndex)
-                report.personsCreated += 1
+                personsCreated += 1
                 changed = true
             }
 
@@ -316,7 +460,7 @@ public struct LegacyImporter: Sendable {
                     warnings: &report.warnings
                 ), evidenceIDs.insert(evidence.id).inserted else { continue }
                 persons[index].prototypes.append(evidence)
-                report.prototypesCreated += 1
+                prototypesCreated += 1
                 changed = true
             }
             for negative in legacy.hardNegatives {
@@ -328,7 +472,7 @@ public struct LegacyImporter: Sendable {
                     warnings: &report.warnings
                 ), evidenceIDs.insert(evidence.id).inserted else { continue }
                 persons[index].hardNegatives.append(evidence)
-                report.prototypesCreated += 1
+                prototypesCreated += 1
                 changed = true
             }
             if legacy.updatedAt > persons[index].updatedAt {
@@ -337,9 +481,55 @@ public struct LegacyImporter: Sendable {
             }
         }
         if changed {
-            try await store.replacePersons(persons)
+            try Task.checkCancellation()
+            _ = try await store.replacePersons(
+                persons,
+                expectedRevision: identitySnapshot.revision
+            )
+            report.personsCreated += personsCreated
+            report.prototypesCreated += prototypesCreated
         }
     }
+}
+
+struct LegacyNameLookup: Equatable, Sendable {
+    static let empty = Self(names: [:], warnings: [])
+
+    let names: [String: String]
+    let warnings: [String]
+}
+
+func legacyNamesByID(
+    _ values: [(id: String, name: String)],
+    itemDescription: String
+) -> LegacyNameLookup {
+    var seen = Set<String>()
+    var valid: [(id: String, name: String)] = []
+    var warnings: [String] = []
+
+    for value in values {
+        guard !value.id.isEmpty else {
+            warnings.append(
+                "Legacy \(itemDescription) \(value.name) has a missing id and was ignored"
+            )
+            continue
+        }
+        if !seen.insert(value.id).inserted {
+            warnings.append(
+                "Legacy \(itemDescription) has duplicate id \(value.id); "
+                    + "the first value was kept"
+            )
+        }
+        valid.append(value)
+    }
+
+    return LegacyNameLookup(
+        names: Dictionary(
+            valid.map { ($0.id, $0.name) },
+            uniquingKeysWith: { first, _ in first }
+        ),
+        warnings: warnings
+    )
 }
 
 private struct LegacyAudioRepairResult {
@@ -439,7 +629,7 @@ private func makeHardNegative(
 
 private func prefixedClusterID(channel: String?, speakerID: String) -> String {
     guard let channel, !channel.isEmpty else { return speakerID }
-    return "\(channel)/\(speakerID)"
+    return LegacyClusterKey(channel: channel, speakerID: speakerID).clusterID
 }
 
 private func legacyRunID(layout: LibraryLayout, meetingID: MeetingID) throws -> RunID? {

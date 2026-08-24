@@ -1,6 +1,19 @@
 import Foundation
 import StenoDomain
 
+package enum FolderStoreMutationCheckpoint: Equatable, Sendable {
+    case afterExclusiveTransactionBeforePreparationRead
+    case afterExclusiveTransactionBeforeMutationRead
+    case afterEmptyFolderDocumentRead
+    case afterEmptyFolderChildInspection
+    case afterEmptyFolderMeetingInspectionBeforeDelete
+}
+
+package typealias FolderStoreMutationAction = @Sendable (
+    FolderStoreMutationCheckpoint,
+    LibraryMutationTransaction
+) throws -> Void
+
 private struct FoldersDocument: Codable, Equatable, Sendable {
     static let currentSchemaVersion = 2
 
@@ -48,45 +61,72 @@ public struct FolderDeletionResult: Equatable, Sendable {
     }
 }
 
+public enum EmptyFolderDeletionResult: Equatable, Sendable {
+    case deleted
+    case notFound
+    case notEmpty
+}
+
 public actor FolderStore {
     public nonisolated let layout: LibraryLayout
+    private let mutationAction: FolderStoreMutationAction
 
-    private init(layout: LibraryLayout) {
+    private init(
+        layout: LibraryLayout,
+        mutationAction: @escaping FolderStoreMutationAction
+    ) {
         self.layout = layout
+        self.mutationAction = mutationAction
     }
 
     public static func open(layout: LibraryLayout) throws -> FolderStore {
-        try prepare(layout: layout)
-        return FolderStore(layout: layout)
+        try open(layout: layout) { _, _ in }
     }
 
-    private static func prepare(layout: LibraryLayout) throws {
+    package static func open(
+        layout: LibraryLayout,
+        mutationAction: @escaping FolderStoreMutationAction
+    ) throws -> FolderStore {
+        try prepare(layout: layout, mutationAction: mutationAction)
+        return FolderStore(layout: layout, mutationAction: mutationAction)
+    }
+
+    private static func prepare(
+        layout: LibraryLayout,
+        mutationAction: FolderStoreMutationAction
+    ) throws {
         try FileManager.default.createDirectory(
             at: layout.root,
             withIntermediateDirectories: true
         )
-        guard FileManager.default.fileExists(atPath: layout.folders.path) else {
-            return
-        }
-        _ = try JSONDocumentStore.migrateAndRead(
-            current: FoldersDocument.self,
-            legacy: FoldersDocumentV1.self,
-            from: layout.folders,
-            legacySchemaVersion: 1,
-            currentSchemaVersion: FoldersDocument.currentSchemaVersion,
-            currentSchema: \.schemaVersion
-        ) { legacy in
-            FoldersDocument(
-                folders: legacy.folders.map {
-                    Folder(
-                        id: $0.id,
-                        name: $0.name,
-                        sortIndex: $0.sortIndex,
-                        createdAt: $0.createdAt
-                    )
-                },
-                adoptedLegacyFolders: legacy.adoptedLegacyFolders
+        try LibraryMutationCoordination.withExclusiveTransaction(layout: layout) { transaction in
+            try mutationAction(
+                .afterExclusiveTransactionBeforePreparationRead,
+                transaction
             )
+            guard FileManager.default.fileExists(atPath: layout.folders.path) else {
+                return
+            }
+            _ = try JSONDocumentStore.migrateAndRead(
+                current: FoldersDocument.self,
+                legacy: FoldersDocumentV1.self,
+                from: layout.folders,
+                legacySchemaVersion: 1,
+                currentSchemaVersion: FoldersDocument.currentSchemaVersion,
+                currentSchema: \.schemaVersion
+            ) { legacy in
+                FoldersDocument(
+                    folders: legacy.folders.map {
+                        Folder(
+                            id: $0.id,
+                            name: $0.name,
+                            sortIndex: $0.sortIndex,
+                            createdAt: $0.createdAt
+                        )
+                    },
+                    adoptedLegacyFolders: legacy.adoptedLegacyFolders
+                )
+            }
         }
     }
 
@@ -124,25 +164,25 @@ public actor FolderStore {
         createdAt: Date = Date()
     ) throws -> Folder {
         let normalized = try Self.normalizedName(name)
-        var document = try readDocument()
-        try Self.validateParent(parentFolderID, in: document.folders)
-        try Self.validateUniqueName(
-            normalized,
-            parentFolderID: parentFolderID,
-            among: document.folders
-        )
-        let folder = Folder(
-            name: normalized,
-            parentFolderID: parentFolderID,
-            sortIndex: Self.siblings(
+        return try mutateDocument { document in
+            try Self.validateParent(parentFolderID, in: document.folders)
+            try Self.validateUniqueName(
+                normalized,
                 parentFolderID: parentFolderID,
-                in: document.folders
-            ).count,
-            createdAt: createdAt
-        )
-        document.folders.append(folder)
-        try write(document)
-        return folder
+                among: document.folders
+            )
+            let folder = Folder(
+                name: normalized,
+                parentFolderID: parentFolderID,
+                sortIndex: Self.siblings(
+                    parentFolderID: parentFolderID,
+                    in: document.folders
+                ).count,
+                createdAt: createdAt
+            )
+            document.folders.append(folder)
+            return folder
+        }
     }
 
     /// Liefert den Ordner mit diesem Namen und legt ihn an, falls es ihn noch
@@ -151,12 +191,88 @@ public actor FolderStore {
     public func folder(named name: String) throws -> Folder {
         let normalized = try Self.normalizedName(name)
         let key = Self.comparisonKey(normalized)
-        if let existing = try readDocument().folders.first(where: {
+        return try mutateDocument { document in
+            if let existing = document.folders.first(where: {
+                $0.parentFolderID == nil && Self.comparisonKey($0.name) == key
+            }) {
+                return existing
+            }
+            let folder = Folder(
+                name: normalized,
+                sortIndex: Self.siblings(
+                    parentFolderID: nil,
+                    in: document.folders
+                ).count
+            )
+            document.folders.append(folder)
+            return folder
+        }
+    }
+
+    /// Transaktionsbewusste Import-Variante. Sie erstellt oder findet nur
+    /// einen Hauptordner und verschachtelt keinen weiteren Mutations-Lock.
+    package nonisolated func folder(
+        named name: String,
+        transaction: LibraryMutationTransaction
+    ) throws -> Folder {
+        try transaction.validate(layout: layout)
+        let normalized = try Self.normalizedName(name)
+        let key = Self.comparisonKey(normalized)
+        var document = try readDocument(transaction: transaction)
+        if let existing = document.folders.first(where: {
             $0.parentFolderID == nil && Self.comparisonKey($0.name) == key
         }) {
             return existing
         }
-        return try createFolder(name: normalized)
+        let folder = Folder(
+            name: normalized,
+            sortIndex: Self.siblings(parentFolderID: nil, in: document.folders).count
+        )
+        document.folders.append(folder)
+        try write(document, transaction: transaction)
+        return folder
+    }
+
+    package nonisolated func folderIfPresent(
+        named name: String,
+        transaction: LibraryMutationTransaction
+    ) throws -> Folder? {
+        try transaction.validate(layout: layout)
+        let key = Self.comparisonKey(try Self.normalizedName(name))
+        return try readDocument(transaction: transaction).folders.first {
+            $0.parentFolderID == nil && Self.comparisonKey($0.name) == key
+        }
+    }
+
+    package nonisolated func folder(
+        _ folderID: FolderID,
+        transaction: LibraryMutationTransaction
+    ) throws -> Folder? {
+        try transaction.validate(layout: layout)
+        return try readDocument(transaction: transaction).folders.first {
+            $0.id == folderID
+        }
+    }
+
+    /// Atomare Auflösung für zusammengesetzte Imports. Neben dem Ordner wird
+    /// festgehalten, ob genau diese Transaktion ihn erzeugt hat.
+    package nonisolated func resolveTopLevelFolder(
+        named name: String,
+        transaction: LibraryMutationTransaction
+    ) throws -> (folder: Folder, wasCreated: Bool) {
+        try transaction.validate(layout: layout)
+        let normalized = try Self.normalizedName(name)
+        let key = Self.comparisonKey(normalized)
+        var document = try readDocument(transaction: transaction)
+        if let existing = document.folders.first(where: {
+            $0.parentFolderID == nil && Self.comparisonKey($0.name) == key
+        }) {
+            return (existing, false)
+        }
+        let folder = Folder(name: normalized, sortIndex: Self.siblings(parentFolderID: nil, in: document.folders).count)
+        document.folders.append(folder)
+        try write(document, transaction: transaction)
+        return (folder, true)
     }
 
     @discardableResult
@@ -165,19 +281,19 @@ public actor FolderStore {
         to name: String
     ) throws -> Folder {
         let normalized = try Self.normalizedName(name)
-        var document = try readDocument()
-        guard let index = document.folders.firstIndex(where: { $0.id == folderID }) else {
-            throw LibraryError.folderNotFound(folderID)
+        return try mutateDocument { document in
+            guard let index = document.folders.firstIndex(where: { $0.id == folderID }) else {
+                throw LibraryError.folderNotFound(folderID)
+            }
+            try Self.validateUniqueName(
+                normalized,
+                parentFolderID: document.folders[index].parentFolderID,
+                among: document.folders,
+                excluding: folderID
+            )
+            document.folders[index].name = normalized
+            return document.folders[index]
         }
-        try Self.validateUniqueName(
-            normalized,
-            parentFolderID: document.folders[index].parentFolderID,
-            among: document.folders,
-            excluding: folderID
-        )
-        document.folders[index].name = normalized
-        try write(document)
-        return document.folders[index]
     }
 
     @discardableResult
@@ -185,121 +301,182 @@ public actor FolderStore {
         _ folderID: FolderID,
         toParentFolderID parentFolderID: FolderID?
     ) throws -> Folder {
-        var document = try readDocument()
-        guard let index = document.folders.firstIndex(where: { $0.id == folderID }) else {
-            throw LibraryError.folderNotFound(folderID)
-        }
-        let oldParentFolderID = document.folders[index].parentFolderID
-        guard oldParentFolderID != parentFolderID else {
+        try mutateDocument { document in
+            guard let index = document.folders.firstIndex(where: {
+                $0.id == folderID
+            }) else {
+                throw LibraryError.folderNotFound(folderID)
+            }
+            let oldParentFolderID = document.folders[index].parentFolderID
+            guard oldParentFolderID != parentFolderID else {
+                return document.folders[index]
+            }
+            guard parentFolderID != folderID else {
+                throw LibraryError.invalidFolderHierarchy(
+                    "A folder cannot be its own parent."
+                )
+            }
+            try Self.validateParent(parentFolderID, in: document.folders)
+            if let parentFolderID,
+               Self.isDescendant(
+                   parentFolderID,
+                   of: folderID,
+                   in: document.folders
+               )
+            {
+                throw LibraryError.invalidFolderHierarchy(
+                    "A folder cannot move below one of its descendants."
+                )
+            }
+            if parentFolderID != nil,
+               document.folders.contains(where: {
+                   $0.parentFolderID == folderID
+               })
+            {
+                throw LibraryError.invalidFolderHierarchy(
+                    "A folder with children cannot become a child."
+                )
+            }
+            try Self.validateUniqueName(
+                document.folders[index].name,
+                parentFolderID: parentFolderID,
+                among: document.folders,
+                excluding: folderID
+            )
+
+            document.folders[index].parentFolderID = parentFolderID
+            document.folders[index].sortIndex = Self.siblings(
+                parentFolderID: parentFolderID,
+                in: document.folders
+            ).filter { $0.id != folderID }.count
+            Self.normalizeSiblings(
+                parentFolderID: oldParentFolderID,
+                in: &document.folders
+            )
+            Self.normalizeSiblings(
+                parentFolderID: parentFolderID,
+                in: &document.folders
+            )
             return document.folders[index]
         }
-        guard parentFolderID != folderID else {
-            throw LibraryError.invalidFolderHierarchy(
-                "A folder cannot be its own parent."
-            )
-        }
-        try Self.validateParent(parentFolderID, in: document.folders)
-        if let parentFolderID,
-           Self.isDescendant(
-               parentFolderID,
-               of: folderID,
-               in: document.folders
-           )
-        {
-            throw LibraryError.invalidFolderHierarchy(
-                "A folder cannot move below one of its descendants."
-            )
-        }
-        if parentFolderID != nil,
-           document.folders.contains(where: { $0.parentFolderID == folderID })
-        {
-            throw LibraryError.invalidFolderHierarchy(
-                "A folder with children cannot become a child."
-            )
-        }
-        try Self.validateUniqueName(
-            document.folders[index].name,
-            parentFolderID: parentFolderID,
-            among: document.folders,
-            excluding: folderID
-        )
-
-        document.folders[index].parentFolderID = parentFolderID
-        document.folders[index].sortIndex = Self.siblings(
-            parentFolderID: parentFolderID,
-            in: document.folders
-        ).filter { $0.id != folderID }.count
-        Self.normalizeSiblings(
-            parentFolderID: oldParentFolderID,
-            in: &document.folders
-        )
-        Self.normalizeSiblings(
-            parentFolderID: parentFolderID,
-            in: &document.folders
-        )
-        try write(document)
-        return document.folders[index]
     }
 
     /// Entfernt nur den Ordnerindex. Direkte Meetingzuordnungen raeumt die
     /// App vorher auf; Kinder eines Hauptordners werden atomar hochgestuft.
     @discardableResult
     public func deleteFolder(_ folderID: FolderID) throws -> FolderDeletionResult? {
-        var document = try readDocument()
-        guard let folder = document.folders.first(where: { $0.id == folderID }) else {
-            return nil
-        }
-        let promoted = Self.orderedSiblings(
-            parentFolderID: folderID,
-            in: document.folders
-        )
-        let oldParentFolderID = folder.parentFolderID
-
-        if oldParentFolderID == nil, !promoted.isEmpty {
-            let roots = Self.orderedSiblings(
-                parentFolderID: nil,
+        try mutateDocument { document in
+            guard let folder = document.folders.first(where: {
+                $0.id == folderID
+            }) else {
+                return nil
+            }
+            let promoted = Self.orderedSiblings(
+                parentFolderID: folderID,
                 in: document.folders
             )
-            let futureRoots = roots.filter { $0.id != folderID } + promoted
-            for promotedFolder in promoted {
-                try Self.validateUniqueName(
-                    promotedFolder.name,
-                    parentFolderID: nil,
-                    among: futureRoots,
-                    excluding: promotedFolder.id
-                )
-            }
-            let insertionIndex = roots.firstIndex(where: { $0.id == folderID }) ?? 0
-            let rootIDs = roots.filter { $0.id != folderID }.map(\.id)
-            var newRootOrder = rootIDs
-            newRootOrder.insert(
-                contentsOf: promoted.map(\.id),
-                at: min(insertionIndex, newRootOrder.count)
-            )
-            for promotedFolder in promoted {
-                guard let index = document.folders.firstIndex(where: {
-                    $0.id == promotedFolder.id
-                }) else { continue }
-                document.folders[index].parentFolderID = nil
-            }
-            for (sortIndex, rootID) in newRootOrder.enumerated() {
-                guard let index = document.folders.firstIndex(where: {
-                    $0.id == rootID
-                }) else { continue }
-                document.folders[index].sortIndex = sortIndex
-            }
-        }
+            let oldParentFolderID = folder.parentFolderID
 
-        document.folders.removeAll { $0.id == folderID }
-        Self.normalizeSiblings(
-            parentFolderID: oldParentFolderID,
-            in: &document.folders
-        )
-        try write(document)
-        return FolderDeletionResult(
-            deletedFolderID: folderID,
-            promotedFolderIDs: promoted.map(\.id)
-        )
+            if oldParentFolderID == nil, !promoted.isEmpty {
+                let roots = Self.orderedSiblings(
+                    parentFolderID: nil,
+                    in: document.folders
+                )
+                let futureRoots = roots.filter { $0.id != folderID } + promoted
+                for promotedFolder in promoted {
+                    try Self.validateUniqueName(
+                        promotedFolder.name,
+                        parentFolderID: nil,
+                        among: futureRoots,
+                        excluding: promotedFolder.id
+                    )
+                }
+                let insertionIndex = roots.firstIndex(where: {
+                    $0.id == folderID
+                }) ?? 0
+                let rootIDs = roots.filter { $0.id != folderID }.map(\.id)
+                var newRootOrder = rootIDs
+                newRootOrder.insert(
+                    contentsOf: promoted.map(\.id),
+                    at: min(insertionIndex, newRootOrder.count)
+                )
+                for promotedFolder in promoted {
+                    guard let index = document.folders.firstIndex(where: {
+                        $0.id == promotedFolder.id
+                    }) else { continue }
+                    document.folders[index].parentFolderID = nil
+                }
+                for (sortIndex, rootID) in newRootOrder.enumerated() {
+                    guard let index = document.folders.firstIndex(where: {
+                        $0.id == rootID
+                    }) else { continue }
+                    document.folders[index].sortIndex = sortIndex
+                }
+            }
+
+            document.folders.removeAll { $0.id == folderID }
+            Self.normalizeSiblings(
+                parentFolderID: oldParentFolderID,
+                in: &document.folders
+            )
+            return FolderDeletionResult(
+                deletedFolderID: folderID,
+                promotedFolderIDs: promoted.map(\.id)
+            )
+        }
+    }
+
+    /// Entfernt ausschließlich den exakt benannten, nach erneuter Prüfung
+    /// leeren Ordner. Anders als `deleteFolder` werden weder Kinder befördert
+    /// noch Meetings bewegt.
+    @discardableResult
+    public func deleteFolderIfEmpty(
+        _ folderID: FolderID
+    ) throws -> EmptyFolderDeletionResult {
+        try LibraryMutationCoordination.withExclusiveTransaction(
+            layout: layout
+        ) { transaction in
+            var document = try readDocument(transaction: transaction)
+            try mutationAction(.afterEmptyFolderDocumentRead, transaction)
+            guard document.folders.contains(where: { $0.id == folderID }) else {
+                return .notFound
+            }
+            guard !document.folders.contains(where: {
+                $0.parentFolderID == folderID
+            }) else {
+                return .notEmpty
+            }
+            try mutationAction(.afterEmptyFolderChildInspection, transaction)
+            let meetingURLs = try FileManager.default.contentsOfDirectory(
+                at: layout.meetingsDirectory,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )
+            for directory in meetingURLs {
+                let values = try directory.resourceValues(forKeys: [.isDirectoryKey])
+                guard values.isDirectory == true else { continue }
+                let metadata = directory.appendingPathComponent("meeting.json")
+                guard FileManager.default.fileExists(atPath: metadata.path) else {
+                    continue
+                }
+                let meeting = try JSONDocumentStore.read(
+                    Meeting.self,
+                    from: metadata,
+                    currentSchemaVersion: Meeting.currentSchemaVersion,
+                    schemaVersion: \.schemaVersion
+                )
+                if meeting.folderID == folderID {
+                    return .notEmpty
+                }
+            }
+            try mutationAction(
+                .afterEmptyFolderMeetingInspectionBeforeDelete,
+                transaction
+            )
+            document.folders.removeAll { $0.id == folderID }
+            try write(document, transaction: transaction)
+            return .deleted
+        }
     }
 
     /// Setzt die Reihenfolge genau einer vollstaendig benannten
@@ -308,23 +485,24 @@ public actor FolderStore {
         parentFolderID: FolderID?,
         order: [FolderID]
     ) throws {
-        var document = try readDocument()
-        try Self.validateParent(parentFolderID, in: document.folders)
-        let expected = Set(Self.siblings(
-            parentFolderID: parentFolderID,
-            in: document.folders
-        ).map(\.id))
-        guard order.count == expected.count, Set(order) == expected else {
-            throw LibraryError.invalidFolderHierarchy(
-                "A reorder must contain every sibling exactly once."
-            )
+        try mutateDocument { document in
+            try Self.validateParent(parentFolderID, in: document.folders)
+            let expected = Set(Self.siblings(
+                parentFolderID: parentFolderID,
+                in: document.folders
+            ).map(\.id))
+            guard order.count == expected.count, Set(order) == expected else {
+                throw LibraryError.invalidFolderHierarchy(
+                    "A reorder must contain every sibling exactly once."
+                )
+            }
+            for (rank, folderID) in order.enumerated() {
+                guard let index = document.folders.firstIndex(where: {
+                    $0.id == folderID
+                }) else { continue }
+                document.folders[index].sortIndex = rank
+            }
         }
-        for (rank, folderID) in order.enumerated() {
-            guard let index = document.folders.firstIndex(where: { $0.id == folderID })
-            else { continue }
-            document.folders[index].sortIndex = rank
-        }
-        try write(document)
     }
 
     /// Legt Ordner fuer die Namen an, die der Steno-Altimport mitgebracht hat,
@@ -341,53 +519,53 @@ public actor FolderStore {
     public func adoptLegacyFolders(
         from meetings: [Meeting]
     ) throws -> [MeetingID: FolderID] {
-        var document = try readDocument()
-        guard !document.adoptedLegacyFolders else { return [:] }
+        try mutateDocument { document in
+            guard !document.adoptedLegacyFolders else { return [:] }
 
-        let roots = document.folders.filter { $0.parentFolderID == nil }
-        var byKey: [String: Folder] = Dictionary(
-            uniqueKeysWithValues: roots.map {
-                (Self.comparisonKey($0.name), $0)
-            }
-        )
-        var assignments: [MeetingID: FolderID] = [:]
-        var nextIndex = (roots.map(\.sortIndex).max() ?? -1) + 1
+            let roots = document.folders.filter { $0.parentFolderID == nil }
+            var byKey: [String: Folder] = Dictionary(
+                uniqueKeysWithValues: roots.map {
+                    (Self.comparisonKey($0.name), $0)
+                }
+            )
+            var assignments: [MeetingID: FolderID] = [:]
+            var nextIndex = (roots.map(\.sortIndex).max() ?? -1) + 1
 
-        for meeting in meetings where meeting.folderID == nil {
-            // Bei mehreren Alt-Ordnern gewinnt der erste. Die vollstaendige
-            // Liste bleibt in `metadata.legacyFolders` erhalten, es geht also
-            // nichts verloren.
-            guard let raw = meeting.metadata?.legacyFolders.first,
-                  let name = try? Self.normalizedName(raw)
-            else { continue }
-            let key = Self.comparisonKey(name)
-            let folder: Folder
-            if let existing = byKey[key] {
-                folder = existing
-            } else {
-                folder = Folder(name: name, sortIndex: nextIndex)
-                nextIndex += 1
-                byKey[key] = folder
-                document.folders.append(folder)
+            for meeting in meetings where meeting.folderID == nil {
+                // Bei mehreren Alt-Ordnern gewinnt der erste. Die vollstaendige
+                // Liste bleibt in `metadata.legacyFolders` erhalten, es geht also
+                // nichts verloren.
+                guard let raw = meeting.metadata?.legacyFolders.first,
+                      let name = try? Self.normalizedName(raw)
+                else { continue }
+                let key = Self.comparisonKey(name)
+                let folder: Folder
+                if let existing = byKey[key] {
+                    folder = existing
+                } else {
+                    folder = Folder(name: name, sortIndex: nextIndex)
+                    nextIndex += 1
+                    byKey[key] = folder
+                    document.folders.append(folder)
+                }
+                assignments[meeting.id] = folder.id
             }
-            assignments[meeting.id] = folder.id
+
+            return assignments
         }
-
-        try write(document)
-        return assignments
     }
 
     /// Schliesst die Uebernahme ab. Ab hier laeuft sie nie wieder - wer ein
     /// importiertes Meeting bewusst aus seinem Ordner nimmt, findet es beim
     /// naechsten Start nicht wieder darin.
     public func markLegacyFoldersAdopted() throws {
-        var document = try readDocument()
-        guard !document.adoptedLegacyFolders else { return }
-        document.adoptedLegacyFolders = true
-        try write(document)
+        try mutateDocument { document in
+            guard !document.adoptedLegacyFolders else { return }
+            document.adoptedLegacyFolders = true
+        }
     }
 
-    private func readDocument() throws -> FoldersDocument {
+    private nonisolated func readDocument() throws -> FoldersDocument {
         guard FileManager.default.fileExists(atPath: layout.folders.path) else {
             return FoldersDocument(folders: [])
         }
@@ -399,7 +577,36 @@ public actor FolderStore {
         )
     }
 
-    private func write(_ document: FoldersDocument) throws {
+    private func mutateDocument<Result>(
+        _ body: (inout FoldersDocument) throws -> Result
+    ) throws -> Result {
+        try LibraryMutationCoordination.withExclusiveTransaction(layout: layout) { transaction in
+            try mutationAction(
+                .afterExclusiveTransactionBeforeMutationRead,
+                transaction
+            )
+            var document = try readDocument(transaction: transaction)
+            let original = document
+            let result = try body(&document)
+            if document != original {
+                try write(document, transaction: transaction)
+            }
+            return result
+        }
+    }
+
+    private nonisolated func readDocument(
+        transaction: LibraryMutationTransaction
+    ) throws -> FoldersDocument {
+        try transaction.validate(layout: layout)
+        return try readDocument()
+    }
+
+    private nonisolated func write(
+        _ document: FoldersDocument,
+        transaction: LibraryMutationTransaction
+    ) throws {
+        try transaction.validate(layout: layout)
         try JSONDocumentStore.write(document, to: layout.folders)
     }
 

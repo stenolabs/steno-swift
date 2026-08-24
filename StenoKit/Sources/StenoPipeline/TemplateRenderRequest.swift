@@ -92,7 +92,7 @@ public enum TemplateRenderRequest {
                 textModelEndpointID: textModelEndpointID,
                 textModelEndpointSnapshot: textModelEndpointSnapshot,
                 templateRenderInputFingerprint: preflight.inputFingerprint,
-                importGenerationID: meeting.metadata?.transferReceipt?.importGenerationID
+                importGenerationID: meeting.processingGenerationID
             )
             return try jobStore.enqueueOrExistingEquivalentJob(
                 job,

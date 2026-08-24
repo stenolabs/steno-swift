@@ -19,6 +19,11 @@ struct ContentView: View {
     /// first purpose is to record; the selection just has to agree with that.
     @State private var router = NavigationRouter()
 
+    /// Explicit rather than left to `NavigationSplitView`'s own default: once
+    /// the sidebar collapses (a compact rotation, a manual swipe) it has no
+    /// other way back without this binding.
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+
     var body: some View {
         VStack(spacing: 0) {
             // Only when the user is somewhere else. On the recording screen
@@ -27,18 +32,19 @@ struct ContentView: View {
                 RecordingStrip { router.selection = .recording }
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
-            if let warning = model.startupWarning {
-                Label(warning, systemImage: "exclamationmark.triangle.fill")
-                    .font(.callout)
-                    .foregroundStyle(.orange)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
-                    .background(.bar)
-            }
+            startupBanners
             splitView
         }
         .animation(.default, value: model.recording.isActive)
+        .focusedSceneValue(router)
+        .alert(
+            router.meetingActionAlert?.title ?? "Meeting",
+            isPresented: meetingActionAlertIsPresented
+        ) {
+            Button("OK") { router.meetingActionAlert = nil }
+        } message: {
+            Text(router.meetingActionAlert?.message ?? "")
+        }
         .onAppear {
             model.registerMeetingTransferScene(meetingTransferSceneID)
         }
@@ -54,8 +60,11 @@ struct ContentView: View {
         .onChange(of: model.selectedMeetingID) { _, _ in
             consumeSelectedMeetingIfAvailable()
         }
-        .onChange(of: model.meetings.map(\.id)) { _, _ in
+        .onChange(of: model.meetings.map(\.id), initial: true) { _, _ in
             consumeSelectedMeetingIfAvailable()
+        }
+        .onChange(of: model.removedMeetingIDs, initial: true) { _, removedMeetingIDs in
+            router.reconcileSelectedMeeting(removedMeetingIDs: removedMeetingIDs)
         }
         .task {
             consumeSelectedMeetingIfAvailable()
@@ -80,6 +89,13 @@ struct ContentView: View {
         sidebarRevealEvents.request(meetingID)
     }
 
+    private var meetingActionAlertIsPresented: Binding<Bool> {
+        Binding(
+            get: { router.meetingActionAlert != nil },
+            set: { if !$0 { router.meetingActionAlert = nil } }
+        )
+    }
+
     private func completeSidebarReveal(
         _ request: IOSSidebarRevealRequest,
         selection: SidebarItem
@@ -93,18 +109,93 @@ struct ContentView: View {
     }
 
     private var splitView: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             MeetingSidebarView(
                 selection: $router.selection,
+                router: router,
                 revealRequest: sidebarRevealEvents.pending,
                 onRevealApplied: completeSidebarReveal
             )
         } detail: {
-            switch router.selection {
+            startupDetail
+        }
+    }
+
+    @ViewBuilder
+    private var startupBanners: some View {
+        ForEach(model.startupWarnings.indices, id: \.self) { index in
+            Label {
+                Text(model.startupWarnings[index].message)
+            } icon: {
+                Image(systemName: "exclamationmark.triangle.fill")
+            }
+            .font(.callout)
+            .foregroundStyle(.orange)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .background(.bar)
+        }
+        ForEach(model.libraryIssues) { issue in
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Label {
+                    Text(issue.explanation)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Button(issue.retryTitle) {
+                    Task { await model.retryLibraryIssue(issue) }
+                }
+                .buttonStyle(.bordered)
+            }
+            .font(.callout)
+            .foregroundStyle(Steno.Colors.error)
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .background(.bar)
+        }
+        if let notice = model.actionNotice {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Label {
+                    Text(notice.message)
+                } icon: {
+                    Image(systemName: "info.circle")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Button("Dismiss") { model.clearActionNotice() }
+                    .buttonStyle(.borderless)
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .background(.bar)
+        }
+    }
+
+    @ViewBuilder
+    private var startupDetail: some View {
+        switch model.startupState {
+        case .opening:
+            IOSStartupOpeningView()
+        case .failed(let failure):
+            IOSStartupFailedView(failure: failure) {
+                await model.retryStartup()
+            }
+        case .ready:
+            selectedDetail
+        }
+    }
+
+    @ViewBuilder
+    private var selectedDetail: some View {
+        switch router.selection?.detailRoute {
             case .meeting(let id):
                 if model.meetings.contains(where: { $0.id == id }) {
                     MeetingDetailView(
                         meetingID: id,
+                        router: router,
                         showAudioReadiness: { router.selection = .readiness }
                     )
                 } else {
@@ -117,10 +208,47 @@ struct ContentView: View {
                 AudioReadinessView(session: model.audioSession)
             case .languageModels:
                 TextModelSettingsView()
+            case .transcriptionModels:
+                TranscriptionModelSettingsView()
+            case .demoData:
+                DemoDataSettingsView()
             case .recording, .none:
                 RecordingView(showReadiness: { router.selection = .readiness })
-            }
         }
+    }
+}
+
+struct IOSStartupOpeningView: View {
+    var body: some View {
+        VStack(spacing: 14) {
+            ProgressView()
+            Text(IOSStartupState.opening.title)
+                .font(.headline)
+            Text("Steno is checking and opening the local library.")
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding()
+        .navigationTitle("Steno")
+    }
+}
+
+struct IOSStartupFailedView: View {
+    let failure: IOSStartupFailure
+    let retry: () async -> Void
+
+    var body: some View {
+        ContentUnavailableView {
+            Label(failure.title, systemImage: "externaldrive.badge.xmark")
+        } description: {
+            Text(failure.explanation)
+        } actions: {
+            Button("Try Again") {
+                Task { await retry() }
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .navigationTitle("Steno")
     }
 }
 
@@ -135,6 +263,50 @@ enum SidebarItem: Hashable {
     case recording
     case readiness
     case languageModels
+    case transcriptionModels
+    case demoData
+
+    var detailRoute: SidebarDetailRoute {
+        switch self {
+        case .meeting(let meetingID):
+            .meeting(meetingID)
+        case .recording:
+            .recording
+        case .readiness:
+            .readiness
+        case .languageModels:
+            .languageModels
+        case .transcriptionModels:
+            .transcriptionModels
+        case .demoData:
+            .demoData
+        }
+    }
+
+    var toolTitle: String {
+        switch self {
+        case .demoData:
+            String(localized: DemoDataPresentation.toolTitle)
+        default:
+            ""
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .demoData: "rectangle.3.group"
+        default: ""
+        }
+    }
+}
+
+enum SidebarDetailRoute: Equatable {
+    case meeting(MeetingID)
+    case recording
+    case readiness
+    case languageModels
+    case transcriptionModels
+    case demoData
 }
 
 /// Importe verwenden in beiden Breiten dieselbe vorhandene Navigation statt

@@ -94,4 +94,31 @@ struct SpeakerProcessingJobSelectionTests {
 
         #expect(SpeakerProcessingJobSelection.hasActiveJob(in: [running]))
     }
+
+    @Test("stale jobs from another meeting generation are ignored")
+    func ignoresStaleGeneration() {
+        let oldGeneration = MeetingTransferGenerationID()
+        let currentGeneration = MeetingTransferGenerationID()
+        let stale = Job(
+            kind: .diarization,
+            meetingID: meetingID,
+            sourceRunID: RunID(),
+            importGenerationID: oldGeneration,
+            status: .running
+        )
+
+        #expect(!SpeakerProcessingJobSelection.hasActiveJob(
+            in: [stale],
+            processingGenerationID: currentGeneration
+        ))
+        #expect(SpeakerProcessingJobSelection.retryJob(
+            in: [Job(
+                kind: .identitySuggestion,
+                meetingID: meetingID,
+                importGenerationID: oldGeneration,
+                status: .failed
+            )],
+            processingGenerationID: currentGeneration
+        ) == nil)
+    }
 }

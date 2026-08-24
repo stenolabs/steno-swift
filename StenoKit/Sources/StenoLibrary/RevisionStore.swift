@@ -24,17 +24,27 @@ struct RevisionAppendIntent: Codable, Equatable, Sendable {
 
     let schemaVersion: Int
     let revision: TranscriptRevision
+    let expectedPointer: RevisionPointerExpectation?
     let resultingPointer: CurrentRevisionPointer
 
     init(
         schemaVersion: Int = Self.currentSchemaVersion,
         revision: TranscriptRevision,
+        expectedCurrentPointer: CurrentRevisionPointer?,
         resultingPointer: CurrentRevisionPointer
     ) {
         self.schemaVersion = schemaVersion
         self.revision = revision
+        expectedPointer = expectedCurrentPointer.map {
+            .value($0)
+        } ?? .missing
         self.resultingPointer = resultingPointer
     }
+}
+
+enum RevisionPointerExpectation: Codable, Equatable, Sendable {
+    case missing
+    case value(CurrentRevisionPointer)
 }
 
 enum RevisionAppendInterruption: Error {
@@ -144,6 +154,7 @@ public extension Library {
 
         let intent = RevisionAppendIntent(
             revision: revision,
+            expectedCurrentPointer: existingPointer,
             resultingPointer: newPointer
         )
         try JSONDocumentStore.write(
@@ -205,8 +216,15 @@ public extension Library {
         expectedCurrentRevisionID: RevisionID?,
         expectedCandidateID: RevisionID?
     ) throws -> CurrentRevisionPointer? {
-        try LibraryMutationCoordination.withExclusiveAccess(layout: layout) {
-            let pointer = try loadCurrentRevisionPointer(meetingID: meetingID)
+        try LibraryMutationCoordination.withExclusiveTransaction(layout: layout) { transaction in
+            _ = try RevisionAppendRecovery.recover(
+                layout: layout,
+                meetingID: meetingID
+            )
+            let pointer = try loadCurrentRevisionPointer(
+                meetingID: meetingID,
+                transaction: transaction
+            )
             guard expectedCurrentRevisionID.map({
                 $0 == pointer.currentRevisionID
             }) ?? true else {
@@ -218,8 +236,13 @@ public extension Library {
             }
             // Erst lesen, dann umstellen: zeigt der Zeiger auf eine Datei, die es
             // nicht gibt, bliebe das Meeting sonst ohne Transkript zurueck.
-            _ = try loadRevision(candidate, meetingID: meetingID)
+            _ = try loadRevision(
+                candidate,
+                meetingID: meetingID,
+                transaction: transaction
+            )
             let updated = CurrentRevisionPointer(currentRevisionID: candidate)
+            try transaction.validate(layout: layout)
             try JSONDocumentStore.write(updated, to: layout.currentRevision(meetingID))
             return updated
         }
@@ -322,7 +345,7 @@ public extension Library {
         return pointer
     }
 
-    private nonisolated static func loadCurrentRevisionPointerIfPresent(
+    fileprivate nonisolated static func loadCurrentRevisionPointerIfPresent(
         meetingID: MeetingID,
         layout: LibraryLayout
     ) throws -> CurrentRevisionPointer? {
@@ -371,6 +394,27 @@ enum RevisionAppendRecovery {
             currentSchemaVersion: RevisionAppendIntent.currentSchemaVersion,
             schemaVersion: \.schemaVersion
         )
+        let currentPointer = try Library.loadCurrentRevisionPointerIfPresent(
+            meetingID: meetingID,
+            layout: layout
+        )
+        let pointerAlreadyApplied = currentPointer == intent.resultingPointer
+        let pointerStillExpected: Bool
+        switch intent.expectedPointer {
+        case .missing:
+            pointerStillExpected = currentPointer == nil
+        case .value(let expected):
+            pointerStillExpected = currentPointer == expected
+        case nil:
+            // Alte Absichten enthalten keinen sicheren Vorzustand. Ihre
+            // Revision bleibt unveraendert erhalten, aber sie darf keinen
+            // inzwischen weitergesetzten Zeiger ueberstimmen.
+            pointerStillExpected = false
+        }
+        guard pointerAlreadyApplied || pointerStillExpected else {
+            try FileManager.default.removeItem(at: intentURL)
+            return nil
+        }
         let revisionURL = layout.revision(
             meetingID,
             revisionID: intent.revision.id
@@ -389,10 +433,12 @@ enum RevisionAppendRecovery {
             try JSONDocumentStore.write(intent.revision, to: revisionURL)
         }
 
-        try JSONDocumentStore.write(
-            intent.resultingPointer,
-            to: layout.currentRevision(meetingID)
-        )
+        if !pointerAlreadyApplied {
+            try JSONDocumentStore.write(
+                intent.resultingPointer,
+                to: layout.currentRevision(meetingID)
+            )
+        }
         try FileManager.default.removeItem(at: intentURL)
         return intent
     }

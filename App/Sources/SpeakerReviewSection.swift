@@ -3,6 +3,30 @@ import StenoIdentity
 import StenoPipeline
 import SwiftUI
 
+enum SpeakerReviewPresentation {
+    struct ReviewProgress: Equatable {
+        let reviewed: Int
+        let total: Int
+    }
+
+    static func reviewProgress(
+        for clusters: [IdentityCluster]
+    ) -> ReviewProgress? {
+        let relevant = clusters.filter { !$0.isSelf }
+        guard !relevant.isEmpty else { return nil }
+        return ReviewProgress(
+            reviewed: relevant.filter { $0.reviewState != .unreviewed }.count,
+            total: relevant.count
+        )
+    }
+
+    static func canLeaveGeneric(_ cluster: IdentityCluster) -> Bool {
+        !cluster.isSelf
+            && !cluster.containsMultipleSpeakers
+            && cluster.reviewState == .unreviewed
+    }
+}
+
 /// Sprecher-Panel im Meeting-Detail: Cluster nach Sprechzeit absteigend,
 /// Vorschlag samt Status, Aktionen. Nichts wird automatisch benannt.
 struct SpeakerReviewSection: View {
@@ -10,6 +34,7 @@ struct SpeakerReviewSection: View {
     let meetingID: MeetingID
     let revision: TranscriptRevision?
     @Binding var review: MeetingReviewData?
+    var isDemo = false
 
     @State private var newPersonName = ""
     @State private var newPersonCluster: IdentityCluster?
@@ -21,12 +46,30 @@ struct SpeakerReviewSection: View {
                     Text("Speakers")
                         .font(.headline)
                     // Wiederholte Routinearbeit braucht ein sichtbares Ende.
-                    if let progress = assignmentProgress(review) {
+                    if isDemo {
+                        if let progress = SpeakerReviewPresentation.reviewProgress(
+                            for: review.clusters
+                        ) {
+                            Text(DemoDataPresentation.reviewProgressTitle(progress))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                    } else if let progress = assignmentProgress(review) {
                         Text(progress)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
                     }
+                }
+                if isDemo {
+                    Label(
+                        DemoDataPresentation.voiceEvidenceExplanation,
+                        systemImage: "person.crop.circle.badge.xmark"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
                 ForEach(sortedClusters(review), id: \.id) { cluster in
                     clusterRow(cluster, review: review)
@@ -86,7 +129,10 @@ struct SpeakerReviewSection: View {
                                 .frame(width: 7, height: 7)
                                 .accessibilityHidden(true)
                         }
-                        Text(presentation.label ?? cluster.clusterID)
+                        Text(
+                            SpeakerDisplayLocalization.label(presentation)
+                                ?? cluster.clusterID
+                        )
                     }
                     HStack(spacing: 6) {
                         Text(durationText(cluster.speechDurationSeconds))
@@ -130,7 +176,14 @@ struct SpeakerReviewSection: View {
         suggestion: ClusterSuggestion?,
         review: MeetingReviewData
     ) -> some View {
-        if cluster.containsMultipleSpeakers {
+        if isDemo {
+            if SpeakerReviewPresentation.canLeaveGeneric(cluster) {
+                Button(DemoDataPresentation.leaveGenericAction) {
+                    perform(.keepGeneric, on: cluster)
+                }
+                .controlSize(.small)
+            }
+        } else if cluster.containsMultipleSpeakers {
             EmptyView()
         } else {
             HStack(spacing: 6) {
@@ -252,11 +305,17 @@ struct SpeakerReviewSection: View {
         Button("Multiple people in this cluster") {
             perform(.markMultiple, on: cluster)
         }
-        // Nur für unbestätigte Cluster: "generisch belassen" setzt lediglich
-        // den Zustand um und ließe die Prototypen einer bestätigten Person
-        // stehen. Wer eine Bestätigung zurücknehmen will, hängt sie um oder
-        // markiert sie als mehrere Personen - beides räumt die Evidenz auf.
-        if !isConfirmed(cluster) {
+        // Zwei verschiedene Dinge, die gleich klingen: "generisch belassen"
+        // setzt bei einem unbestätigten Cluster nur den Zustand um, während
+        // "Zuordnung zurücknehmen" die Evidenz einer bestätigten Person
+        // ausnimmt und die abgeleiteten Negative neu aufbaut. Vorher blieb
+        // dafür nur der Umweg über "mehrere Personen" - eine Aussage über den
+        // Cluster, die gar nicht stimmen musste.
+        if isConfirmed(cluster) {
+            Button("Reset to generic") {
+                perform(.resetToGeneric, on: cluster)
+            }
+        } else if SpeakerReviewPresentation.canLeaveGeneric(cluster) {
             Button("Leave generic") {
                 perform(.keepGeneric, on: cluster)
             }

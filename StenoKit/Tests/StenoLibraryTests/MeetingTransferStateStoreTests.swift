@@ -283,7 +283,7 @@ struct MeetingTransferStateStoreTests {
 
     @Test("state transition holds the stable root namespace against trash and reimport")
     func stateTransitionCoordinatesMeetingNamespaceReplacement() async throws {
-        try await withTemporaryDirectory { root in
+        try await withBlockingTemporaryDirectory { root in
             let library = try Library.open(at: root.appending(path: "Library"))
             let meeting = try await importTransferMeeting(
                 into: library,
@@ -291,7 +291,7 @@ struct MeetingTransferStateStoreTests {
                 state: .importedOnly
             )
             let replacingLibrary = try Library.open(at: library.layout.root)
-            let pause = StateStorePause()
+            let pause = BlockingTestPause(name: "state store namespace transition")
             let store = MeetingTransferStateStore(
                 layout: library.layout,
                 checkpoint: { checkpoint in
@@ -306,7 +306,7 @@ struct MeetingTransferStateStoreTests {
                 localeIdentifier: "de-DE",
                 createdAt: Date(timeIntervalSinceReferenceDate: 20)
             )
-            let transition = Task {
+            let transition = blockingTestTask {
                 try await store.compareAndSet(
                     expected: .importedOnly,
                     newState: .processingRequested(request),
@@ -316,7 +316,7 @@ struct MeetingTransferStateStoreTests {
             try await eventuallyStateStore { pause.hasArrived }
 
             let replacementFinished = Mutex(false)
-            let replacement = Task {
+            let replacement = blockingTestTask {
                 _ = try await replacingLibrary.trashMeeting(meeting.id)
                 let replacementMeeting = Meeting(
                     id: meeting.id,
@@ -402,22 +402,6 @@ struct MeetingTransferStateStoreTests {
             #expect(try await library.loadMeeting(meetingID).metadata?
                 .transferReceipt?.importGenerationID == secondGeneration)
         }
-    }
-}
-
-private final class StateStorePause: @unchecked Sendable {
-    private let arrived = Mutex(false)
-    private let resume = DispatchSemaphore(value: 0)
-
-    var hasArrived: Bool { arrived.withLock { $0 } }
-
-    func arriveAndWait() {
-        arrived.withLock { $0 = true }
-        resume.wait()
-    }
-
-    func release() {
-        resume.signal()
     }
 }
 

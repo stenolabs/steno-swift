@@ -5,6 +5,62 @@ import Testing
 
 @Suite("IdentityStore")
 struct IdentityStoreTests {
+    @Test("person mutations begin their transaction before reading the document")
+    func mutationsReadInsideTransaction() async throws {
+        try await withTemporaryDirectory { root in
+            let library = try Library.open(at: root)
+            let checkpoints = IdentityMutationCheckpointRecorder()
+            let store = try IdentityStore(
+                layout: library.layout,
+                mutationAction: { checkpoint, transaction in
+                    try transaction.validate(layout: library.layout)
+                    checkpoints.record(checkpoint)
+                }
+            )
+
+            _ = try await store.createPerson(displayName: "Ada")
+
+            #expect(checkpoints.values == [.afterExclusiveTransactionBeforeRead])
+        }
+    }
+
+    @Test("a stale full-document replacement is rejected and succeeds after reload")
+    func staleReplacementRequiresReload() async throws {
+        try await withTemporaryDirectory { root in
+            let library = try Library.open(at: root)
+            let store = try IdentityStore(layout: library.layout)
+            let ada = try await store.createPerson(displayName: "Ada")
+            let stale = try await store.snapshot()
+            _ = try await store.setPersonEmail(ada.id, to: "ada@example.org")
+
+            do {
+                _ = try await store.replacePersons(
+                    stale.persons,
+                    expectedRevision: stale.revision
+                )
+                Issue.record("Expected identityDocumentRevisionConflict")
+            } catch let error as LibraryError {
+                guard case .identityDocumentRevisionConflict = error else {
+                    Issue.record("Unexpected error: \(error)")
+                    return
+                }
+            }
+            #expect(try await store.person(ada.id)?.email == "ada@example.org")
+
+            let reloaded = try await store.snapshot()
+            var changed = reloaded.persons
+            changed[0].organization = "Analytical Engines"
+            _ = try await store.replacePersons(
+                changed,
+                expectedRevision: reloaded.revision
+            )
+
+            let stored = try #require(try await store.person(ada.id))
+            #expect(stored.email == "ada@example.org")
+            #expect(stored.organization == "Analytical Engines")
+        }
+    }
+
     /// Feste Herkunft je Cluster-ID, damit Prototyp und Negativ desselben
     /// Clusters denselben Evidence Key tragen - genau daran haengt, was ein
     /// Merge und ein Loeschen als zusammengehoerig erkennen.
@@ -165,10 +221,10 @@ struct IdentityStoreTests {
                 segmentCount: 3,
                 source: .userConfirmed
             )
-            try await store.replacePersons([
+            try await replacePersonsForTest([
                 Person(id: adaID, displayName: "Ada", prototypes: [adaPrototype]),
                 Person(id: graceID, displayName: "Grace", hardNegatives: [derivedNegative]),
-            ])
+            ], in: store)
 
             let deleted = try #require(try await store.deletePerson(adaID))
             let grace = try #require(try await store.person(graceID))
@@ -206,15 +262,15 @@ struct IdentityStoreTests {
             let store = try IdentityStore(layout: library.layout)
             let ada = try await store.createPerson(displayName: "Ada Lovelace")
 
-            let set = try await store.setPersonOrganization(ada.id, to: "  Example   GmbH ")
-            #expect(set.organization == "Example GmbH")
+            let set = try await store.setPersonOrganization(ada.id, to: "  Muster   GmbH ")
+            #expect(set.organization == "Muster GmbH")
             #expect(try await IdentityStore(layout: library.layout)
-                .person(ada.id)?.organization == "Example GmbH")
+                .person(ada.id)?.organization == "Muster GmbH")
 
             // Mehrere Menschen derselben Firma sind erlaubt - anders als beim
             // Namen gibt es hier keine Eindeutigkeit.
-            let bob = try await store.createPerson(displayName: "Alan Turing")
-            _ = try await store.setPersonOrganization(bob.id, to: "Example GmbH")
+            let bob = try await store.createPerson(displayName: "Bob Bauer")
+            _ = try await store.setPersonOrganization(bob.id, to: "Muster GmbH")
 
             let cleared = try await store.setPersonOrganization(ada.id, to: "  ")
             #expect(cleared.organization == nil)
@@ -281,14 +337,14 @@ struct IdentityStoreTests {
             let adaID = PersonID()
             let prototype = evidence(personID: adaID, clusterID: "A")
             let negative = counterEvidence(personID: adaID, clusterID: "B")
-            try await store.replacePersons([
+            try await replacePersonsForTest([
                 Person(
                     id: adaID,
                     displayName: "Ada",
                     prototypes: [prototype],
                     hardNegatives: [negative]
                 ),
-            ])
+            ], in: store)
 
             _ = try await store.setPrototypeExcluded(
                 prototype.id,
@@ -348,26 +404,26 @@ struct IdentityStoreTests {
 
             let annaPrototype = evidence(personID: annaID, clusterID: "A")
             let typoPrototype = evidence(personID: annaTypoID, clusterID: "B")
-            // Entstand, als jemand Cluster B als "Katherine Jonson" bestaetigt hat:
-            // "Katherine Johnson ist das nicht". Waren beide dieselbe Person, wuerde
+            // Entstand, als jemand Cluster B als "Anna Schmid" bestaetigt hat:
+            // "Anna Schmidt ist das nicht". Waren beide dieselbe Person, wuerde
             // genau das nach dem Zusammenfuehren ihre eigene Stimme sperren.
             let mutual = counterEvidence(personID: annaID, clusterID: "B")
             let foreign = counterEvidence(personID: annaID, clusterID: "Z")
             let strangerNegative = counterEvidence(personID: strangerID, clusterID: "A")
 
-            try await store.replacePersons([
+            try await replacePersonsForTest([
                 Person(
                     id: annaID,
-                    displayName: "Katherine Johnson",
+                    displayName: "Anna Schmidt",
                     organization: nil,
                     prototypes: [annaPrototype],
                     hardNegatives: [mutual, foreign]
                 ),
                 Person(
                     id: annaTypoID,
-                    displayName: "Katherine Jonson",
-                    email: "katherine@example.org",
-                    organization: "Example",
+                    displayName: "Anna Schmid",
+                    email: "anna@example.org",
+                    organization: "Muster",
                     prototypes: [typoPrototype]
                 ),
                 Person(
@@ -375,17 +431,17 @@ struct IdentityStoreTests {
                     displayName: "Stranger",
                     hardNegatives: [strangerNegative]
                 ),
-            ])
+            ], in: store)
 
             let merged = try await store.mergePersons(annaTypoID, into: annaID)
 
-            #expect(merged.displayName == "Katherine Johnson")
+            #expect(merged.displayName == "Anna Schmidt")
             #expect(merged.prototypes.map(\.clusterID).sorted() == ["A", "B"])
             #expect(merged.prototypes.allSatisfy { $0.personID == annaID })
             #expect(merged.hardNegatives.map(\.clusterID) == ["Z"])
             // Leere Felder werden gefuellt, der Name bleibt der des Ziels.
-            #expect(merged.email == "katherine@example.org")
-            #expect(merged.organization == "Example")
+            #expect(merged.email == "anna@example.org")
+            #expect(merged.organization == "Muster")
             #expect(try await store.person(annaTypoID) == nil)
 
             // Der Sweep aus deletePerson darf hier nicht laufen: die Stimme
@@ -419,14 +475,14 @@ struct IdentityStoreTests {
             let adaPrototype = evidence(personID: adaID, clusterID: "A")
             let derived = counterEvidence(personID: graceID, clusterID: "A")
             let unrelated = counterEvidence(personID: graceID, clusterID: "Q")
-            try await store.replacePersons([
+            try await replacePersonsForTest([
                 Person(id: adaID, displayName: "Ada", prototypes: [adaPrototype]),
                 Person(
                     id: graceID,
                     displayName: "Grace",
                     hardNegatives: [derived, unrelated]
                 ),
-            ])
+            ], in: store)
 
             let snapshot = try #require(try await store.deletePerson(adaID))
             #expect(try await store.person(graceID)?.hardNegatives == [unrelated])
@@ -513,5 +569,18 @@ struct IdentityStoreTests {
             #expect(updated.participantIDs == participants)
             #expect(try await library.loadMeeting(meeting.id).participantIDs == participants)
         }
+    }
+}
+
+private final class IdentityMutationCheckpointRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValues: [IdentityStoreMutationCheckpoint] = []
+
+    var values: [IdentityStoreMutationCheckpoint] {
+        lock.withLock { storedValues }
+    }
+
+    func record(_ value: IdentityStoreMutationCheckpoint) {
+        lock.withLock { storedValues.append(value) }
     }
 }

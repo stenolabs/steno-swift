@@ -6,6 +6,32 @@ import Testing
 @Suite("Window layout")
 @MainActor
 struct WindowLayoutTests {
+    @Test("library and empty detail use the descriptive meetings title")
+    func usesMeetingsTitle() {
+        let english = Locale(identifier: "en_US_POSIX")
+
+        #expect(String(
+            localized: MacWindowPresentation.meetingsTitle.defaultValue,
+            locale: english
+        ) == "Meetings")
+    }
+
+    @Test("startup views use the meetings title instead of the app name")
+    func startupViewsUseMeetingsTitle() throws {
+        let appDirectory = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: appDirectory.appending(path: "Sources/MacStartupPresentation.swift"),
+            encoding: .utf8
+        )
+
+        #expect(!source.contains(".navigationTitle(\"Steno\")"))
+        #expect(source.components(
+            separatedBy: ".navigationTitle(MacWindowPresentation.meetingsTitle)"
+        ).count - 1 == 2)
+    }
+
     @Test("long scrollable meeting content does not demand a taller window")
     func longMeetingContentKeepsWindowSizeStable() {
         let view = WindowStableDetail {

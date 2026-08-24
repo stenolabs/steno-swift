@@ -131,7 +131,7 @@ struct MeetingTransferImportPresentation: Equatable, Identifiable, Sendable {
 
     var id: UUID { sessionID }
     var technicalOriginID: String { String(sourceMeetingID.description.prefix(8)) }
-    var capabilityLabels: [String] {
+    var capabilityLabels: [LocalizedStringResource] {
         MeetingTransferCapability.allCases.compactMap { capability in
             guard capabilities.contains(capability) else { return nil }
             return switch capability {
@@ -149,15 +149,15 @@ struct MeetingTransferImportPresentation: Equatable, Identifiable, Sendable {
             SpeakerLabelRow(id: index, label: label)
         }
     }
-    var speakerLabelPrivacyHint: String {
+    var speakerLabelPrivacyHint: LocalizedStringResource {
         "Only visible speaker labels are included. Identity and review data are not transferred."
     }
-    var cleartextWarning: String {
+    var cleartextWarning: LocalizedStringResource {
         containsRawRecording
             ? "This transfer contains an unencrypted raw recording and may include voices of other people."
             : "This transfer contains unencrypted meeting text."
     }
-    var externalFileWarning: String {
+    var externalFileWarning: LocalizedStringResource {
         "The received file remains in Files until you remove it yourself. Steno does not delete or change that external file."
     }
 
@@ -217,31 +217,39 @@ struct MeetingTransferImportPresentation: Equatable, Identifiable, Sendable {
 struct MeetingTransferDetailPresentation: Equatable, Sendable {
     let receipt: MeetingTransferReceipt
 
-    var originLabel: String { "Imported via AirDrop" }
-    var contentLabel: String {
-        MeetingTransferCapability.allCases.compactMap { capability in
-            guard receipt.includedCapabilities.contains(capability) else { return nil }
-            return switch capability {
-            case .notes: "Notes"
-            case .transcript: "Transcript"
-            case .audio: "Audio"
-            }
+    var originLabel: LocalizedStringResource { "Imported via AirDrop" }
+    var contentLabel: LocalizedStringResource {
+        let capabilities = receipt.includedCapabilities
+        return switch (
+            capabilities.contains(.notes),
+            capabilities.contains(.transcript),
+            capabilities.contains(.audio)
+        ) {
+        case (true, true, true): "Notes, Transcript, Audio"
+        case (true, true, false): "Notes, Transcript"
+        case (true, false, true): "Notes, Audio"
+        case (false, true, true): "Transcript, Audio"
+        case (true, false, false): "Notes"
+        case (false, true, false): "Transcript"
+        case (false, false, true): "Audio"
+        case (false, false, false): "No content"
         }
-        .joined(separator: ", ")
     }
-    var sourceLanguageLabel: String {
-        guard let identifier = receipt.sourceLocaleIdentifier else { return "Not included" }
-        return "\(identifier) (\(localeOriginLabel))"
-    }
-    var externalFileWarning: String {
-        "The received unencrypted meeting file may remain in Files. Steno does not delete or change that external file."
-    }
-    private var localeOriginLabel: String {
+    var sourceLanguageLabel: LocalizedStringResource {
+        guard let identifier = receipt.sourceLocaleIdentifier else {
+            return "Not included"
+        }
         switch receipt.sourceLocaleOrigin {
-        case .explicit: "selected on source device"
-        case .estimated: "estimated on source device"
-        case .absent: "not included"
+        case .explicit:
+            return "\(identifier) (selected on source device)"
+        case .estimated:
+            return "\(identifier) (estimated on source device)"
+        case .absent:
+            return "\(identifier) (not included)"
         }
+    }
+    var externalFileWarning: LocalizedStringResource {
+        "The received unencrypted meeting file may remain in Files. Steno does not delete or change that external file."
     }
 }
 
@@ -289,8 +297,9 @@ struct MeetingTransferImportSheet: View {
         _ title: String,
         progress: MeetingTransferProgress?
     ) -> some View {
-        VStack(spacing: 16) {
-            ProgressView(value: progressFraction(progress))
+        let presentation = MeetingTransferProgressPresentation.make(progress)
+        return VStack(spacing: 16) {
+            progressIndicator(presentation)
             Text(title).font(.headline)
             Text("Closing stops this operation and removes Steno's private prepared copy.")
                 .font(.callout)
@@ -299,6 +308,20 @@ struct MeetingTransferImportSheet: View {
             Button("Cancel", role: .cancel) { model.closeMeetingTransferImport(for: sceneID) }
         }
         .padding()
+    }
+
+    @ViewBuilder
+    private func progressIndicator(
+        _ presentation: MeetingTransferProgressPresentation
+    ) -> some View {
+        switch presentation {
+        case .indeterminate:
+            ProgressView()
+                .accessibilityLabel(Text(presentation.accessibilityLabel))
+        case .determinate(let value):
+            ProgressView(value: value)
+                .accessibilityLabel(Text(presentation.accessibilityLabel))
+        }
     }
 
     private func previewContent(_ presentation: MeetingTransferImportPresentation) -> some View {
@@ -313,7 +336,12 @@ struct MeetingTransferImportSheet: View {
                 LabeledContent("Title", value: presentation.title)
                 LabeledContent("Date", value: presentation.createdAt.formatted(date: .abbreviated, time: .shortened))
                 LabeledContent("Origin ID", value: presentation.technicalOriginID)
-                LabeledContent("Contents", value: presentation.capabilityLabels.joined(separator: ", "))
+                LabeledContent(
+                    "Contents",
+                    value: presentation.capabilityLabels
+                        .map { String(localized: $0) }
+                        .joined(separator: ", ")
+                )
                 LabeledContent("Source language", value: sourceLanguage(presentation))
             }
             if !presentation.visibleSpeakerLabels.isEmpty {
@@ -401,25 +429,23 @@ struct MeetingTransferImportSheet: View {
 
     private func completedMessage(_ result: MeetingTransferImportResult) -> String {
         switch result {
-        case .imported: "The meeting commit completed before cancellation could take effect."
-        case .alreadyPresent: "The existing meeting was confirmed before cancellation could take effect."
-        case .pendingRecovery: "The commit outcome requires recovery."
+        case .imported: String(localized: "The meeting commit completed before cancellation could take effect.")
+        case .alreadyPresent: String(localized: "The existing meeting was confirmed before cancellation could take effect.")
+        case .pendingRecovery: String(localized: "The commit outcome requires recovery.")
         }
     }
 
     private func sourceLanguage(_ presentation: MeetingTransferImportPresentation) -> String {
-        let identifier = presentation.localeIdentifier ?? "Not included"
-        let origin = switch presentation.localeOrigin {
-        case .explicit: "selected on source device"
-        case .estimated: "estimated on source device"
-        case .absent: "not included"
+        let identifier = presentation.localeIdentifier
+            ?? String(localized: "Not included")
+        switch presentation.localeOrigin {
+        case .explicit:
+            return String(localized: "\(identifier) (selected on source device)")
+        case .estimated:
+            return String(localized: "\(identifier) (estimated on source device)")
+        case .absent:
+            return String(localized: "\(identifier) (not included)")
         }
-        return "\(identifier) (\(origin))"
-    }
-
-    private func progressFraction(_ progress: MeetingTransferProgress?) -> Double {
-        guard let progress, progress.totalBytes > 0 else { return 0 }
-        return min(max(Double(progress.processedBytes) / Double(progress.totalBytes), 0), 1)
     }
 
     private func byteCount(_ value: Int64) -> String {

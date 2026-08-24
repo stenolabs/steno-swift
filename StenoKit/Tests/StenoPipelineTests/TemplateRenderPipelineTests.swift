@@ -144,7 +144,7 @@ struct TemplateRenderPipelineTests {
 
     @Test("text provider receives only the captured generation after trash and reimport")
     func textProviderUsesGenerationBoundSnapshot() async throws {
-        try await withTemporaryDirectory { root in
+        try await withBlockingTemporaryDirectory { root in
             let fixture = try await makeImportedTemplateFixture(at: root)
             let job = try await enqueueTemplateRequest(
                 library: fixture.library,
@@ -153,7 +153,7 @@ struct TemplateRenderPipelineTests {
                 templateID: Template.meetingMinutes.id
             )
             let provider = FakePipelineTextModelProvider(behavior: .succeed)
-            let pause = TemplatePipelinePause()
+            let pause = BlockingTestPause(name: "template provider input capture")
             let coordinator = PipelineCoordinator(
                 library: fixture.library,
                 jobStore: fixture.jobStore,
@@ -164,7 +164,8 @@ struct TemplateRenderPipelineTests {
                 importedStateCheckpoint: { checkpoint in
                     guard checkpoint == .afterTextProviderInputCapture(job.id) else { return }
                     pause.arriveAndWait()
-                }
+                },
+                taskExecutorPreference: blockingTestExecutorPreference
             )
             await coordinator.start()
             try await eventually { pause.hasArrived }
@@ -293,10 +294,10 @@ struct TemplateRenderPipelineTests {
             confirmed.organization = "ORGANIZATION_SENTINEL"
             confirmed.email = "EMAIL_SENTINEL@example.com"
             let additional = Person(displayName: "PARTICIPANT_SENTINEL")
-            try await IdentityStore(layout: fixture.library.layout).replacePersons([
+            try await replacePersonsForTest([
                 confirmed,
                 additional,
-            ])
+            ], layout: fixture.library.layout)
             _ = try await fixture.library.updateAdditionalMeetingParticipants(
                 fixture.meeting.id,
                 participantIDs: [additional.id]
@@ -412,6 +413,54 @@ struct TemplateRenderPipelineTests {
         }
     }
 
+    @Test("failed template runs persist only content-safe model diagnostics")
+    func failedRunPersistsSafeDiagnostic() async throws {
+        try await withTemporaryDirectory { root in
+            let fixture = try await makeTemplateFixture(at: root)
+            let provider = FakePipelineTextModelProvider(behavior: .diagnosticFailure)
+            _ = try await enqueueTemplateRequest(
+                library: fixture.library,
+                jobStore: fixture.jobStore,
+                meetingID: fixture.meeting.id,
+                templateID: Template.meetingMinutes.id
+            )
+            let changes = await fixture.library.meetingChanges()
+            let recorder = TemplateMeetingChangeRecorder()
+            let consumer = Task {
+                for await meetingID in changes {
+                    await recorder.append(meetingID)
+                    return
+                }
+            }
+            let coordinator = makeTemplateCoordinator(
+                fixture: fixture,
+                textModelProvider: provider
+            )
+
+            await coordinator.start()
+            try await coordinator.waitUntilIdle()
+
+            let run = try #require(processingRuns(
+                library: fixture.library,
+                meetingID: fixture.meeting.id
+            ).first { $0.kind == .templateRender })
+            #expect(run.status == .failed)
+            #expect(run.textModelDiagnostic?.stage == "map")
+            #expect(run.textModelDiagnostic?.httpStatus == 503)
+            try await eventually {
+                await recorder.contains(fixture.meeting.id)
+            }
+            let data = try Data(contentsOf: fixture.library.layout.runMetadata(
+                fixture.meeting.id,
+                runID: run.id
+            ))
+            let encoded = String(decoding: data, as: UTF8.self)
+            #expect(!encoded.contains("Wir beschließen den nächsten Schritt."))
+            consumer.cancel()
+            await coordinator.stop()
+        }
+    }
+
     @Test("the operator name never reaches the model")
     func operatorNameNeverReachesTheModel() async throws {
         try await withTemporaryDirectory { root in
@@ -481,7 +530,7 @@ struct TemplateRenderPipelineTests {
             #expect(failed.status == .failed)
             #expect(
                 failed.errorMessage
-                    == "Der ausgewählte Textmodell-Endpunkt ist nicht mehr verfügbar."
+                    == "The selected text-model endpoint is no longer available."
             )
             #expect(resolver.requestedEndpointIDs == [fixtureTextModelEndpointID])
             #expect(try TemplateResultStore(layout: fixture.library.layout)
@@ -540,10 +589,10 @@ struct TemplateRenderPipelineTests {
 
             let failed = try await runtime.jobStore.load(job.id)
             #expect(failed.status == .failed)
-            #expect(failed.failureReason == .templateRenderPinsRequired)
+            #expect(failed.failureReason == testCase.expectedFailureReason)
             #expect(
                 failed.errorMessage
-                    == PipelineError.templateRenderPinsRequired.localizedDescription
+                    == testCase.expectedErrorMessage
             )
             #expect(execution.resolverCallCount == 0)
             #expect(execution.providerCallCount == 0)
@@ -580,7 +629,7 @@ struct TemplateRenderPipelineTests {
             #expect(failed.status == .failed)
             #expect(
                 failed.errorMessage
-                    == "Der ausgewählte Textmodell-Endpunkt ist nicht mehr verfügbar."
+                    == "The selected text-model endpoint is no longer available."
             )
             await coordinator.stop()
         }
@@ -672,6 +721,41 @@ struct TemplateRenderPipelineTests {
         }
     }
 
+    @Test("a finished template render publishes its meeting artifact change")
+    func finishedRenderPublishesMeetingChange() async throws {
+        try await withTemporaryDirectory { root in
+            let fixture = try await makeTemplateFixture(at: root)
+            let provider = FakePipelineTextModelProvider(behavior: .succeed)
+            _ = try await enqueueTemplateRequest(
+                library: fixture.library,
+                jobStore: fixture.jobStore,
+                meetingID: fixture.meeting.id,
+                templateID: Template.meetingMinutes.id
+            )
+            let changes = await fixture.library.meetingChanges()
+            let recorder = TemplateMeetingChangeRecorder()
+            let consumer = Task {
+                for await meetingID in changes {
+                    await recorder.append(meetingID)
+                    return
+                }
+            }
+            let coordinator = makeTemplateCoordinator(
+                fixture: fixture,
+                textModelProvider: provider
+            )
+
+            await coordinator.start()
+            try await coordinator.waitUntilIdle()
+            try await eventually {
+                await recorder.contains(fixture.meeting.id)
+            }
+
+            consumer.cancel()
+            await coordinator.stop()
+        }
+    }
+
     @Test("a corrupt report is quarantined and restored from its committed run")
     func corruptReportIsRecovered() async throws {
         try await withTemporaryDirectory { root in
@@ -699,14 +783,16 @@ struct TemplateRenderPipelineTests {
                 to: fixture.library.layout.report(fixture.meeting.id, runID: runID)
             )
 
-            let reports = try TemplateResultStore(layout: fixture.library.layout)
-                .list(meetingID: fixture.meeting.id)
+            let listing = try TemplateResultStore(layout: fixture.library.layout)
+                .listWithRepairOutcome(meetingID: fixture.meeting.id)
+            let reports = listing.results
             let entries = try FileManager.default.contentsOfDirectory(
                 at: fixture.library.layout.reportsDirectory(fixture.meeting.id),
                 includingPropertiesForKeys: nil
             )
             #expect(reports.count == 1)
             #expect(reports.first?.runID == runID)
+            #expect(listing.didRepair)
             #expect(entries.contains {
                 $0.lastPathComponent.hasPrefix("\(runID).json.corrupt-")
             })
@@ -740,7 +826,7 @@ struct TemplateRenderPipelineTests {
             let failed = try await fixture.jobStore.load(job.id)
             let meeting = try await fixture.library.loadMeeting(fixture.meeting.id)
             #expect(failed.status == .failed)
-            #expect(failed.errorMessage == "Apple Intelligence ist nicht aktiviert.")
+            #expect(failed.errorMessage == "Apple Intelligence is not enabled.")
             #expect(meeting.status == .ready)
             #expect(try await fixture.library.listMediaAssets(
                 meetingID: fixture.meeting.id
@@ -774,7 +860,12 @@ struct TemplateRenderPipelineTests {
                 let callCount = await blockingProvider.callCount()
                 return status == .running && callCount == 1
             }
-            await first.stop()
+            try await simulateAbruptExit(
+                of: first,
+                whileRunning: job.id,
+                jobStore: fixture.jobStore,
+                library: fixture.library
+            )
 
             #expect(try await fixture.jobStore.load(job.id).status == .running)
             #expect(try temporaryRunDirectories(
@@ -858,6 +949,14 @@ struct TemplateRenderPipelineTests {
                 fixture.meeting.id,
                 to: .processing
             )
+            let changes = await fixture.library.meetingChanges()
+            let recorder = TemplateMeetingChangeRecorder()
+            let consumer = Task {
+                for await meetingID in changes {
+                    await recorder.append(meetingID)
+                    return
+                }
+            }
 
             try await coordinator.cancel(jobID: job.id)
             try await coordinator.waitUntilIdle()
@@ -879,6 +978,10 @@ struct TemplateRenderPipelineTests {
             #expect(try await fixture.library.listMediaAssets(
                 meetingID: fixture.meeting.id
             ).count == 1)
+            try await eventually {
+                await recorder.contains(fixture.meeting.id)
+            }
+            consumer.cancel()
             await coordinator.stop()
         }
     }
@@ -922,6 +1025,184 @@ struct TemplateRenderPipelineTests {
             await coordinator.stop()
         }
     }
+
+    @Test(
+        "a report pinned to an old revision keeps its own run's review after re-diarization"
+    )
+    func pinnedRevisionOutlivesNewerDiarization() async throws {
+        try await withTemporaryDirectory { root in
+            let library = try Library.open(at: root)
+            let meeting = try await library.createMeeting(title: "Re-diarized", status: .ready)
+            let source = root.appendingPathComponent("re-diarized.caf")
+            try Data("audio".utf8).write(to: source)
+            let asset = try await library.registerMediaAsset(
+                for: meeting.id,
+                sourceURL: source,
+                kind: .imported,
+                sampleRate: 48_000,
+                duration: 2
+            )
+            let clusterID = "\(asset.id)/SPEAKER_0"
+            let ada = Person(displayName: "Ada Lovelace")
+            let grace = Person(displayName: "Grace Hopper")
+            try await replacePersonsForTest([ada, grace], layout: library.layout)
+
+            // Erster Diarisierungslauf, bestaetigt auf Ada. Die daraus
+            // gepinnte Revision ist das, was ein historischer Report zeigen
+            // soll, unabhaengig davon, was spaeter passiert.
+            let firstRunID = RunID()
+            try seedDiarizationRunWithSuggestion(
+                library: library,
+                meetingID: meeting.id,
+                asset: asset,
+                runID: firstRunID,
+                clusterID: clusterID,
+                createdAt: Date(timeIntervalSinceReferenceDate: 0)
+            )
+            try MeetingReviewStore(layout: library.layout).save(
+                MeetingReviewDocument(
+                    runID: firstRunID,
+                    clusters: [
+                        confirmedReviewCluster(
+                            meetingID: meeting.id,
+                            asset: asset,
+                            runID: firstRunID,
+                            clusterID: clusterID,
+                            person: ada
+                        ),
+                    ]
+                ),
+                meetingID: meeting.id
+            )
+            let pinnedRevision = TranscriptRevision(
+                meetingID: meeting.id,
+                origin: .finalRun(firstRunID),
+                turns: [
+                    TranscriptTurn(
+                        speaker: .cluster(runID: firstRunID, clusterID: clusterID),
+                        start: 0,
+                        end: 1,
+                        segments: [
+                            TranscriptSegment(
+                                text: "Wir beschließen den nächsten Schritt.",
+                                start: 0,
+                                end: 1,
+                                words: []
+                            ),
+                        ]
+                    ),
+                ]
+            )
+            _ = try await library.appendRevision(pinnedRevision)
+
+            // Zweiter Diarisierungslauf im Hintergrund, noch nicht
+            // bestaetigt - review.json traegt weiterhin nur den ersten
+            // Lauf.
+            let secondRunID = RunID()
+            try seedDiarizationRunWithSuggestion(
+                library: library,
+                meetingID: meeting.id,
+                asset: asset,
+                runID: secondRunID,
+                clusterID: clusterID,
+                createdAt: Date(timeIntervalSinceReferenceDate: 10)
+            )
+            let currentRevision = TranscriptRevision(
+                meetingID: meeting.id,
+                origin: .finalRun(secondRunID),
+                turns: [
+                    TranscriptTurn(
+                        speaker: .cluster(runID: secondRunID, clusterID: clusterID),
+                        start: 0,
+                        end: 1,
+                        segments: [
+                            TranscriptSegment(
+                                text: "Diskussion des Budgets.",
+                                start: 0,
+                                end: 1,
+                                words: []
+                            ),
+                        ]
+                    ),
+                ]
+            )
+            _ = try await library.appendRevision(currentRevision)
+
+            // Solange niemand den zweiten Lauf bestaetigt hat, bleibt die
+            // Bestaetigung aus review.json fuer den ersten Lauf die einzige
+            // - und muss dem gepinnten Report zugeordnet bleiben, statt am
+            // juengsten Lauf vorbeizulaufen und leer auszugehen.
+            let beforeSecondReview = try await LibraryMutationCoordination.withExclusiveTransaction(
+                layout: library.layout
+            ) { transaction in
+                try TemplateRenderInputAssembler.assemble(
+                    library: library,
+                    meetingID: meeting.id,
+                    revisionID: pinnedRevision.id,
+                    transaction: transaction
+                )
+            }
+            #expect(beforeSecondReview.transcript.turns.first?.speaker == .channel("Ada Lovelace"))
+            #expect(beforeSecondReview.participants.contains("Ada Lovelace"))
+            #expect(
+                beforeSecondReview.transcript.turns.first?.segments.first?.text
+                    == "Wir beschließen den nächsten Schritt."
+            )
+
+            // Jetzt wird der zweite Lauf bestaetigt - auf eine andere
+            // Person.
+            try MeetingReviewStore(layout: library.layout).save(
+                MeetingReviewDocument(
+                    runID: secondRunID,
+                    clusters: [
+                        confirmedReviewCluster(
+                            meetingID: meeting.id,
+                            asset: asset,
+                            runID: secondRunID,
+                            clusterID: clusterID,
+                            person: grace
+                        ),
+                    ]
+                ),
+                meetingID: meeting.id
+            )
+
+            // Der gepinnte, alte Report darf jetzt nie Grace Hoppers Namen
+            // zeigen - lieber gar keinen als den eines fremden Laufs.
+            let afterSecondReview = try await LibraryMutationCoordination.withExclusiveTransaction(
+                layout: library.layout
+            ) { transaction in
+                try TemplateRenderInputAssembler.assemble(
+                    library: library,
+                    meetingID: meeting.id,
+                    revisionID: pinnedRevision.id,
+                    transaction: transaction
+                )
+            }
+            if case .channel(let name) = afterSecondReview.transcript.turns.first?.speaker {
+                #expect(name != "Grace Hopper")
+            }
+            #expect(!afterSecondReview.participants.contains("Grace Hopper"))
+            #expect(
+                afterSecondReview.transcript.turns.first?.segments.first?.text
+                    == "Wir beschließen den nächsten Schritt."
+            )
+
+            // Der aktuelle, ungepinnte Report zeigt korrekt Grace Hoppers
+            // Namen fuer seinen eigenen Lauf.
+            let current = try await LibraryMutationCoordination.withExclusiveTransaction(
+                layout: library.layout
+            ) { transaction in
+                try TemplateRenderInputAssembler.assemble(
+                    library: library,
+                    meetingID: meeting.id,
+                    revisionID: nil,
+                    transaction: transaction
+                )
+            }
+            #expect(current.transcript.turns.first?.speaker == .channel("Grace Hopper"))
+        }
+    }
 }
 
 private struct TemplatePipelineFixture {
@@ -929,6 +1210,18 @@ private struct TemplatePipelineFixture {
     let jobStore: JobStore
     let meeting: Meeting
     let revision: TranscriptRevision
+}
+
+private actor TemplateMeetingChangeRecorder {
+    private var meetingIDs: [MeetingID] = []
+
+    func append(_ meetingID: MeetingID) {
+        meetingIDs.append(meetingID)
+    }
+
+    func contains(_ meetingID: MeetingID) -> Bool {
+        meetingIDs.contains(meetingID)
+    }
 }
 
 private let fixtureTextModelEndpointID =
@@ -992,6 +1285,7 @@ private func makeTemplateFixture(
     )
 
     let speaker: SpeakerReference
+    var origin: TranscriptOrigin = .liveProvisional
     if withConfirmedPerson {
         let diarizationRunID = RunID()
         let clusterID = "\(asset.id)/SPEAKER_0"
@@ -1003,12 +1297,16 @@ private func makeTemplateFixture(
             clusterID: clusterID
         )
         speaker = .cluster(runID: diarizationRunID, clusterID: clusterID)
+        // Wie mains Pipeline es nach einer echten Diarisierung schreibt
+        // (PipelineCoordinator.commitDiarizationRevision): der Diarisierungs-
+        // lauf steckt in der Herkunft, nicht nur in den Clusterverweisen.
+        origin = .finalRun(diarizationRunID)
     } else {
         speaker = .channel("Andere")
     }
     let revision = TranscriptRevision(
         meetingID: meeting.id,
-        origin: .liveProvisional,
+        origin: origin,
         turns: [
             TranscriptTurn(
                 speaker: speaker,
@@ -1109,7 +1407,7 @@ private func seedConfirmedReview(
     clusterID: String
 ) async throws {
     let person = Person(displayName: "Ada Lovelace")
-    try await IdentityStore(layout: library.layout).replacePersons([person])
+    try await replacePersonsForTest([person], layout: library.layout)
     let cluster = IdentityCluster(
         meetingID: meetingID,
         runID: runID,
@@ -1185,6 +1483,99 @@ private func seedConfirmedReview(
     )
 }
 
+/// Schreibt einen abgeschlossenen Diarisierungslauf samt zugehoerigem
+/// Vorschlagslauf, ohne den Review-Stand (review.json) zu beruehren - die
+/// Bestaetigung dazu setzt der Aufrufer separat, je nach Testfall zu einem
+/// gewaehlten Zeitpunkt.
+private func seedDiarizationRunWithSuggestion(
+    library: Library,
+    meetingID: MeetingID,
+    asset: MediaAsset,
+    runID: RunID,
+    clusterID: String,
+    createdAt: Date
+) throws {
+    let diarization = DiarizationArtifact(
+        jobID: JobID(),
+        sourceRunID: RunID(),
+        revisionID: RevisionID(),
+        tracks: [
+            DiarizationTrackResult(
+                assetID: asset.id,
+                assetKind: asset.kind,
+                engine: EngineDescriptor(name: "FakeDiarization", version: "1"),
+                segments: [DiarizationRunSegment(clusterID: clusterID, start: 0, end: 1)],
+                clusters: [
+                    DiarizationClusterResult(
+                        clusterID: clusterID,
+                        embedding: [1, 0],
+                        speechDurationSeconds: 1,
+                        segmentCount: 1
+                    ),
+                ]
+            ),
+        ]
+    )
+    try writeFinishedRun(
+        ProcessingRun(
+            id: runID,
+            meetingID: meetingID,
+            kind: .diarization,
+            engine: EngineDescriptor(name: "FakeDiarization", version: "1"),
+            status: .finished,
+            createdAt: createdAt
+        ),
+        artifact: diarization,
+        artifactName: "diarization.json",
+        layout: library.layout
+    )
+    try writeFinishedRun(
+        ProcessingRun(
+            id: RunID(),
+            meetingID: meetingID,
+            kind: .identitySuggestion,
+            engine: EngineDescriptor(name: "FakeIdentity", version: "1"),
+            status: .finished,
+            createdAt: createdAt
+        ),
+        artifact: IdentitySuggestionArtifact(
+            jobID: JobID(),
+            sourceRunID: runID,
+            clusterResolutions: [
+                IdentityClusterResolution(
+                    channel: asset.kind.rawValue,
+                    sourceClusterID: clusterID,
+                    primaryClusterID: clusterID
+                ),
+            ],
+            identityEvidenceFingerprint: "fixture-\(runID)",
+            suggestions: []
+        ),
+        artifactName: "suggestions.json",
+        layout: library.layout
+    )
+}
+
+private func confirmedReviewCluster(
+    meetingID: MeetingID,
+    asset: MediaAsset,
+    runID: RunID,
+    clusterID: String,
+    person: Person
+) -> IdentityCluster {
+    IdentityCluster(
+        meetingID: meetingID,
+        runID: runID,
+        channel: asset.kind.rawValue,
+        clusterID: clusterID,
+        recordingType: .imported,
+        embedding: [1, 0],
+        speechDurationSeconds: 1,
+        segmentCount: 1,
+        reviewState: .confirmed(person.id)
+    )
+}
+
 private func writeFinishedRun<Artifact: Encodable>(
     _ run: ProcessingRun,
     artifact: Artifact,
@@ -1233,22 +1624,6 @@ private enum FakePipelineTextModelError: Error {
     case failed
 }
 
-private final class TemplatePipelinePause: @unchecked Sendable {
-    private let arrived = Mutex(false)
-    private let resume = DispatchSemaphore(value: 0)
-
-    var hasArrived: Bool { arrived.withLock { $0 } }
-
-    func arriveAndWait() {
-        arrived.withLock { $0 = true }
-        resume.wait()
-    }
-
-    func release() {
-        resume.signal()
-    }
-}
-
 private enum FakeTextModelResolverError: Error {
     case unknownEndpoint
 }
@@ -1259,6 +1634,8 @@ struct LegacyExternalJobCase: Sendable, CustomTestStringConvertible {
     let hasSnapshot: Bool
     let hasSnapshotRevision: Bool
     let snapshotMatchesEndpoint: Bool
+    let expectedFailureReason: Job.FailureReason
+    let expectedErrorMessage: String
     let testDescription: String
 
     init(
@@ -1267,6 +1644,9 @@ struct LegacyExternalJobCase: Sendable, CustomTestStringConvertible {
         hasSnapshot: Bool,
         hasSnapshotRevision: Bool,
         snapshotMatchesEndpoint: Bool = true,
+        expectedFailureReason: Job.FailureReason = .templateRenderPinsRequired,
+        expectedErrorMessage: String = PipelineError.templateRenderPinsRequired
+            .localizedDescription,
         testDescription: String
     ) {
         self.status = status
@@ -1274,6 +1654,8 @@ struct LegacyExternalJobCase: Sendable, CustomTestStringConvertible {
         self.hasSnapshot = hasSnapshot
         self.hasSnapshotRevision = hasSnapshotRevision
         self.snapshotMatchesEndpoint = snapshotMatchesEndpoint
+        self.expectedFailureReason = expectedFailureReason
+        self.expectedErrorMessage = expectedErrorMessage
         self.testDescription = testDescription
     }
 
@@ -1305,6 +1687,8 @@ struct LegacyExternalJobCase: Sendable, CustomTestStringConvertible {
             hasFingerprint: true,
             hasSnapshot: true,
             hasSnapshotRevision: false,
+            expectedFailureReason: .textModelEndpointConfigurationIncomplete,
+            expectedErrorMessage: "The text-model endpoint \u{201C}Previously disclosed endpoint\u{201D} has an incomplete configuration. Open Language Models in Settings and save the endpoint.",
             testDescription: "queued missing snapshot revision"
         ),
         .init(
@@ -1341,6 +1725,8 @@ struct LegacyExternalJobCase: Sendable, CustomTestStringConvertible {
             hasFingerprint: true,
             hasSnapshot: true,
             hasSnapshotRevision: false,
+            expectedFailureReason: .textModelEndpointConfigurationIncomplete,
+            expectedErrorMessage: "The text-model endpoint \u{201C}Previously disclosed endpoint\u{201D} has an incomplete configuration. Open Language Models in Settings and save the endpoint.",
             testDescription: "recovered running missing snapshot revision"
         ),
         .init(
@@ -1424,11 +1810,17 @@ private actor FakePipelineTextModelProvider: StructuredTextModelProvider {
     enum Behavior: Sendable {
         case succeed
         case fail
+        case diagnosticFailure
         case block
     }
 
     nonisolated let descriptor: EngineDescriptor
     nonisolated let availability: TextModelAvailability
+    nonisolated let contextWindow = TextModelContextWindow(
+        maximumTokens: 1_000_000,
+        reservedResponseTokens: 0,
+        safetyTokens: 0
+    )
 
     private let behavior: Behavior
     private var requests: [TextModelRequest] = []
@@ -1448,6 +1840,19 @@ private actor FakePipelineTextModelProvider: StructuredTextModelProvider {
         self.availability = availability
     }
 
+    func inputTokenCount(
+        template: Template,
+        request: TextModelRequest,
+        context: RenderContext
+    ) async throws -> Int {
+        switch request {
+        case .map(let chunk):
+            chunk.turns.reduce(0) { $0 + max(1, $1.text.utf8.count) }
+        case .reduce(let outputs):
+            outputs.flatMap(\.sections).reduce(0) { $0 + max(1, $1.markdown.utf8.count) }
+        }
+    }
+
     func generate(
         template: Template,
         request: TextModelRequest,
@@ -1458,6 +1863,8 @@ private actor FakePipelineTextModelProvider: StructuredTextModelProvider {
         switch behavior {
         case .fail:
             throw FakePipelineTextModelError.failed
+        case .diagnosticFailure:
+            throw OpenAICompatibleProviderError.serverError(statusCode: 503)
         case .block:
             try await Task.sleep(for: .seconds(60))
             throw CancellationError()

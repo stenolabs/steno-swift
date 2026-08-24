@@ -61,4 +61,23 @@ struct LegacySpeakersFileTests {
             ])
         }
     }
+
+    @Test("keeps slash-containing channel and cluster names distinct")
+    func slashContainingClusterKeysRemainDistinct() {
+        let first = LegacyClusterKey(channel: "a/b", speakerID: "c")
+        let second = LegacyClusterKey(channel: "a", speakerID: "b/c")
+        let firstSegments = [LegacySpeakerSegment(start: 1, end: 2)]
+        let secondSegments = [LegacySpeakerSegment(start: 3, end: 4)]
+
+        let segments = legacySegmentsByClusterID([
+            (key: first, segments: firstSegments),
+            (key: second, segments: secondSegments),
+        ])
+
+        #expect(first != second)
+        #expect(first.clusterID != second.clusterID)
+        #expect(segments.count == 2)
+        #expect(segments[first.clusterID] == firstSegments)
+        #expect(segments[second.clusterID] == secondSegments)
+    }
 }

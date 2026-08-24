@@ -1,0 +1,7 @@
+Sprecherin A: Dieses fiktive Produktinterview beschreibt eine erfundene Notizfunktion für eine lokale Demo.
+Sprecher B: Wichtig ist mir, dass die Aufgabe klar bleibt und keine echten Gesprächsinhalte benötigt.
+Sprecherin C: Die Oberfläche zeigt eine kurze Zusammenfassung, eine Liste von Schritten und eine neutrale Referenz.
+Sprecherin A: Wie erkennen Nutzende, dass alle Angaben aus einem künstlich erzeugten Beispiel stammen?
+Sprecher B: Eine deutliche Kennzeichnung im Titel, in den Notizen und in der Herkunftserklärung macht das sichtbar.
+Sprecherin C: Zusätzlich prüfen wir feste Prüfsummen, Laufzeiten und die Zuordnung der rein synthetischen Stimmen.
+Sprecherin A: Damit endet das Interview. Es bleibt ein erfundenes Trainingsbeispiel ohne Bezug zu Personen oder Unternehmen.

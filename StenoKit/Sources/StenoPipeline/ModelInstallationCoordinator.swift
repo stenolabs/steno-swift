@@ -38,6 +38,10 @@ public actor ModelInstallationCoordinator {
                 modelCacheDirectory: modelCacheDirectory,
                 manifest: try ModelChecksumManifest.bundled()
             ),
+            ParakeetModelInstaller(
+                modelCacheDirectory: modelCacheDirectory,
+                manifest: try ParakeetModelInstaller.bundledManifest()
+            ),
         ])
     }
 
@@ -48,9 +52,19 @@ public actor ModelInstallationCoordinator {
     }
 
     public func readiness(for locales: [Locale]) async -> ModelReadiness {
+        await readiness(
+            for: locales,
+            bundleIDs: Set(installers.map { $0.bundleDescription.id })
+        )
+    }
+
+    public func readiness(
+        for locales: [Locale],
+        bundleIDs: Set<ModelBundleID>
+    ) async -> ModelReadiness {
         var installed = Set(locales)
         var missing: [Locale: [String]] = [:]
-        for installer in installers {
+        for installer in installers where bundleIDs.contains(installer.bundleDescription.id) {
             let readiness = await installer.readiness(for: locales)
             for locale in locales where !readiness.isReady(for: locale) {
                 installed.remove(locale)
@@ -65,9 +79,23 @@ public actor ModelInstallationCoordinator {
         consentGranted: Bool,
         progress: @Sendable @escaping (ModelInstallProgress) -> Void
     ) async throws {
+        try await install(
+            bundleIDs: Set(installers.map { $0.bundleDescription.id }),
+            for: locale,
+            consentGranted: consentGranted,
+            progress: progress
+        )
+    }
+
+    public func install(
+        bundleIDs: Set<ModelBundleID>,
+        for locale: Locale,
+        consentGranted: Bool,
+        progress: @Sendable @escaping (ModelInstallProgress) -> Void
+    ) async throws {
         guard consentGranted else { throw ModelInstallationError.consentMissing }
         isCancelled = false
-        for installer in installers {
+        for installer in installers where bundleIDs.contains(installer.bundleDescription.id) {
             // Ein Widerruf in der Luecke zwischen zwei Installern erwischt
             // keinen laufenden Task, den man abbrechen koennte. Ohne diese
             // Pruefung fiele der naechste Download trotzdem an - "es wird

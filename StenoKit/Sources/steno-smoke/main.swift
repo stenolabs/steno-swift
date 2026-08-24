@@ -47,7 +47,7 @@ do {
     )
     print("Import: \(audioURL.lastPathComponent), \(String(format: "%.1f", duration)) s")
 
-    try await runtime.jobStore.enqueue(Job(kind: .finalASR, meetingID: meeting.id))
+    try await runtime.jobStore.enqueue(Job.finalASR(for: meeting))
 
     let deadline = Date().addingTimeInterval(600)
     while Date() < deadline {

@@ -8,11 +8,72 @@ import Testing
 
 @Suite("Imported meeting processing reconciler")
 struct ImportedMeetingProcessingReconcilerTests {
+    @Test("blocking executor preference reaches structured children and default actors")
+    func blockingExecutorPreferencePropagates() async throws {
+        try await withBlockingTestExecutor {
+            #expect(isRunningOnBlockingTestExecutor())
+            async let structuredChild = probeBlockingTestExecutor()
+            #expect(await structuredChild)
+            let unstructuredChild = Task { isRunningOnBlockingTestExecutor() }
+            #expect(!(await unstructuredChild.value))
+            let preferredUnstructuredChild = blockingTestTask {
+                isRunningOnBlockingTestExecutor()
+            }
+            let preferredChildResult = try await preferredUnstructuredChild.value
+            #expect(preferredChildResult)
+            let actor = ExecutorProbeActor()
+            #expect(await actor.isRunningOnBlockingExecutor())
+        }
+    }
+
+    @Test("a blocking test pause reports its deadline instead of hanging")
+    func blockingPauseTimeoutRecordsIssue() async throws {
+        try await withBlockingTestExecutor {
+            let recordedIssues = Mutex<[String]>([])
+            let useDefaultRecorder = ProcessInfo.processInfo.environment[
+                "STENO_VERIFY_BLOCKING_TIMEOUT_FAILURE"
+            ] == "1"
+            let pause: BlockingTestPause
+            if useDefaultRecorder {
+                // This branch is run separately to prove that the default
+                // Issue.record path makes the test fail promptly.
+                pause = BlockingTestPause(
+                    name: "timeout regression probe",
+                    timeout: .milliseconds(10)
+                )
+            } else {
+                pause = BlockingTestPause(
+                    name: "timeout regression probe",
+                    timeout: .milliseconds(10),
+                    issueRecorder: { issue in
+                        recordedIssues.withLock { $0.append(issue) }
+                    }
+                )
+            }
+            pause.arriveAndWait()
+            if !useDefaultRecorder {
+                #expect(recordedIssues.withLock { $0 } == [
+                    "Timed out waiting to release test pause 'timeout regression probe'."
+                ])
+            }
+        }
+    }
+
+    @Test("eventually reports a dedicated timeout error")
+    func eventuallyReportsDedicatedTimeout() async {
+        await #expect(throws: TestSupportError.self) {
+            try await eventually(timeout: .zero) { false }
+        }
+    }
+
     @Test("independent JobStore actors cannot overwrite a racing job identity")
     func independentStoresPreserveOneIdentity() async throws {
-        try await withTemporaryDirectory { root in
+        try await withBlockingTemporaryDirectory { root in
             let library = try Library.open(at: root)
-            let barrier = JobEnsureRaceBarrier(expectedArrivals: 2)
+            let barrier = BlockingTestBarrier(
+                name: "racing JobStore identity insert",
+                expectedArrivals: 2
+            )
             let firstStore = try JobStore(
                 layout: library.layout,
                 ensureCheckpoint: { checkpoint in
@@ -169,7 +230,7 @@ struct ImportedMeetingProcessingReconcilerTests {
 
     @Test("fresh retry supersedes a stale reconciler candidate before enqueue")
     func freshRetrySupersedesStaleReconcilerCandidate() async throws {
-        try await withTemporaryDirectory { root in
+        try await withBlockingTemporaryDirectory { root in
             let context = try await makeReconcilerContext(at: root)
             let staleRequest = makeProcessingRequest(
                 meetingID: context.meetingID,
@@ -188,7 +249,10 @@ struct ImportedMeetingProcessingReconcilerTests {
             let retryToken = try #require(
                 try await context.stateStore.freshImportRetryToken(context.meetingID)
             )
-            let pause = ReconcilerGroupPause(expectedArrivals: 2)
+            let pause = BlockingTestGroupPause(
+                name: "stale reconciler candidates",
+                expectedArrivals: 2
+            )
             let secondLibrary = try Library.open(at: root)
             let firstStaleReconciler = ImportedMeetingProcessingReconciler(
                 library: context.library,
@@ -232,7 +296,7 @@ struct ImportedMeetingProcessingReconcilerTests {
 
     @Test("fresh retry enqueues only its newly selected request")
     func freshRetryNewRequestSupersedesStaleReconcilerCandidate() async throws {
-        try await withTemporaryDirectory { root in
+        try await withBlockingTemporaryDirectory { root in
             let context = try await makeReconcilerContext(at: root)
             let staleRequest = makeProcessingRequest(
                 meetingID: context.meetingID,
@@ -259,7 +323,7 @@ struct ImportedMeetingProcessingReconcilerTests {
             let retryToken = try #require(
                 try await context.stateStore.freshImportRetryToken(context.meetingID)
             )
-            let pause = ReconcilerPause()
+            let pause = BlockingTestPause(name: "stale fresh-retry candidate")
             let staleReconciler = ImportedMeetingProcessingReconciler(
                 library: try Library.open(at: root),
                 stateStore: MeetingTransferStateStore(layout: context.library.layout),
@@ -272,7 +336,9 @@ struct ImportedMeetingProcessingReconcilerTests {
                 }
             )
 
-            let staleReconciliation = Task { try await staleReconciler.reconcileAll() }
+            let staleReconciliation = blockingTestTask {
+                try await staleReconciler.reconcileAll()
+            }
             try await eventually { pause.hasArrived }
             #expect(try await context.stateStore.resolveFreshImportRetry(
                 .processingRequested(selectedRequest),
@@ -333,7 +399,7 @@ struct ImportedMeetingProcessingReconcilerTests {
 
     @Test("reconciler revalidates a newer manual-retry state before enqueue")
     func reconcileStateAdvanceUsesExpectedStateCAS() async throws {
-        try await withTemporaryDirectory { root in
+        try await withBlockingTemporaryDirectory { root in
             let context = try await makeReconcilerContext(at: root)
             let request = makeProcessingRequest(
                 meetingID: context.meetingID,
@@ -343,7 +409,7 @@ struct ImportedMeetingProcessingReconcilerTests {
                 .processingRequested(request),
                 for: context.meetingID
             )
-            let pause = ReconcilerPause()
+            let pause = BlockingTestPause(name: "reconciler state revalidation")
             let reconciler = ImportedMeetingProcessingReconciler(
                 library: context.library,
                 stateStore: context.stateStore,
@@ -356,7 +422,9 @@ struct ImportedMeetingProcessingReconcilerTests {
                 }
             )
 
-            let reconciliation = Task { try await reconciler.reconcileAll() }
+            let reconciliation = blockingTestTask {
+                try await reconciler.reconcileAll()
+            }
             try await eventually { pause.hasArrived }
             let replacement: ImportedMeetingProcessingState = .needsManualRetry(
                 jobID: request.jobID,
@@ -479,10 +547,10 @@ struct ImportedMeetingProcessingReconcilerTests {
 
     @Test("manual retry cannot cross a trash and same-ID generation replacement")
     func manualRetryRejectsGenerationABA() async throws {
-        try await withTemporaryDirectory { root in
+        try await withBlockingTemporaryDirectory { root in
             let context = try await makeReconcilerContext(at: root)
             try await context.stateStore.save(.importedOnly, for: context.meetingID)
-            let pause = ReconcilerPause()
+            let pause = BlockingTestPause(name: "manual retry generation replacement")
             let staleRetry = ImportedMeetingProcessingReconciler(
                 library: context.library,
                 stateStore: MeetingTransferStateStore(layout: context.library.layout),
@@ -494,7 +562,7 @@ struct ImportedMeetingProcessingReconcilerTests {
                     pause.arriveAndWait()
                 }
             )
-            let attempt = Task {
+            let attempt = blockingTestTask {
                 try await staleRetry.requestManualRetry(
                     meetingID: context.meetingID,
                     expectedImportGenerationID: context.generationID,
@@ -549,7 +617,7 @@ struct ImportedMeetingProcessingReconcilerTests {
 
     @Test("two concurrent manual retries create exactly one new request and job")
     func concurrentManualRetriesUseOneCASWinner() async throws {
-        try await withTemporaryDirectory { root in
+        try await withBlockingTemporaryDirectory { root in
             let context = try await makeReconcilerContext(at: root)
             let oldJob = Job(
                 kind: .finalASR,
@@ -566,7 +634,10 @@ struct ImportedMeetingProcessingReconcilerTests {
                 reason: "Local failure"
             )
             try await context.stateStore.save(initial, for: context.meetingID)
-            let barrier = JobEnsureRaceBarrier(expectedArrivals: 2)
+            let barrier = BlockingTestBarrier(
+                name: "concurrent manual retry transaction",
+                expectedArrivals: 2
+            )
             let first = ImportedMeetingProcessingReconciler(
                 library: context.library,
                 stateStore: MeetingTransferStateStore(layout: context.library.layout),
@@ -700,6 +771,38 @@ struct ImportedMeetingProcessingReconcilerTests {
                     localeIdentifier: "de-DE",
                     reason: "Processing failed."
                 ))
+            await runtime.coordinator.stop()
+        }
+    }
+
+    @Test("pipeline startup reports media that opening could not reconstruct")
+    func startupReportsUnreconstructableMedia() async throws {
+        try await withTemporaryDirectory { root in
+            let library = try Library.open(at: root)
+            let meeting = try await library.createMeeting(
+                title: "Unresolved recording",
+                status: .interrupted
+            )
+            let orphan = library.layout.mediaFile(
+                meeting.id,
+                fileName: "\(MediaAssetID()).caf"
+            )
+            try makePipelineTestCAF(at: orphan)
+
+            let runtime = try await startPipeline(
+                at: root,
+                providers: providers(using: FakeTranscriptionProvider(behavior: .fail)),
+                diarizationProvider: FakeDiarizationProvider(behavior: .fail),
+                locale: Locale(identifier: "en-US")
+            )
+
+            #expect(runtime.startupWarnings == [
+                .orphanedMedia(
+                    meetingID: meeting.id,
+                    fileName: orphan.lastPathComponent
+                ),
+            ])
+            #expect(FileManager.default.fileExists(atPath: orphan.path))
             await runtime.coordinator.stop()
         }
     }
@@ -941,6 +1044,12 @@ struct ImportedMeetingProcessingReconcilerTests {
     }
 }
 
+private actor ExecutorProbeActor {
+    func isRunningOnBlockingExecutor() -> Bool {
+        isRunningOnBlockingTestExecutor()
+    }
+}
+
 private struct ReconcilerContext: Sendable {
     let library: Library
     let meetingID: MeetingID
@@ -965,74 +1074,6 @@ private enum ManualRetryAttempt: Equatable, Sendable {
     case created
     case notAllowed
     case unexpected
-}
-
-private final class JobEnsureRaceBarrier: @unchecked Sendable {
-    private let condition = NSCondition()
-    private let expectedArrivals: Int
-    private var arrivals = 0
-
-    init(expectedArrivals: Int) {
-        self.expectedArrivals = expectedArrivals
-    }
-
-    func arriveAndWait() {
-        condition.lock()
-        arrivals += 1
-        if arrivals == expectedArrivals {
-            condition.broadcast()
-        } else {
-            while arrivals < expectedArrivals {
-                condition.wait()
-            }
-        }
-        condition.unlock()
-    }
-}
-
-private final class ReconcilerPause: @unchecked Sendable {
-    private let arrived = Mutex(false)
-    private let resume = DispatchSemaphore(value: 0)
-
-    var hasArrived: Bool { arrived.withLock { $0 } }
-
-    func arriveAndWait() {
-        arrived.withLock { $0 = true }
-        resume.wait()
-    }
-
-    func release() {
-        resume.signal()
-    }
-}
-
-private final class ReconcilerGroupPause: @unchecked Sendable {
-    private struct State: Sendable {
-        var arrivals = 0
-    }
-
-    private let expectedArrivals: Int
-    private let state = Mutex(State())
-    private let resume = DispatchSemaphore(value: 0)
-
-    init(expectedArrivals: Int) {
-        self.expectedArrivals = expectedArrivals
-    }
-
-    var allArrived: Bool {
-        state.withLock { $0.arrivals == expectedArrivals }
-    }
-
-    func arriveAndWait() {
-        state.withLock { $0.arrivals += 1 }
-        resume.wait()
-    }
-
-    func release() {
-        for _ in 0..<expectedArrivals {
-            resume.signal()
-        }
-    }
 }
 
 private func ensureAttempt(_ job: Job, store: JobStore) async -> EnsureAttempt {

@@ -516,7 +516,10 @@ private func makeTransferSource(
             meetingID: meeting.id,
             runID: runID
         )
-        try await IdentityStore(layout: library.layout).replacePersons([ada, bela, participant])
+        try await replacePersonsForTest(
+            [ada, bela, participant],
+            layout: library.layout
+        )
         let folder = try await FolderStore.open(layout: library.layout).createFolder(
             name: "sentinel-folder-name"
         )
@@ -571,7 +574,7 @@ private func makeTransferSource(
         let identityStore = try IdentityStore(layout: library.layout)
         var persons = try await identityStore.listPersons()
         persons.append(additionalParticipant)
-        try await identityStore.replacePersons(persons)
+        try await replacePersonsForTest(persons, in: identityStore)
         _ = try await library.updateAdditionalMeetingParticipants(
             meeting.id,
             participantIDs: [additionalParticipant.id]

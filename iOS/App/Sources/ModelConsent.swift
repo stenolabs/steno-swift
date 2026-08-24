@@ -7,6 +7,7 @@ import StenoDomain
 final class ModelConsent {
     static let speechKey = "org.steno.ios.modelConsent"
     static let diarizationKey = "org.steno.ios.diarizationModelConsent"
+    static let parakeetKey = "org.steno.ios.parakeetModelConsent"
 
     struct Record: Codable, Equatable {
         let grantedAt: Date
@@ -34,6 +35,10 @@ final class ModelConsent {
 
     static func diarization(defaults: UserDefaults = .standard) -> ModelConsent {
         ModelConsent(defaults: defaults, key: diarizationKey)
+    }
+
+    static func parakeet(defaults: UserDefaults = .standard) -> ModelConsent {
+        ModelConsent(defaults: defaults, key: parakeetKey)
     }
 
     var isGranted: Bool { record != nil }

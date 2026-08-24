@@ -19,13 +19,13 @@ public extension TextModelAvailability {
         case .available:
             nil
         case .unavailable(.deviceNotEligible):
-            "Dieses Gerät unterstützt Apple Intelligence nicht."
+            "This device does not support Apple Intelligence."
         case .unavailable(.appleIntelligenceNotEnabled):
-            "Apple Intelligence ist nicht aktiviert."
+            "Apple Intelligence is not enabled."
         case .unavailable(.modelNotReady):
-            "Das Apple-Intelligence-Modell ist noch nicht verfügbar."
+            "The Apple Intelligence model is not available yet."
         case .unavailable(.unknown):
-            "Das Textmodell ist derzeit nicht verfügbar."
+            "The text model is currently unavailable."
         }
     }
 }
@@ -81,6 +81,114 @@ public enum TextModelRequest: Equatable, Sendable {
 }
 
 public typealias SpeakerNameResolver = @Sendable (SpeakerReference) -> String?
+
+/// Das Kontextfenster-Budget eines Providers: wie viele Tokens insgesamt zur
+/// Verfuegung stehen, wie viele fuer die Antwort reserviert bleiben und
+/// welcher Sicherheitsabstand zusaetzlich abgezogen wird. Der
+/// ``TemplateRenderer`` budgetiert Map- und Reduce-Anfragen ausschliesslich
+/// gegen ``maximumInputTokens``.
+public struct TextModelContextWindow: Equatable, Sendable {
+    public let maximumTokens: Int
+    public let reservedResponseTokens: Int
+    public let safetyTokens: Int
+
+    public init(
+        maximumTokens: Int,
+        reservedResponseTokens: Int,
+        safetyTokens: Int
+    ) {
+        self.maximumTokens = maximumTokens
+        self.reservedResponseTokens = reservedResponseTokens
+        self.safetyTokens = safetyTokens
+    }
+
+    /// Was fuer Instruktionen, Prompt und Schema tatsaechlich bleibt, nach
+    /// Abzug der Antwortreserve und des Sicherheitsabstands.
+    public var maximumInputTokens: Int {
+        maximumTokens - reservedResponseTokens - safetyTokens
+    }
+}
+
+/// Fehler, die unabhaengig vom konkreten Provider auftreten koennen.
+public enum TextModelProviderError: Error, Equatable, LocalizedError, Sendable {
+    case contextWindowExceeded
+    case responseTruncated
+    /// Das Modell hat sein Antwortbudget aufgebraucht, ohne ueberhaupt Inhalt
+    /// zu liefern. Das ist ausdruecklich kein Groessenproblem: bei einem zu
+    /// grossen Abschnitt kaeme ein angefangenes Ergebnis zurueck, hier kommt
+    /// gar keins. Einen solchen Abschnitt kleiner zu schneiden aendert nichts
+    /// und kostet nur Zeit, deshalb teilt der ``TemplateRenderer`` hier nicht.
+    case responseEmpty
+
+    public var errorDescription: String? {
+        switch self {
+        case .contextWindowExceeded:
+            "The request exceeded the text model's context window."
+        case .responseTruncated:
+            "The text model stopped before the complete answer was returned."
+        case .responseEmpty:
+            "The text model used up its response budget without returning any "
+                + "content. Models with a thinking mode do this when that mode "
+                + "cannot be switched off over this API. Ollama servers have "
+                + "their own API type in Steno that can switch it off."
+        }
+    }
+}
+
+/// Ein Fehler, der einen inhaltssicheren ``TextModelRunDiagnostic`` ueber
+/// seinen eigenen Fehlschlag mitbringt. Jeder Provider-Fehler, dessen
+/// Diagnostik einen gescheiterten ``ProcessingRun`` sinnvoll ergaenzt,
+/// konformiert hier - nie mit Transkript- oder Antwortinhalt, nur mit
+/// Metadaten ueber den Fehlschlag selbst.
+public protocol TextModelDiagnosticProviding: Error {
+    var textModelDiagnostic: TextModelRunDiagnostic { get }
+}
+
+/// Traeger fuer eine Diagnostik, die erst nach dem eigentlichen Fehler
+/// bekannt ist - etwa weil der ``TemplateRenderer`` die Phase (map/reduce)
+/// und den Index des gescheiterten Aufrufs ergaenzt, die der Provider selbst
+/// nicht kennt.
+public struct TextModelDiagnosticError: Error, LocalizedError, Sendable,
+    TextModelDiagnosticProviding
+{
+    public let errorDescription: String?
+    public let textModelDiagnostic: TextModelRunDiagnostic
+
+    public init(
+        errorDescription: String?,
+        textModelDiagnostic: TextModelRunDiagnostic
+    ) {
+        self.errorDescription = errorDescription
+        self.textModelDiagnostic = textModelDiagnostic
+    }
+}
+
+extension TextModelProviderError: TextModelDiagnosticProviding {
+    public var textModelDiagnostic: TextModelRunDiagnostic {
+        switch self {
+        case .contextWindowExceeded:
+            TextModelRunDiagnostic(
+                dialect: "",
+                stage: "",
+                providerCode: "context_window_exceeded"
+            )
+        case .responseTruncated:
+            TextModelRunDiagnostic(
+                dialect: "",
+                stage: "",
+                providerCode: "response_truncated",
+                finishReason: "length"
+            )
+        case .responseEmpty:
+            TextModelRunDiagnostic(
+                dialect: "",
+                stage: "",
+                providerCode: "response_empty",
+                finishReason: "length"
+            )
+        }
+    }
+}
 
 public protocol TextModelProvider: Sendable {
     var descriptor: EngineDescriptor { get }
@@ -150,6 +258,13 @@ public struct RenderContext: Equatable, Sendable {
     /// ausschreiben kann, muss es ihn aber auch im Prompt sehen. Ohne diesen
     /// Weg bliebe die Firma unsichtbar fuer das Modell.
     public let participants: [String]
+    /// Die ausdruecklich gewaehlte Transkriptionssprache dieses Meetings, nie
+    /// aus `Locale.current` abgeleitet. Ein Report darf sie nicht pro Chunk
+    /// neu erraten lassen, sonst koennen einzelne Map-Ergebnisse und der
+    /// Reduce-Lauf die Sprache wechseln. `nil` bedeutet: keine gespeicherte
+    /// Wahl bekannt, das Modell bestimmt die Sprache selbst aus dem
+    /// Transkript.
+    public let outputLocaleIdentifier: String?
 
     // Kein Verfasserfeld, und das ist eine Entscheidung: der Name fiel zwar
     // in die freigegebene Klasse "Teilnehmerliste, Namen und Firmen"
@@ -158,18 +273,42 @@ public struct RenderContext: Equatable, Sendable {
     // nennen will, tut das ueber die Teilnehmerliste - dort fuehrt der Name
     // eine Aufgabe. Der Exportkopf traegt ihn weiterhin, der entsteht lokal.
 
-    public init(userNotes: String? = nil, participants: [String] = []) {
+    public init(
+        userNotes: String? = nil,
+        participants: [String] = [],
+        outputLocaleIdentifier: String? = nil
+    ) {
         let trimmedNotes = userNotes?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedLocale = outputLocaleIdentifier?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "_", with: "-")
         self.userNotes = (trimmedNotes?.isEmpty ?? true) ? nil : trimmedNotes
         self.participants = participants
+        self.outputLocaleIdentifier = (trimmedLocale?.isEmpty ?? true) ? nil : trimmedLocale
     }
 
     public static let empty = RenderContext()
 
-    public var isEmpty: Bool { userNotes == nil && participants.isEmpty }
+    public var isEmpty: Bool {
+        userNotes == nil && participants.isEmpty && outputLocaleIdentifier == nil
+    }
 }
 
 public protocol StructuredTextModelProvider: TextModelProvider {
+    /// Das Token-Budget dieses Providers. Der ``TemplateRenderer`` misst
+    /// jede Map- und Reduce-Anfrage dagegen, statt eine feste Wortzahl
+    /// anzunehmen.
+    var contextWindow: TextModelContextWindow { get }
+
+    /// Zaehlt den vollstaendigen Input dieser Anfrage - Systeminstruktionen,
+    /// Benutzer-Prompt, strukturiertes Schema und Benutzerkontext -, so wie
+    /// der Provider ihn tatsaechlich senden wuerde.
+    func inputTokenCount(
+        template: Template,
+        request: TextModelRequest,
+        context: RenderContext
+    ) async throws -> Int
+
     func generate(
         template: Template,
         request: TextModelRequest,

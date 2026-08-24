@@ -162,7 +162,7 @@ public enum MeetingDiarizationRequest {
             }
             return Context(
                 sourceRunID: source.finalASRRunID,
-                importGenerationID: meeting.metadata?.transferReceipt?.importGenerationID,
+                importGenerationID: meeting.processingGenerationID,
                 visibleDiarizationJobID: source.diarizationJobID,
                 pendingCandidateID: pendingDiarizationJobID == nil
                     ? nil
@@ -205,7 +205,7 @@ public enum MeetingDiarizationRequest {
                     layout: library.layout,
                     meetingID: meetingID
                 )
-            case .liveProvisional, .legacyImport, .meetingTransfer:
+            case .liveProvisional, .legacyImport, .meetingTransfer, .demo:
                 return nil
             }
         }
@@ -217,6 +217,28 @@ public enum MeetingDiarizationRequest {
         layout: LibraryLayout,
         meetingID: MeetingID
     ) throws -> TranscriptSource? {
+        var visited: Set<RunID> = []
+        return try transcriptSource(
+            for: runID,
+            expectedRevisionID: expectedRevisionID,
+            layout: layout,
+            meetingID: meetingID,
+            visited: &visited,
+            depth: 0
+        )
+    }
+
+    private static func transcriptSource(
+        for runID: RunID,
+        expectedRevisionID: RevisionID?,
+        layout: LibraryLayout,
+        meetingID: MeetingID,
+        visited: inout Set<RunID>,
+        depth: Int
+    ) throws -> TranscriptSource? {
+        // A valid provenance chain contains at most the visible diarization run
+        // and its final-ASR source. More nodes mean corrupted run metadata.
+        guard depth < 2, visited.insert(runID).inserted else { return nil }
         let run = try JSONDecoder().decode(
             ProcessingRun.self,
             from: Data(contentsOf: layout.runMetadata(meetingID, runID: runID))
@@ -248,7 +270,9 @@ public enum MeetingDiarizationRequest {
                 for: artifact.sourceRunID,
                 expectedRevisionID: nil,
                 layout: layout,
-                meetingID: meetingID
+                meetingID: meetingID,
+                visited: &visited,
+                depth: depth + 1
             ) else { return nil }
             return TranscriptSource(
                 finalASRRunID: source.finalASRRunID,

@@ -6,6 +6,42 @@ import StenoPipeline
 import StenoTranscription
 import StenoiOSAudio
 
+struct RecordingInterruptionLatch {
+    enum Action: Equatable {
+        case ignore
+        case deferUntilStarted
+        case stop(String)
+    }
+
+    private var pendingReason: String?
+
+    mutating func receive(
+        _ reason: String,
+        while state: RecordingModel.State
+    ) -> Action {
+        switch state {
+        case .preparing:
+            if pendingReason == nil {
+                pendingReason = reason
+            }
+            return .deferUntilStarted
+        case .recording:
+            return .stop(reason)
+        case .idle, .interrupted, .failed:
+            return .ignore
+        }
+    }
+
+    mutating func takePendingReason() -> String? {
+        defer { pendingReason = nil }
+        return pendingReason
+    }
+
+    mutating func reset() {
+        pendingReason = nil
+    }
+}
+
 /// State of a running recording.
 ///
 /// Since approval F2 this writes through the shared `RecordingSession` from
@@ -34,11 +70,12 @@ final class RecordingModel {
     private(set) var elapsed: TimeInterval = 0
     private(set) var silentSeconds: TimeInterval = 0
     private(set) var isSilenceAlarming = false
+    private(set) var microphonePermission: RecordPermissionStatus
 
-    private(set) var finalText = ""
-    /// Current guess, still subject to change. Kept apart from the final text
-    /// so nobody quotes a guess.
-    private(set) var volatileText = ""
+    /// Projects the cumulative snapshots into newest-first rows. The volatile
+    /// row stays marked as such, so nobody quotes a guess.
+    private var liveTranscriptFeed = LiveTranscriptFeed()
+    private(set) var liveTranscriptRows: [LiveTranscriptFeed.Row] = []
 
     /// Why there is no live transcript, when the audio is fine.
     ///
@@ -69,13 +106,21 @@ final class RecordingModel {
 
     private let audioSession: AudioSessionController
     private let finalizer: RecordingFinalizer
+    private let microphonePermissionStatus: @MainActor () -> RecordPermissionStatus
+    private let microphonePermissionRequest: @MainActor () async -> RecordPermissionStatus
+    /// Als Quelle statt als Wert: der Nutzer kann den Live-Adapter in den
+    /// Einstellungen freischalten, und das soll beim naechsten Aufnahmestart
+    /// wirken, nicht erst beim naechsten App-Start.
+    private let transcriptionRegistrySource: @MainActor () -> TranscriptionProviderRegistry
     private var runtime: PipelineRuntime?
     private var notesSessions: MeetingNotesSessionPool?
     private var session: RecordingSession?
     private var micSource: MicrophoneCapture?
+    private var audioSessionLease: AudioSessionController.RecordingLease?
     private var notesSession: MeetingNotesEditingSession?
     private var startedAt: Date?
     private var silence = SilenceMonitor()
+    private var interruptionLatch = RecordingInterruptionLatch()
     var didBecomeIdle: (@MainActor @Sendable () -> Void)?
 
     private var liveTask: Task<TranscriptOutput?, Never>?
@@ -84,10 +129,21 @@ final class RecordingModel {
 
     init(
         session: AudioSessionController,
-        finalizer: RecordingFinalizer = RecordingFinalizer()
+        finalizer: RecordingFinalizer = RecordingFinalizer(),
+        transcriptionRegistry: @escaping @MainActor () -> TranscriptionProviderRegistry = { .appleOnly },
+        microphonePermissionStatus: @escaping @MainActor () -> RecordPermissionStatus = {
+            RecordPermission.status()
+        },
+        microphonePermissionRequest: @escaping @MainActor () async -> RecordPermissionStatus = {
+            await RecordPermission.request()
+        }
     ) {
         audioSession = session
         self.finalizer = finalizer
+        transcriptionRegistrySource = transcriptionRegistry
+        self.microphonePermissionStatus = microphonePermissionStatus
+        self.microphonePermissionRequest = microphonePermissionRequest
+        microphonePermission = microphonePermissionStatus()
     }
 
     /// Handed over once the library is open. Without it there is nowhere to
@@ -133,10 +189,15 @@ final class RecordingModel {
     /// failure of the audio path itself fails the run.
     func start(
         locale: Locale,
-        languageWasChosenExplicitly: Bool
+        languageWasChosenExplicitly: Bool,
+        plan: TranscriptionPlan = TranscriptionPlan(
+            liveProviderID: .apple,
+            finalProviderID: .apple
+        )
     ) async {
         guard !isActive, let runtime, let notesSessions else { return }
         state = .preparing
+        interruptionLatch.reset()
 
         // Die Freigabe gehoert in den Aufnahmeweg, nicht nur ins
         // Diagnosefenster. Der Aufnahmeknopf ist der erste Weg, den eine
@@ -145,16 +206,18 @@ final class RecordingModel {
         // ohne nutzbares Eingangssignal. `configure()` und `activate()`
         // ersetzen sie nicht: eine Sitzung laesst sich auch ohne erteilte
         // Freigabe aufsetzen.
-        var permission = RecordPermission.status()
+        var permission = microphonePermissionStatus()
+        microphonePermission = permission
         if permission == .notDetermined {
-            permission = await RecordPermission.request()
+            permission = await microphonePermissionRequest()
+            microphonePermission = permission
         }
         guard permission == .authorized else {
             state = .failed(Self.microphoneDeniedMessage)
             return
         }
-        finalText = ""
-        volatileText = ""
+        liveTranscriptFeed = LiveTranscriptFeed()
+        liveTranscriptRows = []
         transcriptionFailure = nil
         involuntaryStop = nil
         markers = []
@@ -162,14 +225,15 @@ final class RecordingModel {
         elapsed = 0
 
         do {
-            try await audioSession.configure()
-            try await audioSession.activate()
-            observeSessionEvents()
+            let sessionEvents = await audioSession.events()
+            observeSessionEvents(sessionEvents)
+            audioSessionLease = try await audioSession.beginRecording()
 
             let meeting = try await createRecordingMeeting(
                 in: runtime.library,
                 locale: locale,
-                languageWasChosenExplicitly: languageWasChosenExplicitly
+                languageWasChosenExplicitly: languageWasChosenExplicitly,
+                transcriptionPlan: plan
             )
             // Capture directory inside the meeting folder, exactly as on the
             // Mac: after a crash the tracks sit in the library and are adopted
@@ -195,7 +259,15 @@ final class RecordingModel {
             meetingID = meeting.id
 
             let stream = try await session.liveAudioEvents(for: .microphone)
-            startTranscribing(from: stream, locale: locale)
+            do {
+                let provider = try transcriptionRegistrySource().resolve(
+                    plan.liveProviderID,
+                    for: .micTrack
+                )
+                startTranscribing(from: stream, provider: provider, locale: locale)
+            } catch {
+                noteTranscriptionFailure(error)
+            }
 
             let now = Date()
             startedAt = now
@@ -203,6 +275,10 @@ final class RecordingModel {
             silence.begin(at: now)
             startTicking()
             state = .recording
+            if let pendingReason = interruptionLatch.takePendingReason() {
+                await stopForInterruption(pendingReason)
+                return
+            }
             await prepareAnnotations(
                 meetingID: meeting.id,
                 sessions: notesSessions
@@ -214,6 +290,17 @@ final class RecordingModel {
         }
     }
 
+    /// Reads the system value only. Returning from Settings must never
+    /// reconfigure or deactivate an audio session that is recording.
+    func refreshMicrophonePermission() {
+        microphonePermission = microphonePermissionStatus()
+        if microphonePermission == .authorized,
+           state == .failed(Self.microphoneDeniedMessage)
+        {
+            state = .idle
+        }
+    }
+
     /// Creates the durable meeting record before capture starts.
     ///
     /// The effective recognizer locale is persisted only when it came from an
@@ -222,7 +309,11 @@ final class RecordingModel {
     func createRecordingMeeting(
         in library: Library,
         locale: Locale,
-        languageWasChosenExplicitly: Bool
+        languageWasChosenExplicitly: Bool,
+        transcriptionPlan: TranscriptionPlan = TranscriptionPlan(
+            liveProviderID: .apple,
+            finalProviderID: .apple
+        )
     ) async throws -> Meeting {
         let sourceLocale: MeetingSourceLocale? = if languageWasChosenExplicitly {
             try MeetingSourceLocale(
@@ -235,7 +326,8 @@ final class RecordingModel {
         return try await library.createMeeting(
             title: Self.defaultTitle(),
             status: .recording,
-            sourceLocale: sourceLocale
+            sourceLocale: sourceLocale,
+            transcriptionPlan: transcriptionPlan
         )
     }
 
@@ -274,8 +366,9 @@ final class RecordingModel {
 
         if let runtime, let recordedMeeting {
             do {
+                let meeting = try await runtime.library.loadMeeting(recordedMeeting)
                 try await finalizer.finalize(
-                    meetingID: recordedMeeting,
+                    meeting: meeting,
                     output: output,
                     library: runtime.library,
                     jobStore: runtime.jobStore
@@ -332,6 +425,7 @@ final class RecordingModel {
 
     private func startTranscribing(
         from stream: LiveAudioEventStream,
+        provider: any TranscriptionProvider,
         locale: Locale
     ) {
         // No progress handler any more: since the onboarding work the provider
@@ -339,7 +433,6 @@ final class RecordingModel {
         // explicit consent and checksums. A missing model now arrives as a
         // transcription failure, which this screen already reports correctly
         // while the recording keeps running.
-        let provider = SpeechAnalyzerProvider(channel: .microphone)
 
         // Detached, as on the Mac: a plain `Task` would inherit this model's
         // MainActor isolation and push every audio buffer through the main
@@ -365,7 +458,7 @@ final class RecordingModel {
                             live = created
                             eventTask = Task { [weak self] in
                                 for await event in created.events {
-                                    await self?.apply(event.shifted(by: offset))
+                                    await self?.applyLiveEvent(event.shifted(by: offset))
                                 }
                             }
                         } catch {
@@ -406,34 +499,17 @@ final class RecordingModel {
     }
 
     private func clearVolatileTranscript() {
-        volatileText = ""
+        liveTranscriptFeed.clearVolatile(for: .microphone)
+        liveTranscriptRows = liveTranscriptFeed.rows
     }
 
     private func noteTranscriptionFailure(_ error: Error) {
         transcriptionFailure = error.localizedDescription
     }
 
-    private func apply(_ event: TranscriptionEvent) {
-        switch event {
-        case .volatile(let output):
-            volatileText = Self.text(of: output)
-        case .final(let output):
-            appendFinal(output)
-            volatileText = ""
-        }
-    }
-
-    private func appendFinal(_ output: TranscriptOutput) {
-        let text = Self.text(of: output)
-        guard !text.isEmpty else { return }
-        finalText += finalText.isEmpty ? text : " \(text)"
-    }
-
-    private static func text(of output: TranscriptOutput) -> String {
-        output.blocks
-            .map(\.text)
-            .joined(separator: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+    func applyLiveEvent(_ event: TranscriptionEvent) {
+        liveTranscriptFeed.apply(event, for: .microphone)
+        liveTranscriptRows = liveTranscriptFeed.rows
     }
 
     // MARK: - Internals
@@ -467,13 +543,18 @@ final class RecordingModel {
         }
         session = nil
         micSource = nil
+        interruptionLatch.reset()
 
         let output = await liveTask?.value
         liveTask = nil
 
-        try? await audioSession.deactivate()
+        if let audioSessionLease {
+            self.audioSessionLease = nil
+            try? await audioSession.endRecording(audioSessionLease)
+        }
         level = .silence
-        volatileText = ""
+        liveTranscriptFeed.clearVolatile(for: .microphone)
+        liveTranscriptRows = liveTranscriptFeed.rows
         silence.stop()
         silentSeconds = 0
         isSilenceAlarming = false
@@ -499,6 +580,12 @@ final class RecordingModel {
         // Abhoeren auf, wenn die Besprechung vorbei ist.
         if let session, await session.state.isTerminal {
             await finishAfterSelfStop()
+            return
+        }
+        if let micSource, !(await micSource.running) {
+            await handleInterruption(
+                String(localized: "the microphone could not restart after its audio configuration changed")
+            )
             return
         }
         if let startedAt {
@@ -530,18 +617,17 @@ final class RecordingModel {
     /// The session is gone at this point; carrying on would produce a
     /// recording with a hole in it that nothing later can detect. What is
     /// already written stays written, which is why the message says so.
-    private func observeSessionEvents() {
+    private func observeSessionEvents(_ stream: AsyncStream<AudioSessionEvent>) {
         sessionEventTask = Task { [weak self] in
-            guard let stream = await self?.audioSession.events() else { return }
             for await event in stream {
                 guard let self else { return }
                 switch event {
                 case .interruptionBegan(let reason):
                     await self.handleInterruption(describing(reason))
                 case .routeChanged(let reason) where reason.endsCurrentCapture:
-                    await self.handleInterruption("input device changed")
+                    await self.handleInterruption(String(localized: "input device changed"))
                 case .mediaServicesWereReset:
-                    await self.handleInterruption("audio services restarted")
+                    await self.handleInterruption(String(localized: "audio services restarted"))
                 case .routeChanged, .interruptionEnded:
                     continue
                 }
@@ -550,7 +636,15 @@ final class RecordingModel {
     }
 
     private func handleInterruption(_ reason: String) async {
-        guard case .recording = state else { return }
+        switch interruptionLatch.receive(reason, while: state) {
+        case .ignore, .deferUntilStarted:
+            return
+        case .stop(let reason):
+            await stopForInterruption(reason)
+        }
+    }
+
+    private func stopForInterruption(_ reason: String) async {
         let at = elapsed
         await stop()
         // Nur wenn der Stop durchkam. Scheiterte das Schliessen oder
@@ -564,22 +658,20 @@ final class RecordingModel {
     /// Sagt, was zu tun ist. "Zugriff verweigert" allein laesst den Nutzer
     /// auf dem Aufnahmebildschirm stehen, ohne den Ort zu kennen, an dem er
     /// es aendern kann.
-    static let microphoneDeniedMessage =
-        "Steno may not use the microphone. Allow it in Settings under Privacy "
-            + "and Security, then Microphone."
+    static let microphoneDeniedMessage = String(localized: "Steno may not use the microphone. Allow it in Settings under Privacy and Security, then Microphone.")
 
     private static func defaultTitle() -> String {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
-        return "Recording \(formatter.string(from: Date()))"
+        return String(localized: "Recording \(formatter.string(from: Date()))")
     }
 }
 
 private func describing(_ reason: AudioInterruptionReason) -> String {
     switch reason {
-    case .builtInMicMuted: "the microphone was muted"
-    case .other: "another app or a call took the microphone"
+    case .builtInMicMuted: String(localized: "the microphone was muted")
+    case .other: String(localized: "another app or a call took the microphone")
     }
 }
 

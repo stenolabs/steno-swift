@@ -167,7 +167,11 @@ extension AppModel {
                 start: playback.start,
                 duration: max(0.5, playback.duration)
             )
-            let player = try AVAudioPlayer(contentsOf: clipURL)
+            let player = try TemporaryPlaybackFile.retainingOnSuccess(
+                at: clipURL
+            ) {
+                try AVAudioPlayer(contentsOf: clipURL)
+            }
             guard player.play() else {
                 try? FileManager.default.removeItem(at: clipURL)
                 peopleError = "Playback could not be started."

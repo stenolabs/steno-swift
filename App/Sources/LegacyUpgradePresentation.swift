@@ -1,5 +1,6 @@
 import Foundation
 import StenoDomain
+import StenoTranscription
 
 /// Leitet die sichtbare Legacy-Aufwertung vollstaendig aus gespeichertem
 /// Zustand ab. So bleibt Schritt 2 sichtbar, obwohl Schritt 1 die Herkunft
@@ -45,6 +46,30 @@ enum LegacyUpgradePresentation: Equatable {
         return .ready(actionTitle: actionTitle(needsTranscriptionFirst))
     }
 
+    /// Welches Modell diesen Schritt ausfuehrt.
+    ///
+    /// Der Nutzer liest das als Tatsache, also steht hier nur, was der Job
+    /// wirklich gepinnt hat. Ein Job ohne Pin stammt aus der Zeit vor der
+    /// Modellwahl und laeuft auf Apple; das ist keine Vermutung, sondern die
+    /// Aufloesung, die der Koordinator selbst anwendet.
+    static func modelTitle(
+        for job: Job,
+        catalog: TranscriptionModelCatalog = .standard
+    ) -> String {
+        switch job.kind {
+        case .finalASR:
+            let providerID = job.transcriptionProviderID ?? .apple
+            return catalog.descriptor(for: providerID)?.displayName
+                ?? providerID.rawValue
+        case .diarization:
+            return "FluidAudio speaker separation"
+        case .identitySuggestion:
+            return "Local voice comparison"
+        case .templateRender, .export:
+            return "Local processing"
+        }
+    }
+
     static func stepTitle(for kind: Job.Kind) -> String {
         switch kind {
         case .finalASR: "Transcription, step 1 of 3"
@@ -80,7 +105,7 @@ enum LegacyUpgradePresentation: Equatable {
                 else { return false }
                 return runID == reviewRunID
             }
-        case .liveProvisional, .legacyImport, .meetingTransfer:
+        case .liveProvisional, .legacyImport, .meetingTransfer, .demo:
             return false
         }
     }

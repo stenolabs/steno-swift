@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 1,
+  "sources": [
+    {
+      "id": "oocc-v2",
+      "role": "primary_candidate",
+      "title": "Open Oldenburg Conversation Corpus",
+      "language": "deu",
+      "sourceURL": "https://doi.org/10.5281/zenodo.21446419",
+      "doi": "10.5281/zenodo.21446419",
+      "publicationDate": "2026-07-20",
+      "license": {
+        "id": "cc-by-nc-nd-4.0",
+        "url": "https://creativecommons.org/licenses/by-nc-nd/4.0/",
+        "commercialUse": false,
+        "derivatives": false,
+        "redistribution": true
+      },
+      "files": [
+        {
+          "role": "audio_video_2min_task1",
+          "key": "2_minute_recordings_audio_video_task1.zip",
+          "size": 286571796,
+          "checksum": {
+            "algorithm": "md5",
+            "value": "2dedd7b8aea80bec39f6815a6ad9f104"
+          },
+          "url": "https://zenodo.org/api/records/21446419/files/2_minute_recordings_audio_video_task1.zip/content"
+        },
+        {
+          "role": "transcripts_2min",
+          "key": "2_minute_recordings_transcripts.zip",
+          "size": 573799,
+          "checksum": {
+            "algorithm": "md5",
+            "value": "2d512c753d4275e497b38548b362cf5b"
+          },
+          "url": "https://zenodo.org/api/records/21446419/files/2_minute_recordings_transcripts.zip/content"
+        },
+        {
+          "role": "documentation_and_license",
+          "key": "documentation.zip",
+          "size": 588846,
+          "checksum": {
+            "algorithm": "md5",
+            "value": "135759cae18a038566d30625d28c72e7"
+          },
+          "url": "https://zenodo.org/api/records/21446419/files/documentation.zip/content"
+        }
+      ],
+      "reference": {
+        "kind": "manually_corrected_timestamped_csv",
+        "status": "license_review_required",
+        "notes": "Native German dyads with manually corrected segment and word timestamps. The packaged license is CC BY-NC-ND 4.0, so this remains a local non-commercial candidate and is not the freely reusable product baseline."
+      }
+    },
+    {
+      "id": "koelner-kiezdeutsch-2025-g3",
+      "role": "stress",
+      "title": "Kölner Korpus des Kiezdeutschen, G3",
+      "language": "deu",
+      "sourceURL": "https://doi.org/10.5281/zenodo.15337948",
+      "doi": "10.5281/zenodo.15337948",
+      "publicationDate": "2025-05-11",
+      "license": {
+        "id": "cc-by-4.0",
+        "url": "https://creativecommons.org/licenses/by/4.0/",
+        "commercialUse": true,
+        "derivatives": true,
+        "redistribution": true
+      },
+      "files": [
+        {
+          "role": "audio",
+          "key": "05_G3 - Multilingual & monolingual speakers (audio).mp3",
+          "size": 63891596,
+          "checksum": {
+            "algorithm": "md5",
+            "value": "a0af49a88212ba454867bc5626133a57"
+          },
+          "url": "https://zenodo.org/api/records/15337948/files/05_G3%20-%20Multilingual%20%26%20monolingual%20speakers%20%28audio%29.mp3/content"
+        },
+        {
+          "role": "manual_transcription",
+          "key": "06_G3 - Multilingual & monolingual speakers (transcription).pdf",
+          "size": 363584,
+          "checksum": {
+            "algorithm": "md5",
+            "value": "3c84285e3b86a55da568aebb5eb4bacf"
+          },
+          "url": "https://zenodo.org/api/records/15337948/files/06_G3%20-%20Multilingual%20%26%20monolingual%20speakers%20%28transcription%29.pdf/content"
+        }
+      ],
+      "reference": {
+        "kind": "manual_gat2_pdf_without_time_alignment",
+        "status": "alignment_required",
+        "notes": "The 65-page manual transcript identifies speakers and overlap but does not expose per-line timestamps. An exact audio excerpt must be aligned and then manually checked before WER, DER or JER is reported."
+      }
+    }
+  ],
+  "samples": []
+}

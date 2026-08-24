@@ -25,7 +25,10 @@ struct ReportsDisclosureTests {
             name: "Remote model",
             baseURL: URL(string: "https://models.example.com/v1")!,
             modelID: "gemma-3",
-            requiresAPIKey: true
+            requiresAPIKey: true,
+            hosting: .cloud,
+            dialect: .openAICompatible,
+            contextWindowTokens: TextModelEndpoint.defaultContextWindowTokens
         )
 
         let notice = try ReportsDisclosurePresentation.externalNotice(
@@ -33,19 +36,51 @@ struct ReportsDisclosureTests {
             disclosure: disclosure
         )
 
-        for dataClass in disclosure.classes {
-            #expect(notice.text.contains(dataClass.displayName))
-        }
-        #expect(notice.text.contains("models.example.com"))
-        #expect(notice.text.contains(
-            "Audio, structured profile email fields, and attachments are not added to the model input."
-        ))
-        #expect(notice.text.contains(
-            "Email addresses written in the transcript or your notes are included with that text."
-        ))
+        #expect(
+            notice.text
+                == "Generating sends transcript with speaker names, participants, and your notes to \u{201C}Remote model\u{201D} (models.example.com). Audio, structured profile email fields, and attachments are not added to the model input. Email addresses written into the meeting text or the notes are included with it."
+        )
         #expect(!notice.text.contains("email addresses and attached documents stay"))
         #expect(!notice.text.contains("to this Mac"))
         #expect(!notice.isPlaintext)
+    }
+
+    @Test("app boundary localizes the policy-checked outbound notice")
+    func outboundNoticeLocalizesAtAppBoundary() throws {
+        let disclosure = OutboundDisclosure(
+            transcript: TranscriptRevision(
+                meetingID: MeetingID(),
+                origin: .legacyImport,
+                turns: [TranscriptTurn(start: 0, end: 1, segments: [])]
+            ),
+            context: RenderContext(
+                userNotes: "notes",
+                participants: ["Ada"]
+            )
+        )
+        let endpoint = TextModelEndpoint(
+            name: "Lokales Modell",
+            baseURL: URL(string: "http://127.0.0.1:1234/v1")!,
+            modelID: "gemma-3",
+            requiresAPIKey: false,
+            hosting: .selfHosted,
+            dialect: .openAICompatible,
+            contextWindowTokens: TextModelEndpoint.defaultContextWindowTokens
+        )
+
+        let notice = try LocalizedExternalModelNotice.make(
+            endpoint: endpoint,
+            disclosure: disclosure,
+            localDeviceDescription: "dieser Mac",
+            locale: Locale(identifier: "de")
+        )
+
+        #expect(notice.text.contains("Transkript mit Sprechernamen"))
+        #expect(notice.text.contains("Teilnehmende"))
+        #expect(notice.text.contains("deine Notizen"))
+        #expect(notice.text.contains("Lokales Modell"))
+        #expect(notice.text.contains("nicht verschlüsselt"))
+        #expect(notice.isPlaintext)
     }
 
     @Test("the initial snapshot always reads jobs before reports")
@@ -122,6 +157,20 @@ struct ReportsDisclosureTests {
     func missingPinsFailureRefreshesPreflight() async {
         var job = Job(kind: .templateRender, meetingID: MeetingID(), status: .failed)
         job.failureReason = .templateRenderPinsRequired
+        var refreshCount = 0
+
+        await ReportsPendingJobObservation.refreshPreflightIfNeeded(for: job) {
+            refreshCount += 1
+        }
+
+        #expect(refreshCount == 1)
+    }
+
+    @Test("an incomplete endpoint configuration refreshes the visible preflight")
+    @MainActor
+    func incompleteEndpointConfigurationRefreshesPreflight() async {
+        var job = Job(kind: .templateRender, meetingID: MeetingID(), status: .failed)
+        job.failureReason = .textModelEndpointConfigurationIncomplete
         var refreshCount = 0
 
         await ReportsPendingJobObservation.refreshPreflightIfNeeded(for: job) {
@@ -225,10 +274,9 @@ struct ReportsDisclosureTests {
         )
         let display = ReportTextModelDisplay.external(pinned)
 
-        #expect(
-            ReportsPendingJobObservation.statusLabel(for: display)
-                == "Generating with Pinned host · pinned-model (external)…"
-        )
+        var status = ReportsPendingJobObservation.statusLabel(for: display)
+        status.locale = Locale(identifier: "en")
+        #expect(String(localized: status) == "Generating with Pinned host · pinned-model (external)…")
         #expect(display.endpointSnapshot == pinned)
     }
 

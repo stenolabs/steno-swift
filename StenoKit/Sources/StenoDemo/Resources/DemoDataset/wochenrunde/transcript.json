@@ -1,0 +1,164 @@
+{
+  "schemaVersion": 1,
+  "id": "00000000-0000-7000-8000-000000000102",
+  "meetingID": "00000000-0000-7000-8000-000000000002",
+  "createdAt": 809092860,
+  "origin": {
+    "demo": {
+      "_0": {
+        "datasetID": "synthetic-demo",
+        "datasetVersion": "2026-08-23",
+        "itemID": "wochenrunde"
+      }
+    }
+  },
+  "turns": [
+    {
+      "speaker": {
+        "importedTextLabel": {
+          "_0": {
+            "id": "00000000-0000-7000-8000-00000000aa01",
+            "text": "Sprecherin A",
+            "wasConfirmedAtSource": false
+          }
+        }
+      },
+      "start": 0.0,
+      "end": 9.232562358276644,
+      "segments": [
+        {
+          "text": "In dieser fiktiven Wochenrunde prüfen wir drei kleine Verbesserungen am Beispielablauf.",
+          "start": 0.0,
+          "end": 9.232562358276644,
+          "words": []
+        }
+      ]
+    },
+    {
+      "speaker": {
+        "importedTextLabel": {
+          "_0": {
+            "id": "00000000-0000-7000-8000-00000000aa02",
+            "text": "Sprecher B",
+            "wasConfirmedAtSource": false
+          }
+        }
+      },
+      "start": 9.7,
+      "end": 17.414285714285715,
+      "segments": [
+        {
+          "text": "Der erste Punkt ist die Übersicht. Jede Probe soll sofort ihren klaren Zweck zeigen.",
+          "start": 9.7,
+          "end": 17.414285714285715,
+          "words": []
+        }
+      ]
+    },
+    {
+      "speaker": {
+        "importedTextLabel": {
+          "_0": {
+            "id": "00000000-0000-7000-8000-00000000aa03",
+            "text": "Sprecherin C",
+            "wasConfirmedAtSource": false
+          }
+        }
+      },
+      "start": 19.1,
+      "end": 23.142902494331064,
+      "segments": [
+        {
+          "text": "Beim zweiten Punkt ergänze ich einen kurzen Hinweis für die lokale Auswertung.",
+          "start": 19.1,
+          "end": 23.142902494331064,
+          "words": []
+        }
+      ]
+    },
+    {
+      "speaker": {
+        "importedTextLabel": {
+          "_0": {
+            "id": "00000000-0000-7000-8000-00000000aa01",
+            "text": "Sprecherin A",
+            "wasConfirmedAtSource": false
+          }
+        }
+      },
+      "start": 23.9,
+      "end": 34.632879818594105,
+      "segments": [
+        {
+          "text": "Der dritte Punkt betrifft die Notizen. Sie bleiben bewusst knapp und vollständig erfunden.",
+          "start": 23.9,
+          "end": 34.632879818594105,
+          "words": []
+        }
+      ]
+    },
+    {
+      "speaker": {
+        "importedTextLabel": {
+          "_0": {
+            "id": "00000000-0000-7000-8000-00000000aa02",
+            "text": "Sprecher B",
+            "wasConfirmedAtSource": false
+          }
+        }
+      },
+      "start": 37.3,
+      "end": 44.143537414965984,
+      "segments": [
+        {
+          "text": "Für diese Runde gibt es keine offenen Risiken. Wir dokumentieren nur die geplante Reihenfolge.",
+          "start": 37.3,
+          "end": 44.143537414965984,
+          "words": []
+        }
+      ]
+    },
+    {
+      "speaker": {
+        "importedTextLabel": {
+          "_0": {
+            "id": "00000000-0000-7000-8000-00000000aa03",
+            "text": "Sprecherin C",
+            "wasConfirmedAtSource": false
+          }
+        }
+      },
+      "start": 45.0,
+      "end": 48.52045351473923,
+      "segments": [
+        {
+          "text": "Ich prüfe danach, ob die Texte und Zeitmarken zueinander passen.",
+          "start": 45.0,
+          "end": 48.52045351473923,
+          "words": []
+        }
+      ]
+    },
+    {
+      "speaker": {
+        "importedTextLabel": {
+          "_0": {
+            "id": "00000000-0000-7000-8000-00000000aa01",
+            "text": "Sprecherin A",
+            "wasConfirmedAtSource": false
+          }
+        }
+      },
+      "start": 49.0,
+      "end": 59.45424036281179,
+      "segments": [
+        {
+          "text": "Damit ist die fiktive Wochenrunde abgeschlossen. Die nächste Probe beginnt mit demselben neutralen Material.",
+          "start": 49.0,
+          "end": 59.45424036281179,
+          "words": []
+        }
+      ]
+    }
+  ]
+}

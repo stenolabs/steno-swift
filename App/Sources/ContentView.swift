@@ -1,9 +1,16 @@
+import Foundation
 import StenoDomain
 import SwiftUI
 import UniformTypeIdentifiers
 
+enum MacWindowPresentation {
+    static let meetingsTitle: LocalizedStringResource = "Meetings"
+}
+
 struct ContentView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
 
     var body: some View {
         @Bindable var model = model
@@ -25,9 +32,12 @@ struct ContentView: View {
                 }
             }
         }
-        .toolbar {
-            ToolbarItemGroup {
-                if model.isRecording {
+        .toolbar(id: MacToolbarID.main.rawValue) {
+            if model.isRecording {
+                ToolbarItem(
+                    id: MacToolbarItemID.recording.rawValue,
+                    placement: .primaryAction
+                ) {
                     Button {
                         Task { await model.stopRecording() }
                     } label: {
@@ -35,21 +45,65 @@ struct ContentView: View {
                             .foregroundStyle(Steno.Colors.recording)
                     }
                     .help("Stop recording")
-                } else if model.isStartingRecording {
+                }
+                .defaultCustomization(
+                    MacToolbarPresentation.defaultCustomization(
+                        for: .recording,
+                        in: .main
+                    )
+                )
+            } else if model.isStartingRecording {
+                ToolbarItem(
+                    id: MacToolbarItemID.recording.rawValue,
+                    placement: .primaryAction
+                ) {
                     ProgressView()
                         .controlSize(.small)
                         .help("Preparing recording")
-                } else {
+                }
+                .defaultCustomization(
+                    MacToolbarPresentation.defaultCustomization(
+                        for: .recording,
+                        in: .main
+                    )
+                )
+            } else {
+                ToolbarItem(
+                    id: MacToolbarItemID.microphoneSelection.rawValue,
+                    placement: .primaryAction
+                ) {
                     MicrophoneSelectionButton()
+                }
+                .defaultCustomization(
+                    MacToolbarPresentation.defaultCustomization(
+                        for: .microphoneSelection,
+                        in: .main
+                    )
+                )
 
+                ToolbarItem(
+                    id: MacToolbarItemID.recording.rawValue,
+                    placement: .primaryAction
+                ) {
                     Button {
                         Task { await model.startRecording() }
                     } label: {
                         Label("Start recording", systemImage: "record.circle")
                     }
                     .help("Start a new recording")
-                    .disabled(model.runtime == nil)
+                    .disabled(!model.canStartRecording)
+                }
+                .defaultCustomization(
+                    MacToolbarPresentation.defaultCustomization(
+                        for: .recording,
+                        in: .main
+                    )
+                )
 
+                ToolbarItem(
+                    id: MacToolbarItemID.newMeeting.rawValue,
+                    placement: .primaryAction
+                ) {
                     Button {
                         Task { await model.createDraftMeeting() }
                     } label: {
@@ -57,28 +111,69 @@ struct ContentView: View {
                     }
                     .help("Create a meeting without a recording, to take notes beforehand")
                     .disabled(model.runtime == nil)
-
-                    Button {
-                        model.requestAudioImport()
-                    } label: {
-                        Label("Import audio", systemImage: "waveform.badge.plus")
-                    }
-                    .help("Import an audio file")
-                    .disabled(model.runtime == nil)
-
-                    Button {
-                        model.requestMeetingTransferImport()
-                    } label: {
-                        Label("Import meeting package", systemImage: "shippingbox.and.arrow.backward")
-                    }
-                    .help("Import a .stenomeeting package")
-                    .disabled(model.runtime == nil)
-
                 }
-                SettingsLink {
-                    Label("Settings", systemImage: "gearshape")
+                .defaultCustomization(
+                    MacToolbarPresentation.defaultCustomization(
+                        for: .newMeeting,
+                        in: .main
+                    )
+                )
+
+                ToolbarItem(
+                    id: MacToolbarItemID.importMeeting.rawValue,
+                    placement: .primaryAction
+                ) {
+                    Menu {
+                        Button("Import Audio File…") {
+                            model.requestAudioImport()
+                        }
+                        Button("Import Meeting Package…") {
+                            model.requestMeetingTransferImport()
+                        }
+                        Button("Import from Legacy Steno App…") {
+                            openWindow(id: "legacy-import")
+                        }
+                    } label: {
+                        Label("Import", systemImage: "square.and.arrow.down")
+                    }
+                    .help("Import an audio file, meeting package, or legacy library")
+                    .disabled(model.runtime == nil)
                 }
-                .help("Settings (language, language models)")
+                .defaultCustomization(
+                    MacToolbarPresentation.defaultCustomization(
+                        for: .importMeeting,
+                        in: .main
+                    )
+                )
+            }
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            VStack(spacing: 0) {
+                if case .failed(let failure) = model.startupState,
+                   MacGlobalStatusSurface.startupFailure == .top {
+                    MacStartupFailedView(failure: failure) {
+                        await model.retryStartup()
+                    }
+                    .transition(statusTransition(edge: .top))
+                }
+                if let notice = model.notice,
+                   MacGlobalStatusSurface.notice(isError: notice.isError) == .top {
+                    noticeBanner(notice)
+                        .transition(statusTransition(edge: .top))
+                }
+                if model.startupState == .ready {
+                    ForEach(model.startupWarnings) { warning in
+                        MacStartupWarningBanner(warning: warning)
+                    }
+                    ForEach(model.libraryIssues) { issue in
+                        MacLibraryIssueBanner(
+                            issue: issue,
+                            isRetrying: model.retryingLibraryIssueIDs.contains(issue.id)
+                        ) {
+                            await model.retryLibraryIssue(issue)
+                        }
+                    }
+                }
             }
         }
         .fileImporter(
@@ -134,50 +229,64 @@ struct ContentView: View {
         // nicht und verschwindet erst auf Klick.
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 0) {
-                if let export = model.audioExportActivity {
-                    HStack(spacing: 10) {
-                        ProgressView(value: export.fraction)
-                            .frame(width: 120)
-                        Text("Exporting \(export.fileName) \(Int(export.fraction * 100))%")
-                            .font(.callout)
-                            .lineLimit(1)
-                        Spacer()
-                    }
-                    .padding(8)
-                    .background(.bar)
+                if let export = model.audioExportActivity,
+                   MacGlobalStatusSurface.audioExport == .bottom {
+                    audioExportBanner(export)
+                        .transition(statusTransition(edge: .bottom))
                 }
-                if let notice = model.notice {
-                    HStack(spacing: 8) {
-                        Image(systemName: notice.isError
-                            ? "exclamationmark.triangle.fill"
-                            : "info.circle")
-                            .foregroundStyle(notice.isError ? Steno.Colors.error : .secondary)
-                        Text(notice.text)
-                            .font(.callout)
-                            .textSelection(.enabled)
-                        Spacer()
-                        Button("OK") { model.dismissNotice() }
-                            .controlSize(.small)
-                    }
-                    .padding(8)
-                    .background(.bar)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                if let notice = model.notice,
+                   MacGlobalStatusSurface.notice(isError: notice.isError) == .bottom {
+                    noticeBanner(notice)
+                        .transition(statusTransition(edge: .bottom))
                 }
             }
         }
-        .animation(.default, value: model.notice)
-        .animation(.default, value: model.audioExportActivity)
-        // Dismissbar: Vorher war das Binding konstant, der Alert kam nach
-        // jedem Wegklicken sofort wieder.
-        .alert(
-            "Steno could not start",
-            isPresented: Binding(
-                get: { model.bootstrapError != nil },
-                set: { if !$0 { model.dismissBootstrapError() } }
-            ),
-            actions: { Button("OK", role: .cancel) {} },
-            message: { Text(model.bootstrapError ?? "") }
-        )
+        .animation(statusAnimation, value: model.notice)
+        .animation(statusAnimation, value: model.audioExportActivity)
+        .animation(statusAnimation, value: model.startupState)
+    }
+
+    private var statusMotionPolicy: MacStatusMotionPolicy {
+        MacStatusMotionPolicy(reduceMotion: accessibilityReduceMotion)
+    }
+
+    private var statusAnimation: Animation? {
+        statusMotionPolicy == .reduced ? nil : .default
+    }
+
+    private func statusTransition(edge: Edge) -> AnyTransition {
+        guard statusMotionPolicy.usesPositionalMovement else { return .opacity }
+        return .move(edge: edge).combined(with: .opacity)
+    }
+
+    private func audioExportBanner(_ export: AudioExportActivity) -> some View {
+        HStack(spacing: 10) {
+            ProgressView(value: export.fraction)
+                .frame(width: 120)
+            Text("Exporting \(export.fileName) \(Int(export.fraction * 100))%")
+                .font(.callout)
+                .lineLimit(1)
+            Spacer()
+        }
+        .padding(8)
+        .background(.bar)
+    }
+
+    private func noticeBanner(_ notice: AppModel.Notice) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: notice.isError
+                ? "exclamationmark.triangle.fill"
+                : "info.circle")
+                .foregroundStyle(notice.isError ? Steno.Colors.error : .secondary)
+            Text(notice.text)
+                .font(.callout)
+                .textSelection(.enabled)
+            Spacer()
+            Button("OK") { model.dismissNotice() }
+                .controlSize(.small)
+        }
+        .padding(8)
+        .background(.bar)
     }
 }
 
@@ -213,13 +322,25 @@ struct MultiMeetingSelectionView: View {
             Text("Drag the selection into a folder or use Move Meetings.")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .navigationTitle("Steno")
+        .navigationTitle(MacWindowPresentation.meetingsTitle)
     }
 }
 
 extension ContentView {
     @ViewBuilder
     var detailContent: some View {
+        switch model.startupState {
+        case .opening:
+            MacStartupOpeningView()
+        case .failed:
+            MacStartupUnavailableView()
+        case .ready:
+            readyDetailContent
+        }
+    }
+
+    @ViewBuilder
+    private var readyDetailContent: some View {
         if model.selectedMeetingIDs.count > 1 {
             MultiMeetingSelectionView(count: model.selectedMeetingIDs.count)
         } else if model.isRecording,
@@ -242,7 +363,7 @@ extension ContentView {
                 systemImage: "waveform",
                 description: Text("Pick a meeting to look something up while you record.")
             )
-            .navigationTitle("Steno")
+            .navigationTitle(MacWindowPresentation.meetingsTitle)
         } else {
             ContentUnavailableView(
                 "No meeting selected",
@@ -250,11 +371,12 @@ extension ContentView {
                 description: Text("Start a recording or import an audio file.")
             )
             // Ohne Titel zeigt das Fenster den Bundle-Namen "steno-macos".
-            .navigationTitle("Steno")
+            .navigationTitle(MacWindowPresentation.meetingsTitle)
         }
     }
 
     var recordingTitle: String {
-        model.meetings.first { $0.id == model.recordingMeetingID }?.title ?? "Steno"
+        model.meetings.first { $0.id == model.recordingMeetingID }?.title
+            ?? String(localized: MacWindowPresentation.meetingsTitle)
     }
 }

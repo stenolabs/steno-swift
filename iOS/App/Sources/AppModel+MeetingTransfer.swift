@@ -13,13 +13,13 @@ enum MeetingTransferExportCleanupError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .runtimeUnavailable:
-            "Steno is not ready to share this meeting."
+            String(localized: "Steno is not ready to share this meeting.")
         case .invalidTemporaryExport:
-            "Steno could not create a private temporary export."
+            String(localized: "Steno could not create a private temporary export.")
         case .notOwned:
-            "Steno refused to remove a file it does not own."
+            String(localized: "Steno refused to remove a file it does not own.")
         case .cleanupFailed:
-            "Steno could not remove its temporary meeting export."
+            String(localized: "Steno could not remove its temporary meeting export.")
         }
     }
 }

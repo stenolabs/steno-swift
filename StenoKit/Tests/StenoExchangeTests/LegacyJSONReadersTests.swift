@@ -21,7 +21,7 @@ struct LegacyJSONReadersTests {
         #expect(file.discussionAreas == [
             LegacyDiscussionArea(title: "Thema", analysis: "Analyse"),
         ])
-        #expect(file.participants == ["Alex", "Ada"])
+        #expect(file.participants == ["Grace", "Ada"])
         #expect(file.userNotes == "Notiz")
         #expect(file.folders == ["folder-a"])
     }
@@ -60,7 +60,7 @@ struct LegacyJSONReadersTests {
         )
 
         #expect(file.fields["summary"]?.value == .string("Vom Nutzer geändert"))
-        #expect(file.fields["participants"]?.value == .array([.string("Alex"), .string("Ada")]))
+        #expect(file.fields["participants"]?.value == .array([.string("Grace"), .string("Ada")]))
         #expect(file.fields["summary"]?.editedAt == Date(timeIntervalSince1970: 1_785_933_296))
     }
 }

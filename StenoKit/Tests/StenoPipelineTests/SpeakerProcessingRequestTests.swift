@@ -291,6 +291,72 @@ struct SpeakerProcessingRequestTests {
         }
     }
 
+    @Test("a run chain deeper than diarization to final-ASR is rejected")
+    func damagedRunChainHasAHardDepthLimit() async throws {
+        try await withTemporaryDirectory { root in
+            let fixture = try await makeCurrentFinalASRFixture(at: root)
+            let revisionID = RevisionID()
+            let innerRunID = RunID()
+            let outerRunID = RunID()
+            try writeFinishedDiarizationRun(
+                library: fixture.library,
+                meetingID: fixture.meetingID,
+                runID: innerRunID,
+                sourceRunID: fixture.finalASRRunID,
+                revisionID: RevisionID()
+            )
+            try writeFinishedDiarizationRun(
+                library: fixture.library,
+                meetingID: fixture.meetingID,
+                runID: outerRunID,
+                sourceRunID: innerRunID,
+                revisionID: revisionID
+            )
+            _ = try await fixture.library.appendRevision(TranscriptRevision(
+                id: revisionID,
+                meetingID: fixture.meetingID,
+                origin: .finalRun(outerRunID),
+                turns: [TranscriptTurn(
+                    start: 0,
+                    end: 1,
+                    segments: [TranscriptSegment(
+                        text: "Damaged",
+                        start: 0,
+                        end: 1,
+                        words: [TranscriptWord(text: "Damaged", start: 0, end: 1)]
+                    )]
+                )]
+            ))
+
+            #expect(
+                try await MeetingDiarizationRequest.status(
+                    library: fixture.library,
+                    jobStore: fixture.jobStore,
+                    meetingID: fixture.meetingID,
+                    modelsReady: true
+                ) == .unavailable
+            )
+
+            try JSONEncoder().encode(DiarizationArtifact(
+                jobID: JobID(),
+                sourceRunID: outerRunID,
+                revisionID: revisionID,
+                tracks: []
+            )).write(to: fixture.library.layout.runDiarization(
+                fixture.meetingID,
+                runID: outerRunID
+            ))
+            #expect(
+                try await MeetingDiarizationRequest.status(
+                    library: fixture.library,
+                    jobStore: fixture.jobStore,
+                    meetingID: fixture.meetingID,
+                    modelsReady: true
+                ) == .unavailable
+            )
+        }
+    }
+
     @Test("generic speaker processing cannot create an unpinned imported job")
     func importedMeetingRequiresImportedRetry() async throws {
         try await withTemporaryDirectory { root in
@@ -448,6 +514,33 @@ private struct CurrentFinalASRFixture {
     let meetingID: MeetingID
     let finalASRRunID: RunID
     let revisionID: RevisionID
+}
+
+private func writeFinishedDiarizationRun(
+    library: Library,
+    meetingID: MeetingID,
+    runID: RunID,
+    sourceRunID: RunID,
+    revisionID: RevisionID
+) throws {
+    let directory = library.layout.runDirectory(meetingID, runID: runID)
+    try FileManager.default.createDirectory(
+        at: directory,
+        withIntermediateDirectories: true
+    )
+    try JSONEncoder().encode(ProcessingRun(
+        id: runID,
+        meetingID: meetingID,
+        kind: .diarization,
+        engine: EngineDescriptor(name: "test", version: "1"),
+        status: .finished
+    )).write(to: library.layout.runMetadata(meetingID, runID: runID))
+    try JSONEncoder().encode(DiarizationArtifact(
+        jobID: JobID(),
+        sourceRunID: sourceRunID,
+        revisionID: revisionID,
+        tracks: []
+    )).write(to: library.layout.runDiarization(meetingID, runID: runID))
 }
 
 private func makeCurrentFinalASRFixture(

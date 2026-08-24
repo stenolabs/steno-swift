@@ -26,14 +26,16 @@ let package = Package(
         .library(name: "StenoExchange", targets: ["StenoExchange"]),
         .library(name: "StenoIntelligence", targets: ["StenoIntelligence"]),
         .library(name: "StenoPipeline", targets: ["StenoPipeline"]),
+        .library(name: "StenoDemo", targets: ["StenoDemo"]),
         .executable(name: "steno-smoke", targets: ["steno-smoke"]),
         .executable(name: "steno-transcribe", targets: ["steno-transcribe"]),
+        .executable(name: "steno-live-transcribe", targets: ["steno-live-transcribe"]),
         .executable(name: "steno-diarize-bench", targets: ["steno-diarize-bench"]),
     ],
     dependencies: [
         .package(
             url: "https://github.com/FluidInference/FluidAudio.git",
-            exact: "0.15.2"
+            exact: "0.15.5"
         ),
     ],
     targets: [
@@ -65,7 +67,11 @@ let package = Package(
         ),
         .target(
             name: "StenoTranscription",
-            dependencies: ["StenoDomain"],
+            dependencies: [
+                "StenoDomain",
+                .product(name: "FluidAudio", package: "FluidAudio"),
+            ],
+            resources: [.process("Resources")],
             swiftSettings: strictConcurrencySettings
         ),
         .target(
@@ -105,6 +111,16 @@ let package = Package(
             ],
             swiftSettings: strictConcurrencySettings
         ),
+        .target(
+            name: "StenoDemo",
+            dependencies: ["StenoDomain", "StenoLibrary"],
+            resources: [.copy("Resources/DemoDataset")],
+            swiftSettings: strictConcurrencySettings
+        ),
+        .target(
+            name: "StenoLiveBenchmarkSupport",
+            swiftSettings: strictConcurrencySettings
+        ),
         .executableTarget(
             name: "steno-diarize-bench",
             dependencies: ["StenoDiarization"],
@@ -113,6 +129,11 @@ let package = Package(
         .executableTarget(
             name: "steno-transcribe",
             dependencies: ["StenoTranscription"],
+            swiftSettings: strictConcurrencySettings
+        ),
+        .executableTarget(
+            name: "steno-live-transcribe",
+            dependencies: ["StenoLiveBenchmarkSupport", "StenoTranscription"],
             swiftSettings: strictConcurrencySettings
         ),
         .executableTarget(
@@ -125,6 +146,16 @@ let package = Package(
         .testTarget(
             name: "StenoDomainTests",
             dependencies: ["StenoDomain"],
+            swiftSettings: strictConcurrencySettings
+        ),
+        .testTarget(
+            name: "StenoDemoTests",
+            dependencies: ["StenoDemo", "StenoDomain", "StenoLibrary"],
+            swiftSettings: strictConcurrencySettings
+        ),
+        .testTarget(
+            name: "StenoLiveBenchmarkSupportTests",
+            dependencies: ["StenoLiveBenchmarkSupport"],
             swiftSettings: strictConcurrencySettings
         ),
         .testTarget(

@@ -9,8 +9,8 @@ import Testing
 struct MeetingReportsViewStateTests {
     @Test("button title follows immutable report presence")
     func buttonTitles() {
-        #expect(MeetingReportsViewState.actionTitle(hasReport: false) == "Generate minutes")
-        #expect(MeetingReportsViewState.actionTitle(hasReport: true) == "Regenerate")
+        #expect(english(MeetingReportsViewState.actionTitle(hasReport: false)) == "Generate minutes")
+        #expect(english(MeetingReportsViewState.actionTitle(hasReport: true)) == "Regenerate")
     }
 
     @Test(
@@ -32,7 +32,7 @@ struct MeetingReportsViewStateTests {
         )
 
         #expect(!state.canGenerate)
-        #expect(state.availabilityMessage == availability.unavailabilityMessage)
+        #expect(state.availabilityMessage.map(english) == availability.unavailabilityMessage)
     }
 
     @Test("a configured external endpoint is actionable without a probe")
@@ -60,8 +60,8 @@ struct MeetingReportsViewStateTests {
         )
 
         #expect(!state.canGenerate)
-        #expect(state.availabilityMessage?.contains("transcript") == true)
-        #expect(state.actionTitle == "Regenerate")
+        #expect(state.availabilityMessage.map { english($0).contains("transcript") } == true)
+        #expect(english(state.actionTitle) == "Regenerate")
     }
 
     @Test("unconfirmed speakers are a non-blocking warning")
@@ -75,7 +75,7 @@ struct MeetingReportsViewStateTests {
         )
 
         #expect(state.canGenerate)
-        #expect(state.speakerHint?.contains("unconfirmed") == true)
+        #expect(state.speakerHint.map { english($0).contains("unconfirmed") } == true)
     }
 
     @Test("copy and share always use the selected old version")
@@ -103,5 +103,11 @@ struct MeetingReportsViewStateTests {
                 createdAt: Date(timeIntervalSince1970: createdAt)
             )
         )
+    }
+
+    private func english(_ resource: LocalizedStringResource) -> String {
+        var resource = resource
+        resource.locale = Locale(identifier: "en")
+        return String(localized: resource)
     }
 }

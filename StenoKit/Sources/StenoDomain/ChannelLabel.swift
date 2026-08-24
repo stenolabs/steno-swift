@@ -1,7 +1,7 @@
 import Foundation
 
 /// Uebersetzt Kanal-Labels fuer die Anzeige. Kanal-Labels sind Datenwerte:
-/// Sie stehen so in jedem gespeicherten Transkript und in Alt-Importen.
+/// Sie stehen so in jedem gespeicherten Transkript und in bestehenden Alt-Importen.
 /// Uebersetzt wird deshalb nur die Anzeige, nie der gespeicherte Wert.
 ///
 /// Zwei getrennte Funktionen statt einer gemeinsamen, weil sie fachlich

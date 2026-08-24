@@ -165,6 +165,124 @@ struct MeetingSidebarStateTests {
         #expect(MeetingSidebarActionPolicy.actions(for: []).isEmpty)
     }
 
+    @Test("sidebar actions follow contextual availability")
+    func derivesAvailableContextActions() {
+        let ready = meeting(1)
+        let recording = Meeting(
+            id: meetingID(2),
+            title: "Recording",
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+            status: .recording
+        )
+
+        #expect(MeetingSidebarActionPolicy.actions(
+            for: MacMeetingCommandAvailability(
+                meetings: [ready],
+                selectedMeetingIDs: [ready.id],
+                meetingsWithAudio: [ready.id],
+                isRecording: false,
+                hasRuntime: true
+            )
+        ) == [
+            .rename,
+            .moveMeetings,
+            .retranscribe,
+            .export,
+            .trash,
+        ])
+        #expect(MeetingSidebarActionPolicy.actions(
+            for: MacMeetingCommandAvailability(
+                meetings: [recording],
+                selectedMeetingIDs: [recording.id],
+                meetingsWithAudio: [recording.id],
+                isRecording: true,
+                hasRuntime: true
+            )
+        ) == [
+            .rename,
+            .moveMeetings,
+            .export,
+        ])
+    }
+
+    @Test("meeting title validation normalizes whitespace before submission")
+    func validatesMeetingTitlesBeforeSubmission() {
+        #expect(MeetingTitleValidation.evaluate(title: " \n\t ") == .empty)
+        #expect(!MeetingTitleValidation.evaluate(title: " \n\t ").canSubmit)
+        #expect(MeetingTitleValidation.evaluate(
+            title: "  Quarterly\n  review  "
+        ) == .valid(normalizedTitle: "Quarterly review"))
+    }
+
+    @Test("folder name validation matches the store's sibling rules")
+    func validatesFolderNamesBeforeSubmission() {
+        let work = folder(1, name: "Work")
+        let product = folder(
+            2,
+            name: "Product",
+            parentFolderID: work.id
+        )
+        let privateFolder = folder(3, name: "Private")
+
+        #expect(SidebarNameValidation.evaluate(
+            name: " \n\t ",
+            parentFolderID: nil,
+            currentFolderID: nil,
+            folders: [work, product, privateFolder]
+        ) == .empty)
+        #expect(SidebarNameValidation.evaluate(
+            name: " work ",
+            parentFolderID: nil,
+            currentFolderID: nil,
+            folders: [work, product, privateFolder]
+        ) == .duplicate)
+        #expect(SidebarNameValidation.evaluate(
+            name: "PRODUCT",
+            parentFolderID: work.id,
+            currentFolderID: nil,
+            folders: [work, product, privateFolder]
+        ) == .duplicate)
+        #expect(SidebarNameValidation.evaluate(
+            name: " WORK ",
+            parentFolderID: nil,
+            currentFolderID: work.id,
+            folders: [work, product, privateFolder]
+        ) == .valid(normalizedName: "WORK"))
+        #expect(SidebarNameValidation.evaluate(
+            name: "Product",
+            parentFolderID: privateFolder.id,
+            currentFolderID: nil,
+            folders: [work, product, privateFolder]
+        ) == .valid(normalizedName: "Product"))
+    }
+
+    @Test("folder validation help is a localized resource")
+    func localizesFolderValidationHelp() throws {
+        let emptyMessage = try #require(SidebarNameValidation.evaluate(
+            name: " \n\t ",
+            parentFolderID: nil,
+            currentFolderID: nil,
+            folders: []
+        ).message)
+        let duplicate = folder(1, name: "Work")
+        let duplicateMessage = try #require(SidebarNameValidation.evaluate(
+            name: "work",
+            parentFolderID: nil,
+            currentFolderID: nil,
+            folders: [duplicate]
+        ).message)
+        let english = Locale(identifier: "en_US_POSIX")
+        var localizedEmptyMessage = emptyMessage
+        localizedEmptyMessage.locale = english
+        var localizedDuplicateMessage = duplicateMessage
+        localizedDuplicateMessage.locale = english
+
+        #expect(String(localized: localizedEmptyMessage)
+            == "Enter a folder name.")
+        #expect(String(localized: localizedDuplicateMessage)
+            == "A folder with this name already exists here.")
+    }
+
     @Test("drag payloads round-trip without meeting contents")
     func transferPayloadsRoundTrip() throws {
         let a = meetingID(2)

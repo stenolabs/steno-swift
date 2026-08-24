@@ -53,9 +53,19 @@ struct CaptureRecoveryTests {
         let (library, jobStore, root) = try makeLibrary()
         defer { try? FileManager.default.removeItem(at: root) }
 
+        let plan = TranscriptionPlan(
+            liveProviderID: .apple,
+            finalProviderID: .parakeetTDTv3
+        )
+        let sourceLocale = try MeetingSourceLocale(
+            localeIdentifier: "de-DE",
+            origin: .explicit
+        )
         let meeting = try await library.createMeeting(
             title: "Killed",
-            status: .recording
+            status: .recording,
+            sourceLocale: sourceLocale,
+            transcriptionPlan: plan
         )
         _ = try writeCaptureFile(library, meetingID: meeting.id, track: .microphone)
         _ = try writeCaptureFile(library, meetingID: meeting.id, track: .system)
@@ -67,10 +77,11 @@ struct CaptureRecoveryTests {
         #expect(interrupted == [meeting.id])
         #expect(try await jobStore.list().isEmpty)
 
-        let adopted = try await CaptureRecovery.run(
+        let report = try await CaptureRecovery.run(
             library: library,
             jobStore: jobStore
         )
+        let adopted = report.adoptedMeetings
         #expect(adopted.count == 1)
         #expect(adopted[0].adoptedTracks.sorted { $0.rawValue < $1.rawValue }
             == [.microphone, .system])
@@ -81,6 +92,8 @@ struct CaptureRecoveryTests {
         let jobs = try await jobStore.list()
         #expect(jobs.count == 1)
         #expect(jobs[0].kind == .finalASR && jobs[0].status == .queued)
+        #expect(jobs[0].transcriptionProviderID == .parakeetTDTv3)
+        #expect(jobs[0].localeIdentifier == "de-DE")
 
         let captureLeftovers = (try? FileManager.default.contentsOfDirectory(
             at: library.layout.captureDirectory(meeting.id),
@@ -121,11 +134,98 @@ struct CaptureRecoveryTests {
         defer { try? FileManager.default.removeItem(at: root) }
 
         _ = try await library.createMeeting(title: "Clean", status: .interrupted)
-        let adopted = try await CaptureRecovery.run(
+        let report = try await CaptureRecovery.run(
             library: library,
             jobStore: jobStore
         )
-        #expect(adopted.isEmpty)
+        #expect(report.adoptedMeetings.isEmpty)
+        #expect(report.failures.isEmpty)
         #expect(try await jobStore.list().isEmpty)
+    }
+
+    @Test("a corrupt meeting does not block recovery of another meeting")
+    func corruptMeetingIsIsolated() async throws {
+        let (library, jobStore, root) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let corrupt = try await library.createMeeting(
+            title: "Corrupt",
+            status: .interrupted
+        )
+        let recoverable = try await library.createMeeting(
+            title: "Recoverable",
+            status: .interrupted
+        )
+        let corruptCapture = try writeCaptureFile(
+            library,
+            meetingID: corrupt.id,
+            track: .microphone
+        )
+        _ = try writeCaptureFile(
+            library,
+            meetingID: recoverable.id,
+            track: .microphone
+        )
+        try Data("{".utf8).write(
+            to: library.layout.meetingMetadata(corrupt.id)
+        )
+
+        let report = try await CaptureRecovery.run(
+            library: library,
+            jobStore: jobStore
+        )
+
+        #expect(report.adoptedMeetings.map(\.meetingID) == [recoverable.id])
+        #expect(report.failures.contains {
+            $0.meetingID == corrupt.id && $0.stage == .meetingMetadata
+        })
+        #expect(FileManager.default.fileExists(atPath: corruptCapture.path))
+        #expect(
+            try await library.listMediaAssets(meetingID: recoverable.id).count == 1
+        )
+    }
+
+    @Test("an unreadable capture file does not block another track")
+    func unreadableCaptureFileIsIsolated() async throws {
+        let (library, jobStore, root) = try makeLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let meeting = try await library.createMeeting(
+            title: "Partly recoverable",
+            status: .interrupted
+        )
+        let directory = library.layout.captureDirectory(meeting.id)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        let unreadable = directory.appendingPathComponent(
+            "\(meeting.id)-microphone-\(UUID()).caf"
+        )
+        try Data([0x00, 0x01, 0x02]).write(to: unreadable)
+        _ = try writeCaptureFile(
+            library,
+            meetingID: meeting.id,
+            track: .system
+        )
+
+        let report = try await CaptureRecovery.run(
+            library: library,
+            jobStore: jobStore
+        )
+
+        #expect(report.adoptedMeetings == [
+            CaptureRecovery.AdoptedMeeting(
+                meetingID: meeting.id,
+                adoptedTracks: [.system]
+            ),
+        ])
+        #expect(report.failures.contains {
+            $0.meetingID == meeting.id
+                && $0.fileName == unreadable.lastPathComponent
+                && $0.stage == .captureFile
+        })
+        #expect(FileManager.default.fileExists(atPath: unreadable.path))
+        #expect(try await jobStore.list().count == 1)
     }
 }

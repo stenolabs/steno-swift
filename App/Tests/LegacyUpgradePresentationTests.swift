@@ -1,5 +1,6 @@
 import Foundation
 import StenoDomain
+import StenoTranscription
 import Testing
 @testable import steno_macos
 
@@ -138,6 +139,21 @@ struct LegacyUpgradePresentationTests {
         ) == .hidden)
     }
 
+    @Test("Demo revisions never masquerade as completed legacy review")
+    func demoRevisionDoesNotMatchLegacyReview() {
+        let provenance = DemoProvenance(
+            datasetID: "synthetic-demo",
+            datasetVersion: "1",
+            itemID: "meeting-1"
+        )
+
+        #expect(state(
+            revision: makeRevision(origin: .demo(provenance)),
+            reviewRunID: RunID(),
+            needsTranscriptionFirst: false
+        ) == .ready(actionTitle: "Detect speakers"))
+    }
+
     @Test("Every processing job has an explicit step")
     func stepTitles() {
         #expect(LegacyUpgradePresentation.stepTitle(for: .finalASR)
@@ -186,15 +202,58 @@ struct LegacyUpgradePresentationTests {
         )
     }
 
+    @Test("a pinned final transcription names its own model")
+    func modelTitleNamesThePinnedProvider() {
+        let job = makeJob(
+            kind: .finalASR,
+            status: .running,
+            transcriptionProviderID: .parakeetTDTv3
+        )
+
+        let title = LegacyUpgradePresentation.modelTitle(for: job)
+
+        #expect(title == TranscriptionModelCatalog.standard
+            .descriptor(for: .parakeetTDTv3)?.displayName)
+    }
+
+    @Test("a job from before the model choice reads as Apple, not as unknown")
+    func modelTitleFallsBackToApple() {
+        // Altbestand traegt keinen Pin. Der Koordinator loest ihn als Apple
+        // auf, also steht hier dasselbe - keine Vermutung, sondern die
+        // Aufloesung, die tatsaechlich laeuft.
+        let job = makeJob(kind: .finalASR, status: .running)
+
+        let title = LegacyUpgradePresentation.modelTitle(for: job)
+
+        #expect(title == TranscriptionModelCatalog.standard
+            .descriptor(for: .apple)?.displayName)
+    }
+
+    @Test("steps without a model choice name their local processing")
+    func modelTitleForNonTranscriptionSteps() {
+        #expect(
+            LegacyUpgradePresentation.modelTitle(
+                for: makeJob(kind: .diarization, status: .running)
+            ) == "FluidAudio speaker separation"
+        )
+        #expect(
+            LegacyUpgradePresentation.modelTitle(
+                for: makeJob(kind: .templateRender, status: .running)
+            ) == "Local processing"
+        )
+    }
+
     private func makeJob(
         kind: Job.Kind,
         status: Job.Status,
         createdAt: Date = Date(),
-        errorMessage: String? = nil
+        errorMessage: String? = nil,
+        transcriptionProviderID: TranscriptionProviderID? = nil
     ) -> Job {
         Job(
             kind: kind,
             meetingID: meetingID,
+            transcriptionProviderID: transcriptionProviderID,
             status: status,
             createdAt: createdAt,
             errorMessage: errorMessage

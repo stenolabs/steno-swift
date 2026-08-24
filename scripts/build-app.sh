@@ -3,24 +3,21 @@
 # Nutzung: scripts/build-app.sh [--run]
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+SCRIPT_DIRECTORY="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=require-native-apple-silicon.sh
+source "$SCRIPT_DIRECTORY/require-native-apple-silicon.sh"
+require_native_apple_silicon
+
+cd "$SCRIPT_DIRECTORY/.."
 
 xcodegen generate --quiet
 
-if [[ -n "${DEVELOPMENT_TEAM:-}" ]]; then
-    xcodebuild -project Steno.xcodeproj \
-        -scheme Steno \
-        -configuration Debug \
-        DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
-        -derivedDataPath .build/DerivedData \
-        build | tail -5
-else
-    xcodebuild -project Steno.xcodeproj \
-        -scheme Steno \
-        -configuration Debug \
-        -derivedDataPath .build/DerivedData \
-        build | tail -5
-fi
+xcodebuild -project Steno.xcodeproj \
+    -scheme Steno \
+    -arch arm64 \
+    -configuration Debug \
+    -derivedDataPath .build/DerivedData \
+    build | tail -5
 
 APP=".build/DerivedData/Build/Products/Debug/steno-macos.app"
 echo "App: $PWD/$APP"

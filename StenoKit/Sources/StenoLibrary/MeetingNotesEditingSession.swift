@@ -8,6 +8,11 @@ public final class MeetingNotesEditingSession {
     public private(set) var text = ""
     public private(set) var isSaving = false
     public private(set) var errorMessage: String?
+    public private(set) var loadFailed = false
+
+    public var canEdit: Bool {
+        hasLoaded && !loadFailed && removalState == .active
+    }
 
     private let meetingID: MeetingID
     private let store: any MeetingNotesPersistence
@@ -15,11 +20,14 @@ public final class MeetingNotesEditingSession {
     private var savedText = ""
     private var generation = 0
     private var hasLoaded = false
+    private var removalState: RemovalState = .active
 
     @ObservationIgnored
     private var saveTask: Task<Void, Never>?
     @ObservationIgnored
     private var loadTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var preparationTask: Task<Void, Error>?
 
     public init(
         meetingID: MeetingID,
@@ -58,15 +66,18 @@ public final class MeetingNotesEditingSession {
             savedText = loaded
             isSaving = false
             errorMessage = nil
+            loadFailed = false
             hasLoaded = true
         } catch {
             guard generation == loadGeneration else { return }
             isSaving = false
             errorMessage = error.localizedDescription
+            loadFailed = true
         }
     }
 
     public func update(_ value: String) {
+        guard canEdit else { return }
         text = value
         generation += 1
         let updateGeneration = generation
@@ -92,6 +103,7 @@ public final class MeetingNotesEditingSession {
     }
 
     public func appendMarker(elapsed: TimeInterval) async {
+        guard canEdit else { return }
         let pendingSave = saveTask
         pendingSave?.cancel()
 
@@ -114,6 +126,11 @@ public final class MeetingNotesEditingSession {
     }
 
     public func flush() async {
+        guard canEdit else {
+            saveTask?.cancel()
+            isSaving = false
+            return
+        }
         let pendingSave = saveTask
         pendingSave?.cancel()
         generation += 1
@@ -129,8 +146,80 @@ public final class MeetingNotesEditingSession {
         await persist(value, generation: flushGeneration)
     }
 
+    func prepareForMeetingRemoval() async throws {
+        if let preparationTask {
+            try await preparationTask.value
+            return
+        }
+        switch removalState {
+        case .prepared, .completed:
+            return
+        case .preparing:
+            return
+        case .active:
+            break
+        }
+
+        removalState = .preparing
+        let pendingLoad = loadTask
+
+        let task = Task<Void, Error> { [self] in
+            defer { preparationTask = nil }
+            await pendingLoad?.value
+            guard removalState == .preparing else { return }
+            guard hasLoaded, !loadFailed else {
+                isSaving = false
+                removalState = .prepared
+                return
+            }
+
+            let pendingSave = saveTask
+            saveTask = nil
+            pendingSave?.cancel()
+            generation += 1
+            let preparationGeneration = generation
+            let value = text
+            isSaving = true
+
+            await pendingSave?.value
+            guard removalState == .preparing, generation == preparationGeneration else { return }
+
+            do {
+                try await store.setNotes(meetingID, to: value)
+                guard removalState == .preparing, generation == preparationGeneration else { return }
+                savedText = value
+                isSaving = false
+                errorMessage = nil
+                removalState = .prepared
+            } catch {
+                guard removalState == .preparing, generation == preparationGeneration else {
+                    throw error
+                }
+                isSaving = false
+                errorMessage = error.localizedDescription
+                removalState = .active
+                throw error
+            }
+        }
+        preparationTask = task
+        try await task.value
+    }
+
+    func cancelMeetingRemoval() {
+        guard removalState == .prepared else { return }
+        removalState = .active
+    }
+
+    func completeMeetingRemoval() {
+        removalState = .completed
+        generation += 1
+        saveTask?.cancel()
+        saveTask = nil
+        isSaving = false
+    }
+
     private func persist(_ value: String, generation expectedGeneration: Int) async {
-        guard generation == expectedGeneration else { return }
+        guard canEdit, generation == expectedGeneration else { return }
         do {
             try await store.setNotes(meetingID, to: value)
             guard generation == expectedGeneration else { return }
@@ -142,5 +231,12 @@ public final class MeetingNotesEditingSession {
             isSaving = false
             errorMessage = error.localizedDescription
         }
+    }
+
+    private enum RemovalState {
+        case active
+        case preparing
+        case prepared
+        case completed
     }
 }

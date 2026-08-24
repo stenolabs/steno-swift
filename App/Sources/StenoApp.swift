@@ -9,7 +9,7 @@ struct StenoApp: App {
     @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
-        WindowGroup {
+        Window("Meetings", id: "main") {
             ContentView()
                 .environment(model)
                 .environment(textModelSettings)
@@ -19,12 +19,10 @@ struct StenoApp: App {
                     // Vor `bootstrap`, damit der erste Start nicht erst die
                     // Bibliothek oeffnet und dann den Wizard nachschiebt.
                     if !onboarding.isFinished { openWindow(id: "onboarding") }
-                    // Beide TCC-Entscheidungen sind vor der ersten Aufnahme
-                    // geklaert. Der invasive Systemaudio-Probelauf geschieht
-                    // einmal pro Code-Signaturidentitaet; spaetere Starts mit
-                    // derselben Identitaet verwenden den gespeicherten Status.
-                    // Der Wizard kann bewusst erneut pruefen.
-                    await model.resolveRecordingPermissions()
+                    // Beim Start nur vorhandene TCC-Entscheidungen lesen.
+                    // Anfordern darf erst der erklaerende Wizard oder der
+                    // ausdrueckliche erste Aufnahmeversuch.
+                    model.refreshRecordingPermissionStatus()
                     await model.bootstrap()
                 }
         }
@@ -32,64 +30,17 @@ struct StenoApp: App {
         // blieben dem Transkript keine 500 pt.
         .defaultSize(width: 1240, height: 780)
         .commands {
-            // Ohne Menueeintraege sind Aufnehmen und Importieren nur ueber die
-            // Toolbar erreichbar - und damit auch nicht ueber die Hilfe-Suche
-            // im Menue, die auf dem Mac zur Auffindbarkeit gehoert.
-            CommandMenu("Recording") {
-                Button("Start Recording") {
-                    Task { await model.startRecording() }
-                }
-                .keyboardShortcut("r")
-                .disabled(
-                    model.runtime == nil
-                        || model.isRecording
-                        || model.isStartingRecording
-                )
-
-                // Bewusst NICHT auf Cmd-R: Das ist in jedem Browser
-                // "neu laden". Ein Reflex in der falschen App beendete sonst
-                // die laufende Aufnahme und zerrisse das Meeting in zwei
-                // Haelften. Cmd-Punkt ist die Mac-Konvention fuer Abbrechen.
-                Button("Stop Recording") {
-                    Task { await model.stopRecording() }
-                }
-                .keyboardShortcut(".", modifiers: [.command])
-                .disabled(!model.isRecording)
-
-                Divider()
-
-                Button("Mark This Moment") {
-                    Task { await model.markMoment() }
-                }
-                .keyboardShortcut("m")
-                .disabled(!model.isRecording)
-            }
-            CommandGroup(after: .newItem) {
-                Button("New Meeting") {
-                    Task { await model.createDraftMeeting() }
-                }
-                .keyboardShortcut("n")
-                .disabled(model.runtime == nil)
-            }
-            CommandGroup(after: .importExport) {
-                Button("Import Audio File…") {
-                    model.requestAudioImport()
-                }
-                .keyboardShortcut("i")
-                .disabled(model.runtime == nil || model.isRecording)
-
-                Button("Import from Legacy Steno App…") {
+            StenoCommands(
+                model: model,
+                openLegacyImport: {
                     openWindow(id: "legacy-import")
-                }
-            }
-            CommandGroup(replacing: .help) {
-                // Der Wizard ist sonst einmalig: wer ihn beim ersten Start
-                // weggeklickt hat, kaeme ohne diesen Eintrag nie mehr hin.
-                Button("Show Setup Assistant") {
+                },
+                openSetupAssistant: {
                     onboarding.reopen()
                     openWindow(id: "onboarding")
                 }
-            }
+            )
+            ToolbarCommands()
         }
 
         Window("Import from Legacy Steno App", id: "legacy-import") {

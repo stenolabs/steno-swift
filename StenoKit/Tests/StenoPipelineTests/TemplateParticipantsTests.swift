@@ -200,7 +200,7 @@ struct TemplateParticipantsTests {
         let ada = Person(
             displayName: "Ada Lovelace",
             email: "ada@example.org",
-            organization: "Example GmbH"
+            organization: "Muster GmbH"
         )
         let review = makeReview(
             runID: runID,
@@ -215,7 +215,7 @@ struct TemplateParticipantsTests {
 
         // Die Firma hilft dem Modell, sie richtig zu schreiben; die Adresse
         // ist reines Ordnungsmerkmal und hat im Prompt nichts verloren.
-        #expect(names == ["Ada Lovelace (Example GmbH)"])
+        #expect(names == ["Ada Lovelace (Muster GmbH)"])
         #expect(!names.contains { $0.contains("@") })
     }
 

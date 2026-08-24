@@ -8,6 +8,33 @@ import Testing
 
 @Suite("Final ASR pipeline")
 struct PipelineCoordinatorTests {
+    @Test("pipeline startup leaves an active recording untouched")
+    func startupLeavesActiveRecordingUntouched() async throws {
+        try await withTemporaryDirectory { root in
+            let library = try Library.open(at: root)
+            let active = try await library.createMeeting(
+                title: "Active",
+                status: .recording
+            )
+            let inactive = try await library.createMeeting(
+                title: "Inactive",
+                status: .recording
+            )
+
+            let runtime = try await startPipeline(
+                at: root,
+                providers: [:],
+                diarizationProvider: FakeDiarizationProvider(behavior: .succeed),
+                locale: Locale(identifier: "de-DE"),
+                activeMeetingIDs: [active.id]
+            )
+            defer { Task { await runtime.coordinator.stop() } }
+
+            #expect(try await runtime.library.loadMeeting(active.id).status == .recording)
+            #expect(try await runtime.library.loadMeeting(inactive.id).status == .interrupted)
+        }
+    }
+
     @Test("a clone cleanup failure is visible and retried by the next startup")
     func cloneCleanupFailureIsVisibleAndRetryable() async throws {
         try await withTemporaryDirectory { root in
@@ -462,11 +489,11 @@ struct PipelineCoordinatorTests {
 
     @Test("generation-pinned imported job does not execute against a replacement meeting")
     func staleImportedJobIsCancelledBeforeProviderExecution() async throws {
-        try await withTemporaryDirectory { root in
+        try await withBlockingTemporaryDirectory { root in
             let fixture = try await makeImportedPipelineFixture(at: root)
             let oldGeneration = try #require(fixture.job.importGenerationID)
             let provider = FakeTranscriptionProvider(behavior: .succeed)
-            let pause = PipelineStatePause()
+            let pause = BlockingTestPause(name: "imported generation validation")
             let coordinator = PipelineCoordinator(
                 library: fixture.library,
                 jobStore: fixture.jobStore,
@@ -478,7 +505,8 @@ struct PipelineCoordinatorTests {
                         fixture.job.id
                     ) else { return }
                     pause.arriveAndWait()
-                }
+                },
+                taskExecutorPreference: blockingTestExecutorPreference
             )
             await coordinator.start()
             try await eventually { pause.hasArrived }
@@ -525,13 +553,13 @@ struct PipelineCoordinatorTests {
 
     @Test("generation-bound media stays pinned while a meeting is replaced during inference")
     func generationBoundMediaLeaseRejectsReplacementCommits() async throws {
-        try await withTemporaryDirectory { root in
+        try await withBlockingTemporaryDirectory { root in
             let fixture = try await makeImportedPipelineFixture(at: root)
             let originalGeneration = try #require(fixture.job.importGenerationID)
             let originalBytes = Data(MediaAsset.Kind.micTrack.rawValue.utf8)
             let replacementBytes = Data(MediaAsset.Kind.systemTrack.rawValue.utf8)
             let provider = FakeTranscriptionProvider(behavior: .succeed)
-            let pause = PipelineStatePause()
+            let pause = BlockingTestPause(name: "generation-bound media lease")
             let coordinator = PipelineCoordinator(
                 library: fixture.library,
                 jobStore: fixture.jobStore,
@@ -543,7 +571,8 @@ struct PipelineCoordinatorTests {
                         fixture.job.id
                     ) else { return }
                     pause.arriveAndWait()
-                }
+                },
+                taskExecutorPreference: blockingTestExecutorPreference
             )
             await coordinator.start()
             try await eventually { pause.hasArrived }
@@ -688,9 +717,9 @@ struct PipelineCoordinatorTests {
 
     @Test("imported failure cannot overwrite a newer processing request")
     func importedFailureTransitionIsMonotonic() async throws {
-        try await withTemporaryDirectory { root in
+        try await withBlockingTemporaryDirectory { root in
             let fixture = try await makeImportedPipelineFixture(at: root)
-            let pause = PipelineStatePause()
+            let pause = BlockingTestPause(name: "imported failure transition")
             let coordinator = PipelineCoordinator(
                 library: fixture.library,
                 jobStore: fixture.jobStore,
@@ -700,7 +729,8 @@ struct PipelineCoordinatorTests {
                 importedStateCheckpoint: { checkpoint in
                     guard checkpoint == .beforeManualRetryTransition(fixture.job.id) else { return }
                     pause.arriveAndWait()
-                }
+                },
+                taskExecutorPreference: blockingTestExecutorPreference
             )
             await coordinator.start()
             try await eventually { pause.hasArrived }
@@ -724,10 +754,10 @@ struct PipelineCoordinatorTests {
 
     @Test("imported cancellation cannot overwrite a newer processing request")
     func importedCancellationTransitionIsMonotonic() async throws {
-        try await withTemporaryDirectory { root in
+        try await withBlockingTemporaryDirectory { root in
             let fixture = try await makeImportedPipelineFixture(at: root)
             let provider = FakeTranscriptionProvider(behavior: .block)
-            let pause = PipelineStatePause()
+            let pause = BlockingTestPause(name: "imported cancellation transition")
             let coordinator = PipelineCoordinator(
                 library: fixture.library,
                 jobStore: fixture.jobStore,
@@ -737,7 +767,8 @@ struct PipelineCoordinatorTests {
                 importedStateCheckpoint: { checkpoint in
                     guard checkpoint == .beforeManualRetryTransition(fixture.job.id) else { return }
                     pause.arriveAndWait()
-                }
+                },
+                taskExecutorPreference: blockingTestExecutorPreference
             )
             await coordinator.start()
             try await eventually {
@@ -745,7 +776,9 @@ struct PipelineCoordinatorTests {
                 let calls = await provider.callCount()
                 return running && calls == 1
             }
-            let cancellation = Task { try await coordinator.cancel(jobID: fixture.job.id) }
+            let cancellation = blockingTestTask {
+                try await coordinator.cancel(jobID: fixture.job.id)
+            }
             try await eventually { pause.hasArrived }
             let newer = ImportedProcessingRequest(
                 id: MeetingTransferRequestID(),
@@ -818,6 +851,29 @@ struct PipelineCoordinatorTests {
         #expect(PipelineCompletionPolicy.shouldMarkMeetingReady(
             after: current,
             jobs: [current, finishedDownstream]
+        ))
+    }
+
+    @Test("stale queued work cannot keep the current generation processing")
+    func completionIgnoresStaleGeneration() {
+        let meetingID = MeetingID()
+        let currentGeneration = MeetingTransferGenerationID()
+        let current = Job(
+            kind: .finalASR,
+            meetingID: meetingID,
+            importGenerationID: currentGeneration,
+            status: .running
+        )
+        let stale = Job(
+            kind: .diarization,
+            meetingID: meetingID,
+            importGenerationID: MeetingTransferGenerationID(),
+            status: .queued
+        )
+
+        #expect(PipelineCompletionPolicy.shouldMarkMeetingReady(
+            after: current,
+            jobs: [current, stale]
         ))
     }
 
@@ -1065,6 +1121,93 @@ struct PipelineCoordinatorTests {
         }
     }
 
+    @Test("a pinned Parakeet job resolves Parakeet for every asset")
+    func pinnedProviderIsResolvedPerJob() async throws {
+        try await withTemporaryDirectory { root in
+            let fixture = try await makePipelineFixture(
+                at: root,
+                transcriptionProviderID: .parakeetTDTv3
+            )
+            let provider = FakeTranscriptionProvider(behavior: .succeed)
+            let resolutions = Mutex<[(TranscriptionProviderID, MediaAsset.Kind)]>([])
+            let coordinator = PipelineCoordinator(
+                library: fixture.library,
+                jobStore: fixture.jobStore,
+                transcriptionProviderResolver: { providerID, assetKind in
+                    resolutions.withLock { $0.append((providerID, assetKind)) }
+                    return provider
+                },
+                diarizationProvider: FakeDiarizationProvider(behavior: .succeed),
+                locale: Locale(identifier: "de-DE")
+            )
+
+            await coordinator.start()
+            try await coordinator.waitUntilIdle()
+
+            #expect(try await fixture.jobStore.load(fixture.job.id).status == .finished)
+            let resolved = resolutions.withLock { $0 }
+            #expect(resolved.count == 2)
+            #expect(resolved.allSatisfy { $0.0 == .parakeetTDTv3 })
+            #expect(Set(resolved.map(\.1)) == [.micTrack, .systemTrack])
+            await coordinator.stop()
+        }
+    }
+
+    @Test("an unpinned legacy job resolves Apple")
+    func legacyJobResolvesApple() async throws {
+        try await withTemporaryDirectory { root in
+            let fixture = try await makePipelineFixture(at: root)
+            let provider = FakeTranscriptionProvider(behavior: .succeed)
+            let resolvedProviderIDs = Mutex<[TranscriptionProviderID]>([])
+            let coordinator = PipelineCoordinator(
+                library: fixture.library,
+                jobStore: fixture.jobStore,
+                transcriptionProviderResolver: { providerID, _ in
+                    resolvedProviderIDs.withLock { $0.append(providerID) }
+                    return provider
+                },
+                diarizationProvider: FakeDiarizationProvider(behavior: .succeed),
+                locale: Locale(identifier: "de-DE")
+            )
+
+            await coordinator.start()
+            try await coordinator.waitUntilIdle()
+
+            #expect(try await fixture.jobStore.load(fixture.job.id).status == .finished)
+            #expect(resolvedProviderIDs.withLock { $0 } == [.apple, .apple])
+            await coordinator.stop()
+        }
+    }
+
+    @Test("a job pinned to an unregistered provider fails instead of falling back to Apple")
+    func unregisteredPinnedProviderFailsWithoutAppleFallback() async throws {
+        try await withTemporaryDirectory { root in
+            let fixture = try await makePipelineFixture(
+                at: root,
+                transcriptionProviderID: .parakeetTDTv3
+            )
+            // appleOnly kennt nur .apple; ein gepinnter Parakeet-Job darf
+            // niemals still auf Apple umgebogen werden, sondern muss mit
+            // klarer Meldung scheitern.
+            let coordinator = PipelineCoordinator(
+                library: fixture.library,
+                jobStore: fixture.jobStore,
+                transcriptionProviderResolver: TranscriptionProviderRegistry.appleOnly.resolve,
+                diarizationProvider: FakeDiarizationProvider(behavior: .succeed),
+                locale: Locale(identifier: "de-DE")
+            )
+
+            await coordinator.start()
+            try await coordinator.waitUntilIdle()
+
+            let job = try await fixture.jobStore.load(fixture.job.id)
+            #expect(job.status == .failed)
+            #expect(job.errorMessage == TranscriptionRegistryError
+                .unknownProvider(.parakeetTDTv3).errorDescription)
+            await coordinator.stop()
+        }
+    }
+
     @Test("a final ASR revision remains a candidate when the current revision is a user edit")
     func preservesUserEdits() async throws {
         try await withTemporaryDirectory { root in
@@ -1125,7 +1268,12 @@ struct PipelineCoordinatorTests {
                 return status == .running && callCount == 1
             }
 
-            await interrupted.stop()
+            try await simulateAbruptExit(
+                of: interrupted,
+                whileRunning: fixture.job.id,
+                jobStore: fixture.jobStore,
+                library: fixture.library
+            )
 
             #expect(try await fixture.jobStore.load(fixture.job.id).status == .running)
             #expect(try temporaryRunDirectories(
@@ -1216,6 +1364,75 @@ struct PipelineCoordinatorTests {
             ).isEmpty)
             #expect(try pipelineSnapshotSessions(library: fixture.library).isEmpty)
             await coordinator.stop()
+        }
+    }
+
+    @Test("cancellation persistence failure terminates the job and the caller")
+    func cancellationPersistenceFailureDoesNotWaitForever() async throws {
+        try await withTemporaryDirectory { root in
+            let fixture = try await makePipelineFixture(at: root)
+            let provider = FakeTranscriptionProvider(behavior: .block)
+            // Der Schreibfehler wird direkt am Abbruchpfad injiziert statt
+            // ueber Verzeichnisrechte erzwungen. Letzteres war ein Rennen
+            // gegen den Koordinator: hatte der zum Zeitpunkt des chmod schon
+            // geschrieben, gab es beim Abbruch nichts mehr zu persistieren,
+            // und der erwartete Fehler blieb sporadisch aus.
+            let coordinator = PipelineCoordinator(
+                library: fixture.library,
+                jobStore: fixture.jobStore,
+                providers: providers(using: provider),
+                diarizationProvider: FakeDiarizationProvider(behavior: .succeed),
+                locale: Locale(identifier: "de-DE"),
+                importedStateCheckpoint: { _ in },
+                cancellationPersistenceCheckpoint: { checkpoint in
+                    guard checkpoint == .beforeRemoveTemporaryArtifacts(fixture.job.id) else {
+                        return
+                    }
+                    throw PipelineCleanupTestError.injected
+                }
+            )
+            await coordinator.start()
+            try await eventually {
+                let status = try await fixture.jobStore.load(fixture.job.id).status
+                let callCount = await provider.callCount()
+                return status == .running && callCount == 1
+            }
+
+            var reportedPersistenceFailure = false
+            do {
+                try await coordinator.cancel(jobID: fixture.job.id)
+            } catch is PipelineError {
+                reportedPersistenceFailure = true
+            }
+
+            #expect(reportedPersistenceFailure)
+            #expect(try await fixture.jobStore.load(fixture.job.id).status == .failed)
+            await coordinator.stop()
+        }
+    }
+
+    @Test("stopping the coordinator never leaves its active job running")
+    func stopTerminatesTheActiveJob() async throws {
+        try await withTemporaryDirectory { root in
+            let fixture = try await makePipelineFixture(at: root)
+            let provider = FakeTranscriptionProvider(behavior: .block)
+            let coordinator = PipelineCoordinator(
+                library: fixture.library,
+                jobStore: fixture.jobStore,
+                providers: providers(using: provider),
+                diarizationProvider: FakeDiarizationProvider(behavior: .succeed),
+                locale: Locale(identifier: "de-DE")
+            )
+            await coordinator.start()
+            try await eventually {
+                let status = try await fixture.jobStore.load(fixture.job.id).status
+                let callCount = await provider.callCount()
+                return status == .running && callCount == 1
+            }
+
+            await coordinator.stop()
+
+            #expect(try await fixture.jobStore.load(fixture.job.id).status == .failed)
         }
     }
 
@@ -1396,21 +1613,5 @@ private actor CompletionProbe {
 
     func isCompleted() -> Bool {
         completed
-    }
-}
-
-private final class PipelineStatePause: @unchecked Sendable {
-    private let arrived = Mutex(false)
-    private let resume = DispatchSemaphore(value: 0)
-
-    var hasArrived: Bool { arrived.withLock { $0 } }
-
-    func arriveAndWait() {
-        arrived.withLock { $0 = true }
-        resume.wait()
-    }
-
-    func release() {
-        resume.signal()
     }
 }

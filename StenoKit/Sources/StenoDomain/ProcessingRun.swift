@@ -27,6 +27,7 @@ public struct ProcessingRun: Codable, Equatable, Sendable {
     public var startedAt: Date?
     public var finishedAt: Date?
     public var errorMessage: String?
+    public var textModelDiagnostic: TextModelRunDiagnostic?
 
     public init(
         schemaVersion: Int = Self.currentSchemaVersion,
@@ -39,7 +40,8 @@ public struct ProcessingRun: Codable, Equatable, Sendable {
         createdAt: Date = Date(),
         startedAt: Date? = nil,
         finishedAt: Date? = nil,
-        errorMessage: String? = nil
+        errorMessage: String? = nil,
+        textModelDiagnostic: TextModelRunDiagnostic? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.id = id
@@ -52,6 +54,7 @@ public struct ProcessingRun: Codable, Equatable, Sendable {
         self.startedAt = startedAt
         self.finishedAt = finishedAt
         self.errorMessage = errorMessage
+        self.textModelDiagnostic = textModelDiagnostic
     }
 
     public enum Kind: String, Codable, Equatable, Sendable {

@@ -62,4 +62,30 @@ struct MeetingProcessingJobRequestTests {
             )
         }
     }
+
+    @Test("generic demo processing returns the current installation generation")
+    func demoMeetingReturnsGenerationPin() async throws {
+        try await withTemporaryDirectory { root in
+            let library = try Library.open(at: root)
+            let generation = MeetingTransferGenerationID()
+            let meeting = try await library.createMeeting(
+                title: "Demo",
+                status: .ready,
+                metadata: MeetingMetadata(demoProvenance: DemoProvenance(
+                    datasetID: "steno-demo-v1",
+                    datasetVersion: "v2",
+                    itemID: "demo",
+                    installationGenerationID: generation
+                ))
+            )
+
+            let pin = try await MeetingProcessingJobRequest
+                .requireUnpinnedJobAllowed(
+                    library: library,
+                    meetingID: meeting.id
+                )
+
+            #expect(pin == generation)
+        }
+    }
 }

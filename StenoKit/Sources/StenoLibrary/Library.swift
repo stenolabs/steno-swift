@@ -1,6 +1,110 @@
 import CryptoKit
+import Darwin
 import Foundation
 import StenoDomain
+
+package enum LibraryMeetingMutationCheckpoint: Equatable, Sendable {
+    case afterExclusiveTransactionBeforeRead
+    case afterMeetingTrashMove(MeetingID)
+}
+
+package typealias LibraryMeetingMutationAction = @Sendable (
+    LibraryMeetingMutationCheckpoint,
+    LibraryMutationTransaction
+) throws -> Void
+
+package enum RecoverableMeetingTrashResult: Equatable, Sendable {
+    case trashed(URL)
+    case commitOutcomeUncertain
+}
+
+package struct MediaAssetFileOperations: Sendable {
+    package let rename: @Sendable (URL, URL) throws -> Void
+    package let copy: @Sendable (URL, URL) throws -> Void
+    package let synchronizeFile: @Sendable (URL) throws -> Void
+    package let synchronizeDirectory: @Sendable (URL) throws -> Void
+    package let remove: @Sendable (URL) throws -> Void
+
+    package init(
+        rename: @escaping @Sendable (URL, URL) throws -> Void,
+        copy: @escaping @Sendable (URL, URL) throws -> Void,
+        synchronizeFile: @escaping @Sendable (URL) throws -> Void,
+        synchronizeDirectory: @escaping @Sendable (URL) throws -> Void,
+        remove: @escaping @Sendable (URL) throws -> Void
+    ) {
+        self.rename = rename
+        self.copy = copy
+        self.synchronizeFile = synchronizeFile
+        self.synchronizeDirectory = synchronizeDirectory
+        self.remove = remove
+    }
+
+    package static let live = MediaAssetFileOperations(
+        rename: { source, destination in
+            let result = source.path.withCString { sourcePath in
+                destination.path.withCString { destinationPath in
+                    Darwin.rename(sourcePath, destinationPath)
+                }
+            }
+            guard result == 0 else {
+                throw POSIXFailure(operation: "rename media", code: errno)
+            }
+        },
+        copy: { source, destination in
+            try FileManager.default.copyItem(at: source, to: destination)
+        },
+        synchronizeFile: { try AtomicFile.synchronizeFile($0) },
+        synchronizeDirectory: { try AtomicFile.synchronizeDirectory($0) },
+        remove: { try FileManager.default.removeItem(at: $0) }
+    )
+}
+
+public struct MediaAssetTransferRollbackError: Error, LocalizedError, Sendable {
+    public let orphanedDestination: URL
+    public let transferErrorDescription: String
+    public let rollbackErrorDescription: String
+
+    public init(
+        orphanedDestination: URL,
+        transferError: any Error,
+        rollbackError: any Error
+    ) {
+        self.orphanedDestination = orphanedDestination
+        transferErrorDescription = transferError.localizedDescription
+        rollbackErrorDescription = rollbackError.localizedDescription
+    }
+
+    public var errorDescription: String? {
+        "The media transfer failed and its rollback also failed. The recording remains stored at \(orphanedDestination.path). Transfer error: \(transferErrorDescription) Rollback error: \(rollbackErrorDescription)"
+    }
+}
+
+public struct MediaAssetTransferRollbackDurabilityError:
+    Error,
+    LocalizedError,
+    Sendable
+{
+    public let restoredSource: URL
+    public let formerDestination: URL
+    public let transferErrorDescription: String
+    public let synchronizationErrorDescription: String
+
+    public init(
+        restoredSource: URL,
+        formerDestination: URL,
+        transferError: any Error,
+        synchronizationError: any Error
+    ) {
+        self.restoredSource = restoredSource
+        self.formerDestination = formerDestination
+        transferErrorDescription = transferError.localizedDescription
+        synchronizationErrorDescription = synchronizationError.localizedDescription
+    }
+
+    public var errorDescription: String? {
+        "The media transfer failed and the restored source path could not be made durable. The recording was restored to \(restoredSource.path), but after a power loss it may instead remain at \(formerDestination.path). Transfer error: \(transferErrorDescription) Synchronization error: \(synchronizationErrorDescription)"
+    }
+}
 
 public struct LibraryMetadata: Codable, Equatable, Sendable {
     public static let currentSchemaVersion = 1
@@ -22,18 +126,31 @@ public struct LibraryMetadata: Codable, Equatable, Sendable {
 
 public actor Library {
     public nonisolated let layout: LibraryLayout
+    public nonisolated let openingMediaRecoveryReport: MediaAssetRecoveryReport
     private let metadata: LibraryMetadata
+    private nonisolated let meetingMutationAction: LibraryMeetingMutationAction
     private var meetingChangeContinuations: [
         UUID: AsyncStream<MeetingID>.Continuation
     ] = [:]
 
     public static func open(at root: URL) throws -> Library {
-        try Library(root: root)
+        try Library(root: root, meetingMutationAction: { _, _ in })
     }
 
-    private init(root: URL) throws {
+    package static func open(
+        at root: URL,
+        mutationAction: @escaping LibraryMeetingMutationAction
+    ) throws -> Library {
+        try Library(root: root, meetingMutationAction: mutationAction)
+    }
+
+    private init(
+        root: URL,
+        meetingMutationAction: @escaping LibraryMeetingMutationAction
+    ) throws {
         let layout = LibraryLayout(root: root)
         self.layout = layout
+        self.meetingMutationAction = meetingMutationAction
 
         let fileManager = FileManager.default
         var isDirectory: ObjCBool = false
@@ -85,8 +202,10 @@ public actor Library {
             )
         }
 
-        try LibraryMutationCoordination.withExclusiveAccess(layout: layout) {
+        openingMediaRecoveryReport = try LibraryMutationCoordination
+            .withExclusiveAccess(layout: layout) {
             try RevisionAppendRecovery.recoverAll(layout: layout)
+            return try MediaAssetRecovery.recoverAll(layout: layout)
         }
     }
 
@@ -94,19 +213,32 @@ public actor Library {
         metadata
     }
 
+    /// Führt mehrere package-interne Mutationen unter genau einem exklusiven
+    /// Bibliotheks-Lock aus. Der isolierte Empfänger verhindert, dass ein
+    /// Aufrufer darin in einen zweiten Actor-Sprung oder Lock gerät.
+    package func withExclusiveMutationTransaction<Result: Sendable>(
+        _ body: @Sendable (isolated Library, LibraryMutationTransaction) throws -> Result
+    ) throws -> Result {
+        try LibraryMutationCoordination.withExclusiveTransaction(layout: layout) { transaction in
+            try body(self, transaction)
+        }
+    }
+
     public func createMeeting(
         title: String,
         status: Meeting.Status,
         createdAt: Date = Date(),
         metadata: MeetingMetadata? = nil,
-        sourceLocale: MeetingSourceLocale? = nil
+        sourceLocale: MeetingSourceLocale? = nil,
+        transcriptionPlan: TranscriptionPlan? = nil
     ) throws -> Meeting {
         let meeting = Meeting(
             title: title,
             createdAt: createdAt,
             status: status,
             metadata: metadata,
-            sourceLocale: sourceLocale
+            sourceLocale: sourceLocale,
+            transcriptionPlan: transcriptionPlan
         )
         try LibraryMutationCoordination.withExclusiveAccess(layout: layout) {
             try createMeetingDirectories(meeting.id)
@@ -214,6 +346,31 @@ public actor Library {
         return meeting
     }
 
+    private func withMeetingMutation<Result>(
+        _ body: (LibraryMutationTransaction) throws -> Result
+    ) throws -> Result {
+        try LibraryMutationCoordination.withExclusiveTransaction(
+            layout: layout
+        ) { transaction in
+            try meetingMutationAction(
+                .afterExclusiveTransactionBeforeRead,
+                transaction
+            )
+            return try body(transaction)
+        }
+    }
+
+    private nonisolated func writeMeeting(
+        _ meeting: Meeting,
+        transaction: LibraryMutationTransaction
+    ) throws {
+        try transaction.validate(layout: layout)
+        try JSONDocumentStore.write(
+            meeting,
+            to: layout.meetingMetadata(meeting.id)
+        )
+    }
+
     private func removeMeetingChangeContinuation(_ token: UUID) {
         meetingChangeContinuations.removeValue(forKey: token)
     }
@@ -230,11 +387,23 @@ public actor Library {
         _ meetingID: MeetingID,
         participantIDs: [PersonID]
     ) throws -> Meeting {
-        var meeting = try loadMeeting(meetingID)
-        meeting.participantIDs = participantIDs
-        try LibraryMutationCoordination.withExclusiveAccess(layout: layout) {
-            try JSONDocumentStore.write(meeting, to: layout.meetingMetadata(meetingID))
+        try withMeetingMutation { transaction in
+            var meeting = try loadMeeting(meetingID, transaction: transaction)
+            meeting.participantIDs = participantIDs
+            try writeMeeting(meeting, transaction: transaction)
+            return meeting
         }
+    }
+
+    package nonisolated func updateMeetingParticipants(
+        _ meetingID: MeetingID,
+        participantIDs: [PersonID],
+        transaction: LibraryMutationTransaction
+    ) throws -> Meeting {
+        try transaction.validate(layout: layout)
+        var meeting = try loadMeeting(meetingID, transaction: transaction)
+        meeting.participantIDs = participantIDs
+        try writeMeeting(meeting, transaction: transaction)
         return meeting
     }
 
@@ -246,13 +415,15 @@ public actor Library {
         _ meetingID: MeetingID,
         participantIDs: [PersonID]
     ) throws -> Meeting {
-        var meeting = try loadMeeting(meetingID)
-        var seen: Set<PersonID> = Set(meeting.participantIDs)
-        meeting.additionalParticipantIDs = participantIDs.filter { seen.insert($0).inserted }
-        try LibraryMutationCoordination.withExclusiveAccess(layout: layout) {
-            try JSONDocumentStore.write(meeting, to: layout.meetingMetadata(meetingID))
+        try withMeetingMutation { transaction in
+            var meeting = try loadMeeting(meetingID, transaction: transaction)
+            var seen: Set<PersonID> = Set(meeting.participantIDs)
+            meeting.additionalParticipantIDs = participantIDs.filter {
+                seen.insert($0).inserted
+            }
+            try writeMeeting(meeting, transaction: transaction)
+            return meeting
         }
-        return meeting
     }
 
     /// Legt das Meeting in einen Ordner oder nimmt es heraus (nil).
@@ -278,27 +449,21 @@ public actor Library {
         _ meetingIDs: Set<MeetingID>,
         folderID: FolderID?
     ) throws -> [Meeting] {
-        let originals = try meetingIDs.sorted().map(loadMeeting)
-        return try Self.writeMeetingFolderBatch(
-            originals: originals,
-            folderID: folderID,
-            write: { meeting in
-                try LibraryMutationCoordination.withExclusiveAccess(layout: layout) {
-                    try JSONDocumentStore.write(
-                        meeting,
-                        to: layout.meetingMetadata(meeting.id)
-                    )
-                }
-            },
-            restore: { meeting in
-                try LibraryMutationCoordination.withExclusiveAccess(layout: layout) {
-                    try JSONDocumentStore.write(
-                        meeting,
-                        to: layout.meetingMetadata(meeting.id)
-                    )
-                }
+        try withMeetingMutation { transaction in
+            let originals = try meetingIDs.sorted().map {
+                try loadMeeting($0, transaction: transaction)
             }
-        )
+            return try Self.writeMeetingFolderBatch(
+                originals: originals,
+                folderID: folderID,
+                write: { meeting in
+                    try writeMeeting(meeting, transaction: transaction)
+                },
+                restore: { meeting in
+                    try writeMeeting(meeting, transaction: transaction)
+                }
+            )
+        }
     }
 
     static func writeMeetingFolderBatch(
@@ -341,23 +506,26 @@ public actor Library {
     ) throws -> Meeting {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw LibraryError.invalidMeetingTitle }
-        let old = try loadMeeting(meetingID)
-        let renamed = Meeting(
-            schemaVersion: old.schemaVersion,
-            id: old.id,
-            title: trimmed,
-            createdAt: old.createdAt,
-            status: old.status,
-            participantIDs: old.participantIDs,
-            additionalParticipantIDs: old.additionalParticipantIDs,
-            folderID: old.folderID,
-            metadata: old.metadata,
-            sourceLocale: old.sourceLocale
-        )
-        try LibraryMutationCoordination.withExclusiveAccess(layout: layout) {
-            try JSONDocumentStore.write(renamed, to: layout.meetingMetadata(meetingID))
+        return try withMeetingMutation { transaction in
+            var renamed = try loadMeeting(meetingID, transaction: transaction)
+            renamed.title = trimmed
+            try writeMeeting(renamed, transaction: transaction)
+            return renamed
         }
-        return renamed
+    }
+
+    /// Pinnt die gewählten ASR-Provider atomar im Meeting.
+    @discardableResult
+    public func setTranscriptionPlan(
+        _ plan: TranscriptionPlan,
+        for meetingID: MeetingID
+    ) throws -> Meeting {
+        try withMeetingMutation { transaction in
+            var meeting = try loadMeeting(meetingID, transaction: transaction)
+            meeting.transcriptionPlan = plan
+            try writeMeeting(meeting, transaction: transaction)
+            return meeting
+        }
     }
 
     /// Verschiebt den kompletten Meeting-Ordner in den Papierkorb statt hart
@@ -376,17 +544,62 @@ public actor Library {
         return trashedURL as URL?
     }
 
+    /// Package-interne Variante für Lebenszyklen, die Besitzprüfung und genau
+    /// einen recoverable Trash-Commit unter demselben Root-Lock ausführen.
+    package nonisolated func trashMeeting(
+        _ meetingID: MeetingID,
+        expectedProcessingGenerationID: MeetingTransferGenerationID?,
+        transaction: LibraryMutationTransaction
+    ) throws -> RecoverableMeetingTrashResult {
+        try transaction.validate(layout: layout)
+        let meeting = try loadMeeting(meetingID, transaction: transaction)
+        guard meeting.processingGenerationID == expectedProcessingGenerationID else {
+            throw LibraryError.meetingNotFound(meetingID)
+        }
+        let source = layout.meetingDirectory(meetingID)
+        let sourceVolume = try source.resourceValues(
+            forKeys: [.volumeIdentifierKey]
+        ).volumeIdentifier.map(String.init(describing:))
+        var destination: NSURL?
+        do {
+            try FileManager.default.trashItem(
+                at: source,
+                resultingItemURL: &destination
+            )
+            try meetingMutationAction(
+                .afterMeetingTrashMove(meetingID),
+                transaction
+            )
+        } catch {
+            if !FileManager.default.fileExists(atPath: source.path) {
+                return .commitOutcomeUncertain
+            }
+            throw error
+        }
+        guard !FileManager.default.fileExists(atPath: source.path),
+              let destination = destination as URL?,
+              FileManager.default.fileExists(atPath: destination.path),
+              try destination.resourceValues(forKeys: [.volumeIdentifierKey])
+                .volumeIdentifier.map(String.init(describing:)) == sourceVolume
+        else {
+            return .commitOutcomeUncertain
+        }
+        return .trashed(destination)
+    }
+
     public func setMeetingParticipants(
         _ meetingID: MeetingID,
         participantIDs: [PersonID]
     ) throws -> Meeting {
-        var meeting = try loadMeeting(meetingID)
-        var seen: Set<PersonID> = []
-        meeting.participantIDs = participantIDs.filter { seen.insert($0).inserted }
-        try LibraryMutationCoordination.withExclusiveAccess(layout: layout) {
-            try JSONDocumentStore.write(meeting, to: layout.meetingMetadata(meetingID))
+        try withMeetingMutation { transaction in
+            var meeting = try loadMeeting(meetingID, transaction: transaction)
+            var seen: Set<PersonID> = []
+            meeting.participantIDs = participantIDs.filter {
+                seen.insert($0).inserted
+            }
+            try writeMeeting(meeting, transaction: transaction)
+            return meeting
         }
-        return meeting
     }
 
     public func registerMediaAsset(
@@ -395,6 +608,45 @@ public actor Library {
         kind: MediaAsset.Kind,
         sampleRate: Double,
         duration: TimeInterval
+    ) throws -> MediaAsset {
+        try registerMediaAsset(
+            for: meetingID,
+            sourceURL: sourceURL,
+            kind: kind,
+            sampleRate: sampleRate,
+            duration: duration,
+            consumesSource: false,
+            fileOperations: .live
+        )
+    }
+
+    package func registerCapturedMediaAsset(
+        for meetingID: MeetingID,
+        sourceURL: URL,
+        kind: MediaAsset.Kind,
+        sampleRate: Double,
+        duration: TimeInterval,
+        fileOperations: MediaAssetFileOperations = .live
+    ) throws -> MediaAsset {
+        try registerMediaAsset(
+            for: meetingID,
+            sourceURL: sourceURL,
+            kind: kind,
+            sampleRate: sampleRate,
+            duration: duration,
+            consumesSource: true,
+            fileOperations: fileOperations
+        )
+    }
+
+    private func registerMediaAsset(
+        for meetingID: MeetingID,
+        sourceURL: URL,
+        kind: MediaAsset.Kind,
+        sampleRate: Double,
+        duration: TimeInterval,
+        consumesSource: Bool,
+        fileOperations: MediaAssetFileOperations
     ) throws -> MediaAsset {
         _ = try loadMeeting(meetingID)
 
@@ -416,7 +668,9 @@ public actor Library {
         let pathExtension = sourceURL.pathExtension.isEmpty
             ? (kind == .imported ? "bin" : "caf")
             : sourceURL.pathExtension.lowercased()
-        let fileName = "\(assetID).\(pathExtension)"
+        let fileName = consumesSource && kind != .imported
+            ? "\(assetID)-\(kind.rawValue).\(pathExtension)"
+            : "\(assetID).\(pathExtension)"
         let asset = MediaAsset(
             id: assetID,
             meetingID: meetingID,
@@ -428,18 +682,136 @@ public actor Library {
         )
         let destination = layout.mediaFile(meetingID, fileName: fileName)
         try LibraryMutationCoordination.withExclusiveAccess(layout: layout) {
-            try FileManager.default.copyItem(at: sourceURL, to: destination)
+            let transfer = try transferMediaFile(
+                from: sourceURL,
+                to: destination,
+                consumesSource: consumesSource,
+                fileOperations: fileOperations
+            )
             do {
                 try JSONDocumentStore.write(
                     asset,
                     to: layout.mediaMetadata(meetingID, assetID: assetID)
                 )
             } catch {
-                try? FileManager.default.removeItem(at: destination)
+                try? rollbackMediaTransfer(
+                    transfer,
+                    sourceURL: sourceURL,
+                    destination: destination,
+                    fileOperations: fileOperations
+                )
                 throw error
+            }
+            if transfer == .copiedAndConsumesSource {
+                try fileOperations.remove(sourceURL)
+                try fileOperations.synchronizeDirectory(
+                    sourceURL.deletingLastPathComponent()
+                )
             }
         }
         return asset
+    }
+
+    private enum MediaFileTransfer: Equatable {
+        case copiedSourcePreserved
+        case copiedAndConsumesSource
+        case renamed
+    }
+
+    private nonisolated func transferMediaFile(
+        from sourceURL: URL,
+        to destination: URL,
+        consumesSource: Bool,
+        fileOperations: MediaAssetFileOperations
+    ) throws -> MediaFileTransfer {
+        guard consumesSource else {
+            try fileOperations.copy(sourceURL, destination)
+            return .copiedSourcePreserved
+        }
+
+        do {
+            try fileOperations.rename(sourceURL, destination)
+            do {
+                try fileOperations.synchronizeDirectory(
+                    destination.deletingLastPathComponent()
+                )
+                if sourceURL.deletingLastPathComponent()
+                    != destination.deletingLastPathComponent() {
+                    try fileOperations.synchronizeDirectory(
+                        sourceURL.deletingLastPathComponent()
+                    )
+                }
+            } catch {
+                let transferError = error
+                do {
+                    try fileOperations.rename(destination, sourceURL)
+                } catch {
+                    throw MediaAssetTransferRollbackError(
+                        orphanedDestination: destination,
+                        transferError: transferError,
+                        rollbackError: error
+                    )
+                }
+                do {
+                    try fileOperations.synchronizeDirectory(
+                        sourceURL.deletingLastPathComponent()
+                    )
+                    if sourceURL.deletingLastPathComponent()
+                        != destination.deletingLastPathComponent() {
+                        try fileOperations.synchronizeDirectory(
+                            destination.deletingLastPathComponent()
+                        )
+                    }
+                } catch {
+                    throw MediaAssetTransferRollbackDurabilityError(
+                        restoredSource: sourceURL,
+                        formerDestination: destination,
+                        transferError: transferError,
+                        synchronizationError: error
+                    )
+                }
+                throw transferError
+            }
+            return .renamed
+        } catch let error as POSIXFailure where error.code == EXDEV {
+            try fileOperations.copy(sourceURL, destination)
+            do {
+                try fileOperations.synchronizeFile(destination)
+                try fileOperations.synchronizeDirectory(
+                    destination.deletingLastPathComponent()
+                )
+            } catch {
+                try? fileOperations.remove(destination)
+                throw error
+            }
+            return .copiedAndConsumesSource
+        }
+    }
+
+    private nonisolated func rollbackMediaTransfer(
+        _ transfer: MediaFileTransfer,
+        sourceURL: URL,
+        destination: URL,
+        fileOperations: MediaAssetFileOperations
+    ) throws {
+        switch transfer {
+        case .copiedSourcePreserved, .copiedAndConsumesSource:
+            try fileOperations.remove(destination)
+            try fileOperations.synchronizeDirectory(
+                destination.deletingLastPathComponent()
+            )
+        case .renamed:
+            try fileOperations.rename(destination, sourceURL)
+            try fileOperations.synchronizeDirectory(
+                sourceURL.deletingLastPathComponent()
+            )
+            if sourceURL.deletingLastPathComponent()
+                != destination.deletingLastPathComponent() {
+                try fileOperations.synchronizeDirectory(
+                    destination.deletingLastPathComponent()
+                )
+            }
+        }
     }
 
     public func loadMediaAsset(

@@ -1,5 +1,6 @@
 import Foundation
 import StenoDomain
+import StenoExchange
 import StenoPipeline
 import Testing
 @testable import Steno
@@ -24,14 +25,14 @@ struct MeetingTransferImportPresentationTests {
 
         #expect(presentation.title == "Budget review")
         #expect(presentation.sourceMeetingID == meetingID)
-        #expect(presentation.capabilityLabels == ["Notes", "Transcript", "Audio"])
+        #expect(presentation.capabilityLabels.map(english) == ["Notes", "Transcript", "Audio"])
         #expect(presentation.audioTrackCount == 2)
         #expect(presentation.totalAudioBytes == 4_000_000)
-        #expect(presentation.cleartextWarning.contains("unencrypted raw recording"))
-        #expect(presentation.externalFileWarning.contains("Files"))
-        #expect(presentation.externalFileWarning.contains("does not delete"))
+        #expect(english(presentation.cleartextWarning).contains("unencrypted raw recording"))
+        #expect(english(presentation.externalFileWarning).contains("Files"))
+        #expect(english(presentation.externalFileWarning).contains("does not delete"))
         #expect(presentation.visibleSpeakerLabels == ["Alex", "Guest 2"])
-        #expect(presentation.speakerLabelPrivacyHint.contains("visible"))
+        #expect(english(presentation.speakerLabelPrivacyHint).contains("visible"))
     }
 
     @Test("duplicate visible speaker labels retain separate presentation rows")
@@ -74,6 +75,38 @@ struct MeetingTransferImportPresentationTests {
         )
     }
 
+    @Test("unknown import totals stay indeterminate and known totals clamp")
+    func importProgressPresentation() {
+        let unknown = MeetingTransferProgressPresentation.make(nil)
+        #expect(unknown == .indeterminate)
+        #expect(String(localized: unknown.accessibilityLabel) == "Import progress")
+        #expect(
+            MeetingTransferProgressPresentation.make(
+                .init(phase: .enumerating, processedBytes: 1, totalBytes: 0)
+            ) == .indeterminate
+        )
+        #expect(
+            MeetingTransferProgressPresentation.make(
+                .init(phase: .hashing, processedBytes: 1, totalBytes: -1)
+            ) == .indeterminate
+        )
+        #expect(
+            MeetingTransferProgressPresentation.make(
+                .init(phase: .writing, processedBytes: -1, totalBytes: 10)
+            ) == .determinate(0)
+        )
+        #expect(
+            MeetingTransferProgressPresentation.make(
+                .init(phase: .writing, processedBytes: 5, totalBytes: 10)
+            ) == .determinate(0.5)
+        )
+        #expect(
+            MeetingTransferProgressPresentation.make(
+                .init(phase: .writing, processedBytes: 11, totalBytes: 10)
+            ) == .determinate(1)
+        )
+    }
+
     @Test("imported meeting detail names origin content and source language")
     func importedDetailMetadata() {
         let detail = MeetingTransferDetailPresentation(
@@ -90,11 +123,11 @@ struct MeetingTransferImportPresentationTests {
             )
         )
 
-        #expect(detail.originLabel == "Imported via AirDrop")
-        #expect(detail.contentLabel == "Notes, Audio")
-        #expect(detail.sourceLanguageLabel.contains("de-DE"))
-        #expect(detail.externalFileWarning.contains("Files"))
-        #expect(detail.externalFileWarning.contains("does not delete"))
+        #expect(english(detail.originLabel) == "Imported via AirDrop")
+        #expect(english(detail.contentLabel) == "Notes, Audio")
+        #expect(english(detail.sourceLanguageLabel).contains("de-DE"))
+        #expect(english(detail.externalFileWarning).contains("Files"))
+        #expect(english(detail.externalFileWarning).contains("does not delete"))
     }
 
     @Test("successful imports use the existing compact and split meeting routes")
@@ -1137,4 +1170,10 @@ private final class SecurityScopeRecorder: @unchecked Sendable {
 private enum TestLifecycleError: Error {
     case failed
     case timedOut
+}
+
+private func english(_ resource: LocalizedStringResource) -> String {
+    var resource = resource
+    resource.locale = Locale(identifier: "en")
+    return String(localized: resource)
 }

@@ -30,6 +30,17 @@ public struct LegacyImportProgress: Equatable, Sendable {
     }
 }
 
+public enum LegacyImportOutcome: Equatable, Sendable {
+    case finished(ImportReport)
+    case cancelled(ImportReport)
+
+    public var report: ImportReport {
+        switch self {
+        case .finished(let report), .cancelled(let report): report
+        }
+    }
+}
+
 public struct ImportReport: Equatable, Sendable {
     public internal(set) var meetingsCreated = 0
     public internal(set) var audioCopied = 0

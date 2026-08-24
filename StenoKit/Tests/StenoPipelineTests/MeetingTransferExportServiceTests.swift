@@ -366,7 +366,7 @@ struct MeetingTransferExportServiceTests {
             let meeting = try await library.createMeeting(title: "Mixed", status: .ready)
             let runID = RunID()
             let person = Person(displayName: "Must Not Export")
-            try await IdentityStore(layout: library.layout).replacePersons([person])
+            try await replacePersonsForTest([person], layout: library.layout)
 
             let revision = TranscriptRevision(
                 meetingID: meeting.id,
@@ -557,9 +557,9 @@ private func makePrivacyFixture(at root: URL) async throws -> PrivacyFixture {
             ),
         ]
     )
-    try await IdentityStore(layout: library.layout).replacePersons([
+    try await replacePersonsForTest([
         confirmedPerson, participant,
-    ])
+    ], layout: library.layout)
 
     let references: [SpeakerReference] = [
         .person(confirmedPerson.id),

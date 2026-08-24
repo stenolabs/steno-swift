@@ -335,7 +335,30 @@ public struct SpeakerSuggestionEngine: Sendable {
                 }
                 let leftRoot = root(left, parents: &parents)
                 let rightRoot = root(right, parents: &parents)
-                if leftRoot != rightRoot { parents[leftRoot] = rightRoot }
+                guard leftRoot != rightRoot else { continue }
+
+                var leftMembers: [Int] = []
+                var rightMembers: [Int] = []
+                for index in clusters.indices {
+                    let indexRoot = root(index, parents: &parents)
+                    if indexRoot == leftRoot {
+                        leftMembers.append(index)
+                    } else if indexRoot == rightRoot {
+                        rightMembers.append(index)
+                    }
+                }
+                let completeLink = leftMembers.allSatisfy { leftIndex in
+                    rightMembers.allSatisfy { rightIndex in
+                        guard let distance = cosineDistance(
+                            clusters[leftIndex].embedding,
+                            clusters[rightIndex].embedding
+                        ) else {
+                            return false
+                        }
+                        return distance <= IdentityThresholds.sameChannelMergeDistance
+                    }
+                }
+                if completeLink { parents[leftRoot] = rightRoot }
             }
         }
 

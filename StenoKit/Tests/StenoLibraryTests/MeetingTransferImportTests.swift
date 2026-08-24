@@ -714,7 +714,7 @@ struct MeetingTransferImportTests {
 
     @Test("receipt no-op never deletes another actor's active bound token")
     func receiptNoOpPreservesOtherActorActiveBoundToken() async throws {
-        try await withTemporaryDirectory { root in
+        try await withBlockingTemporaryDirectory { root in
             let libraryRoot = root.appending(path: "Library")
             let noOpLibrary = try Library.open(at: libraryRoot)
             let noOpMeetingID = MeetingID()
@@ -744,8 +744,8 @@ struct MeetingTransferImportTests {
                 transferState: .importedOnly
             )
             let reachedPostRename = AsyncStream.makeStream(of: Void.self)
-            let finishActiveCommit = DispatchSemaphore(value: 0)
-            let activeCommit = Task {
+            let finishActiveCommit = BlockingTestPause(name: "active import commit")
+            let activeCommit = blockingTestTask {
                 try await activeLibrary.commitPreparedMeeting(
                     activePrepared,
                     checkpoint: { checkpoint, _ in
@@ -753,7 +753,7 @@ struct MeetingTransferImportTests {
                             return
                         }
                         reachedPostRename.continuation.yield()
-                        finishActiveCommit.wait()
+                        finishActiveCommit.arriveAndWait()
                     }
                 )
             }
@@ -762,7 +762,7 @@ struct MeetingTransferImportTests {
             _ = await postRenameEvents.next()
             guard let activeToken = try hiddenImportArtifacts(in: noOpLibrary.layout)
                 .first(where: { $0.pathExtension == "owner" }) else {
-                finishActiveCommit.signal()
+                finishActiveCommit.release()
                 _ = try? await activeCommit.value
                 Issue.record("active import has no ownership token")
                 return
@@ -770,7 +770,7 @@ struct MeetingTransferImportTests {
 
             let noOpStarted = AsyncStream.makeStream(of: Void.self)
             let noOpFinished = Mutex(false)
-            let noOp = Task {
+            let noOp = blockingTestTask {
                 noOpStarted.continuation.yield()
                 let result = try await noOpLibrary.commitPreparedMeeting(noOpPrepared)
                 noOpFinished.withLock { $0 = true }
@@ -783,7 +783,7 @@ struct MeetingTransferImportTests {
                 atPath: activeToken.path
             )
             #expect(!noOpFinished.withLock { $0 })
-            finishActiveCommit.signal()
+            finishActiveCommit.release()
             let activeResult = try await activeCommit.value
             let noOpResult = try await noOp.value
 
@@ -846,7 +846,7 @@ struct MeetingTransferImportTests {
 
     @Test("native no-op serializes the final decision with a notes edit")
     func nativeNoOpCoordinatesPostVerificationNotesEdit() async throws {
-        try await withTemporaryDirectory { root in
+        try await withBlockingTemporaryDirectory { root in
             let library = try Library.open(at: root.appending(path: "Library"))
             let native = try await library.createMeeting(title: "Native", status: .ready)
             let token = try await library.nativeMeetingTransferSnapshotToken(for: native.id)
@@ -866,15 +866,15 @@ struct MeetingTransferImportTests {
                 )
             )
             let reachedFinalVerification = AsyncStream.makeStream(of: Void.self)
-            let finishDecision = DispatchSemaphore(value: 0)
-            let commit = Task {
+            let finishDecision = BlockingTestPause(name: "native no-op decision")
+            let commit = blockingTestTask {
                 try await library.commitPreparedMeeting(
                     incoming,
                     checkpoint: { _, _ in },
                     nativeSnapshotCheckpoint: { checkpoint in
                         guard checkpoint == .finishedFinalVerification else { return }
                         reachedFinalVerification.continuation.yield()
-                        finishDecision.wait()
+                        finishDecision.arriveAndWait()
                     }
                 )
             }
@@ -883,7 +883,7 @@ struct MeetingTransferImportTests {
 
             let writerStarted = AsyncStream.makeStream(of: Void.self)
             let notesStore = MeetingNotesStore(layout: library.layout)
-            let writer = Task {
+            let writer = blockingTestTask {
                 writerStarted.continuation.yield()
                 try await notesStore.setNotes(native.id, to: "after snapshot")
             }
@@ -894,7 +894,7 @@ struct MeetingTransferImportTests {
             let changedBeforeDecision = FileManager.default.fileExists(
                 atPath: library.layout.userNotes(native.id).path
             )
-            finishDecision.signal()
+            finishDecision.release()
             let result = try await commit.value
             try await writer.value
 
@@ -906,7 +906,7 @@ struct MeetingTransferImportTests {
 
     @Test("library-open recovery cannot cross a shared native snapshot decision")
     func nativeNoOpCoordinatesRevisionRecoveryAtLibraryOpen() async throws {
-        try await withTemporaryDirectory { root in
+        try await withBlockingTemporaryDirectory { root in
             let libraryRoot = root.appending(path: "Library")
             let library = try Library.open(at: libraryRoot)
             let native = try await library.createMeeting(title: "Native", status: .ready)
@@ -922,14 +922,14 @@ struct MeetingTransferImportTests {
                 )
             }
             let reachedFinalVerification = AsyncStream.makeStream(of: Void.self)
-            let finishSnapshot = DispatchSemaphore(value: 0)
-            let snapshot = Task {
+            let finishSnapshot = BlockingTestPause(name: "native snapshot decision")
+            let snapshot = blockingTestTask {
                 try await library.nativeMeetingTransferSnapshotToken(
                     for: native.id,
                     checkpoint: { checkpoint in
                         guard checkpoint == .finishedFinalVerification else { return }
                         reachedFinalVerification.continuation.yield()
-                        finishSnapshot.wait()
+                        finishSnapshot.arriveAndWait()
                     }
                 )
             }
@@ -938,7 +938,7 @@ struct MeetingTransferImportTests {
 
             let reopenStarted = AsyncStream.makeStream(of: Void.self)
             let reopenFinished = Mutex(false)
-            let reopened = Task.detached {
+            let reopened = blockingTestTask {
                 reopenStarted.continuation.yield()
                 let result = try Library.open(at: libraryRoot)
                 reopenFinished.withLock { $0 = true }
@@ -949,7 +949,7 @@ struct MeetingTransferImportTests {
             try await Task.sleep(for: .milliseconds(50))
             #expect(!reopenFinished.withLock { $0 })
 
-            finishSnapshot.signal()
+            finishSnapshot.release()
             let tokenBeforeRecovery = try await snapshot.value
             let recoveredLibrary = try await reopened.value
             let tokenAfterRecovery = try await recoveredLibrary

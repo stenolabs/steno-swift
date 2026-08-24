@@ -17,7 +17,8 @@ func makeCluster(
     duration: TimeInterval = 24,
     segments: Int = 4,
     multiple: Bool = false,
-    isSelf: Bool = false
+    isSelf: Bool = false,
+    mergedFrom: [String] = []
 ) -> IdentityCluster {
     IdentityCluster(
         meetingID: meetingID,
@@ -28,6 +29,7 @@ func makeCluster(
         embedding: embedding(atCosineDistance: distance),
         speechDurationSeconds: duration,
         segmentCount: segments,
+        mergedFrom: mergedFrom,
         containsMultipleSpeakers: multiple,
         isSelf: isSelf
     )

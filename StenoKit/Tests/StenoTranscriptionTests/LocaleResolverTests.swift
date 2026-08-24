@@ -21,15 +21,15 @@ struct LocaleResolverTests {
         #expect(selected?.identifier == "de-DE")
     }
 
-    @Test("falls back automatically when the requested language is unsupported")
-    func unsupportedLocaleFallsBack() {
+    @Test("an unsupported explicit language does not fall back automatically")
+    func unsupportedExplicitLocaleReturnsNil() {
         let selected = LocaleResolver.select(
             requested: Locale(identifier: "ja-JP"),
             supported: supported,
             automaticCandidates: [Locale(identifier: "fr-CA"), Locale(identifier: "en-US")]
         )
 
-        #expect(selected?.identifier == "fr-FR")
+        #expect(selected == nil)
     }
 
     @Test("an auto request uses the first supported automatic candidate")
@@ -43,21 +43,21 @@ struct LocaleResolverTests {
         #expect(selected?.identifier == "de-DE")
     }
 
-    @Test("uses English and then the first available locale as final fallbacks")
+    @Test("uses English but does not invent an unrelated final fallback")
     func deterministicFinalFallbacks() {
         let english = LocaleResolver.select(
-            requested: Locale(identifier: "ja-JP"),
+            requested: .transcriptionAutomatic,
             supported: supported,
             automaticCandidates: []
         )
         let first = LocaleResolver.select(
-            requested: Locale(identifier: "ja-JP"),
+            requested: .transcriptionAutomatic,
             supported: [Locale(identifier: "es-ES"), Locale(identifier: "fr-FR")],
             automaticCandidates: []
         )
 
         #expect(english?.identifier == "en-US")
-        #expect(first?.identifier == "es-ES")
+        #expect(first == nil)
     }
 
     @Test("returns nil when Speech supports no locale")
@@ -103,5 +103,31 @@ extension LocaleResolverTests {
                 supported: supported
             )?.identifier == "de_DE"
         )
+    }
+
+    @Test("an ambiguous same-language fallback prefers Foundation's default region in every order")
+    func sameLanguageFallbackIsIndependentOfSupportedOrder() {
+        let firstOrder = [
+            Locale(identifier: "de_AT"),
+            Locale(identifier: "de_DE"),
+            Locale(identifier: "de_CH"),
+        ]
+        let secondOrder = [
+            Locale(identifier: "de_CH"),
+            Locale(identifier: "de_AT"),
+            Locale(identifier: "de_DE"),
+        ]
+
+        let first = LocaleResolver.select(
+            requested: Locale(identifier: "de_XX"),
+            supported: firstOrder
+        )
+        let second = LocaleResolver.select(
+            requested: Locale(identifier: "de_XX"),
+            supported: secondOrder
+        )
+
+        #expect(first?.identifier == "de_DE")
+        #expect(second?.identifier == "de_DE")
     }
 }

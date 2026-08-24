@@ -22,7 +22,7 @@ struct RecordingFinalizerTests {
                 sessions: sessions
             )
             model.updateNotes("Gemeinsamer Stand")
-            let editorSession = await sessions.session(for: meeting.id)
+            let editorSession = try #require(await sessions.session(for: meeting.id))
 
             #expect(editorSession.text == "Gemeinsamer Stand")
             #expect(model.notes == editorSession.text)
@@ -50,7 +50,7 @@ struct RecordingFinalizerTests {
             )
 
             try await finalizer.finalize(
-                meetingID: meeting.id,
+                meeting: meeting,
                 output: output,
                 library: library,
                 jobStore: store
@@ -74,7 +74,7 @@ struct RecordingFinalizerTests {
             let finalizer = RecordingFinalizer()
 
             try await finalizer.finalize(
-                meetingID: meeting.id,
+                meeting: meeting,
                 output: nil,
                 library: library,
                 jobStore: store
@@ -128,6 +128,31 @@ struct RecordingFinalizerTests {
         }
     }
 
+    @Test("recording model pins the chosen transcription plan on the meeting")
+    @MainActor
+    func recordingModelPinsTranscriptionPlan() async throws {
+        try await withMainActorFixture { library, _, _ in
+            let model = RecordingModel(session: AudioSessionController())
+            let plan = TranscriptionPlan(
+                liveProviderID: .apple,
+                finalProviderID: .parakeetTDTv3
+            )
+
+            let meeting = try await model.createRecordingMeeting(
+                in: library,
+                locale: Locale(identifier: "de-DE"),
+                languageWasChosenExplicitly: true,
+                transcriptionPlan: plan
+            )
+            let persisted = try await library.loadMeeting(meeting.id)
+
+            #expect(persisted.transcriptionPlan == plan)
+            // Die Job-Erstellung liest den gepinnten Plan wieder aus - ohne
+            // eigenes Zutun waere die Wahl in den Einstellungen wirkungslos.
+            #expect(Job.finalASR(for: persisted).transcriptionProviderID == .parakeetTDTv3)
+        }
+    }
+
     @Test("concurrent and later duplicate calls persist nothing twice")
     func duplicateCallsAreIdempotent() async throws {
         try await withFixture { library, store, meeting in
@@ -135,20 +160,20 @@ struct RecordingFinalizerTests {
             let output = TranscriptOutput(localeIdentifier: "de-DE", blocks: [])
 
             async let first: Void = finalizer.finalize(
-                meetingID: meeting.id,
+                meeting: meeting,
                 output: output,
                 library: library,
                 jobStore: store
             )
             async let second: Void = finalizer.finalize(
-                meetingID: meeting.id,
+                meeting: meeting,
                 output: output,
                 library: library,
                 jobStore: store
             )
             _ = try await (first, second)
             try await finalizer.finalize(
-                meetingID: meeting.id,
+                meeting: meeting,
                 output: output,
                 library: library,
                 jobStore: store
@@ -170,7 +195,7 @@ struct RecordingFinalizerTests {
             await model.finishAnnotations()
 
             try await RecordingFinalizer().finalize(
-                meetingID: meeting.id,
+                meeting: meeting,
                 output: nil,
                 library: library,
                 jobStore: store
@@ -196,7 +221,7 @@ struct RecordingFinalizerTests {
             await model.finishAnnotations()
 
             try await RecordingFinalizer().finalize(
-                meetingID: meeting.id,
+                meeting: meeting,
                 output: nil,
                 library: library,
                 jobStore: store

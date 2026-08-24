@@ -10,6 +10,7 @@ struct OnboardingView: View {
     @Environment(AppModel.self) private var model
     @Environment(OnboardingModel.self) private var onboarding
     @Environment(\.dismiss) private var dismiss
+    @State private var isConfirmingLanguage = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -57,11 +58,12 @@ struct OnboardingView: View {
             // waere eine Sackgasse, wenn das Laden haengt.
             Button("Skip") { onboarding.skip() }
             Spacer()
-            Button(onboarding.isLastPage ? "Done" : "Continue") {
-                onboarding.advance()
-            }
+            Button(
+                onboarding.isLastPage ? "Done" : "Continue",
+                action: advance
+            )
             .keyboardShortcut(.defaultAction)
-            .disabled(!canContinue)
+            .disabled(!canContinue || isConfirmingLanguage)
         }
         .padding(16)
     }
@@ -72,7 +74,34 @@ struct OnboardingView: View {
     /// Kommt keine Sprache, gibt die Seite trotzdem den Weg frei: laenger zu
     /// warten braechte nichts.
     private var canContinue: Bool {
-        onboarding.page != .language || model.hasLoadedLocales
+        onboarding.page != .language || (
+            model.hasLoadedLocales
+                && (
+                    model.availableLocales.isEmpty
+                        || model.canConfirmTranscriptionLanguage
+                )
+                && !model.isRecording
+                && !model.isStartingRecording
+                && !model.isBootstrappingPipeline
+                && !model.isSwitchingTranscriptionLanguage
+        )
+    }
+
+    private func advance() {
+        guard onboarding.page == .language,
+              !model.availableLocales.isEmpty else {
+            onboarding.advance()
+            return
+        }
+        isConfirmingLanguage = true
+        Task {
+            // Auch der bereits sichtbare Wert ist eine bewusste Wahl, wenn
+            // der Nutzer ihn auf der Sprachseite bestaetigt. Der Picker ruft
+            // seinen Setter bei unveraendertem Wert nicht selbst auf.
+            await model.setLanguage(model.effectiveTranscriptionLanguageID)
+            isConfirmingLanguage = false
+            onboarding.advance()
+        }
     }
 }
 
@@ -98,7 +127,7 @@ private struct ProfilePage: View {
             Section("Who is taking the minutes?") {
                 TextField("Your name", text: $profile.name)
                 TextField("Organisation (optional)", text: $profile.organization)
-                Text("\(OperatorProfile.fieldNote) You can skip this and add it later in Settings.")
+                Text(OperatorProfile.onboardingFieldNote)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -156,9 +185,9 @@ private struct PermissionsPage: View {
         Form {
             Section("Recording access") {
                 HStack {
-                    Button("Check microphone and system audio access") {
+                    Button("Request microphone and system audio access") {
                         Task {
-                            await model.resolveRecordingPermissions(
+                            await model.requestRecordingPermissions(
                                 forceSystemAudioProbe: true
                             )
                         }

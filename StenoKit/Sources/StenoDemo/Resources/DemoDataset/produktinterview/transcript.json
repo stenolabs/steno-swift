@@ -1,0 +1,164 @@
+{
+  "schemaVersion": 1,
+  "id": "00000000-0000-7000-8000-000000000103",
+  "meetingID": "00000000-0000-7000-8000-000000000003",
+  "createdAt": 809179260,
+  "origin": {
+    "demo": {
+      "_0": {
+        "datasetID": "synthetic-demo",
+        "datasetVersion": "2026-08-23",
+        "itemID": "produktinterview"
+      }
+    }
+  },
+  "turns": [
+    {
+      "speaker": {
+        "importedTextLabel": {
+          "_0": {
+            "id": "00000000-0000-7000-8000-00000000aa01",
+            "text": "Sprecherin A",
+            "wasConfirmedAtSource": false
+          }
+        }
+      },
+      "start": 0.0,
+      "end": 9.82467120181406,
+      "segments": [
+        {
+          "text": "Dieses fiktive Produktinterview beschreibt eine erfundene Notizfunktion für eine lokale Demo.",
+          "start": 0.0,
+          "end": 9.82467120181406,
+          "words": []
+        }
+      ]
+    },
+    {
+      "speaker": {
+        "importedTextLabel": {
+          "_0": {
+            "id": "00000000-0000-7000-8000-00000000aa02",
+            "text": "Sprecher B",
+            "wasConfirmedAtSource": false
+          }
+        }
+      },
+      "start": 10.4,
+      "end": 16.648798185941043,
+      "segments": [
+        {
+          "text": "Wichtig ist mir, dass die Aufgabe klar bleibt und keine echten Gesprächsinhalte benötigt.",
+          "start": 10.4,
+          "end": 16.648798185941043,
+          "words": []
+        }
+      ]
+    },
+    {
+      "speaker": {
+        "importedTextLabel": {
+          "_0": {
+            "id": "00000000-0000-7000-8000-00000000aa03",
+            "text": "Sprecherin C",
+            "wasConfirmedAtSource": false
+          }
+        }
+      },
+      "start": 17.6,
+      "end": 22.827120181405895,
+      "segments": [
+        {
+          "text": "Die Oberfläche zeigt eine kurze Zusammenfassung, eine Liste von Schritten und eine neutrale Referenz.",
+          "start": 17.6,
+          "end": 22.827120181405895,
+          "words": []
+        }
+      ]
+    },
+    {
+      "speaker": {
+        "importedTextLabel": {
+          "_0": {
+            "id": "00000000-0000-7000-8000-00000000aa01",
+            "text": "Sprecherin A",
+            "wasConfirmedAtSource": false
+          }
+        }
+      },
+      "start": 23.6,
+      "end": 32.29850340136054,
+      "segments": [
+        {
+          "text": "Wie erkennen Nutzende, dass alle Angaben aus einem künstlich erzeugten Beispiel stammen?",
+          "start": 23.6,
+          "end": 32.29850340136054,
+          "words": []
+        }
+      ]
+    },
+    {
+      "speaker": {
+        "importedTextLabel": {
+          "_0": {
+            "id": "00000000-0000-7000-8000-00000000aa02",
+            "text": "Sprecher B",
+            "wasConfirmedAtSource": false
+          }
+        }
+      },
+      "start": 33.0,
+      "end": 39.829297052154196,
+      "segments": [
+        {
+          "text": "Eine deutliche Kennzeichnung im Titel, in den Notizen und in der Herkunftserklärung macht das sichtbar.",
+          "start": 33.0,
+          "end": 39.829297052154196,
+          "words": []
+        }
+      ]
+    },
+    {
+      "speaker": {
+        "importedTextLabel": {
+          "_0": {
+            "id": "00000000-0000-7000-8000-00000000aa03",
+            "text": "Sprecherin C",
+            "wasConfirmedAtSource": false
+          }
+        }
+      },
+      "start": 41.0,
+      "end": 46.099410430839,
+      "segments": [
+        {
+          "text": "Zusätzlich prüfen wir feste Prüfsummen, Laufzeiten und die Zuordnung der rein synthetischen Stimmen.",
+          "start": 41.0,
+          "end": 46.099410430839,
+          "words": []
+        }
+      ]
+    },
+    {
+      "speaker": {
+        "importedTextLabel": {
+          "_0": {
+            "id": "00000000-0000-7000-8000-00000000aa01",
+            "text": "Sprecherin A",
+            "wasConfirmedAtSource": false
+          }
+        }
+      },
+      "start": 46.8,
+      "end": 59.86648526077097,
+      "segments": [
+        {
+          "text": "Damit endet das Interview. Es bleibt ein erfundenes Trainingsbeispiel ohne Bezug zu Personen oder Unternehmen.",
+          "start": 46.8,
+          "end": 59.86648526077097,
+          "words": []
+        }
+      ]
+    }
+  ]
+}

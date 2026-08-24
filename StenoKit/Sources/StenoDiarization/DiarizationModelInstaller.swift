@@ -2,6 +2,15 @@ import FluidAudio
 import Foundation
 import StenoDomain
 
+public extension ModelChecksumManifest {
+    static func bundled(name: String = "model-checksums") throws -> ModelChecksumManifest {
+        guard let url = Bundle.module.url(forResource: name, withExtension: "json") else {
+            throw ModelManifestError.missingFile("\(name).json")
+        }
+        return try ModelChecksumManifest.load(from: url)
+    }
+}
+
 /// Der einzige Ort, an dem Diarisierungsmodelle geladen werden.
 ///
 /// Frueher lud der Provider mitten in `diarize()` nach. Das konnte keinen
@@ -19,6 +28,7 @@ public actor DiarizationModelInstaller: ModelInstalling {
     static let progressTitle = "Speaker separation"
 
     public static let expectedBundleDescription = ModelBundleDescription(
+        id: .speakerSeparation,
         title: progressTitle,
         source: .huggingFace,
         approximateBytes: DiarizationModelBytes.total
@@ -63,7 +73,7 @@ public actor DiarizationModelInstaller: ModelInstalling {
             let stepBytes = Double(step.bytes)
             let alreadyDone = completedBytes
             do {
-                try await DownloadUtils.downloadRepo(
+                try await ModelHub.download(
                     step.repo,
                     to: baseDirectory,
                     variant: step.variant
@@ -140,52 +150,72 @@ public actor DiarizationModelInstaller: ModelInstalling {
             return
         }
 
+        if diarizationModelInstallationIsVerified(
+            in: baseDirectory,
+            manifest: manifest,
+            ignoringIncompleteMarker: false
+        ) {
+            progress(ModelInstallProgress(fraction: 1, title: Self.progressTitle))
+            return
+        }
+
         relay.reset()
         let task = Task<Void, Error> { [baseDirectory, download, manifest, relay] in
-            // The provider stays available for final ASR while this download
-            // runs. Hide partially moved FluidAudio bundles from diarization
-            // until the complete manifest has passed verification.
-            try markDiarizationModelInstallationIncomplete(in: baseDirectory)
-            try await download(baseDirectory) { fraction in
-                relay.report(fraction * Self.downloadShare)
-            }
-            try Task.checkCancellation()
             do {
-                try manifest.verify(directory: baseDirectory)
-            } catch let integrity as ModelIntegrityError {
-                // Genau ein Reparaturversuch. FluidAudios Downloader
-                // ueberspringt jeden vorhandenen Zielpfad, deshalb pruefte
-                // ohne das Loeschen jeder weitere Klick dieselben falschen
-                // Bytes: der Nutzer saesse in einer Schleife aus roter
-                // Meldung ohne Ausweg. Nur Dateien, die nachweislich von den
-                // freigegebenen abweichen, und nur im Modellzwischenspeicher.
-                let broken = manifest.mismatchingFiles(directory: baseDirectory)
-                // Leer waere ein Widerspruch zum eben geworfenen Fehler und
-                // hiesse, die Datei hat sich zwischen beiden Lesungen
-                // geaendert. Dann nichts loeschen, sondern melden.
-                guard !broken.isEmpty else { throw integrity }
-                for relativePath in broken {
-                    try? FileManager.default.removeItem(
-                        at: baseDirectory.appendingPathComponent(relativePath)
-                    )
-                }
-                // Der Balken faengt sichtbar von vorn an: er ist monoton, und
-                // ohne das Zuruecksetzen stuende er waehrend des erneuten
-                // Ladens bei 95 Prozent.
-                relay.reset()
+                // The provider stays available for final ASR while this download
+                // runs. Hide partially moved FluidAudio bundles from diarization
+                // until the complete manifest has passed verification.
+                try markDiarizationModelInstallationIncomplete(in: baseDirectory)
                 try await download(baseDirectory) { fraction in
                     relay.report(fraction * Self.downloadShare)
                 }
                 try Task.checkCancellation()
-                // Zweiter Fehlschlag geht durch. Ein weiterer Versuch braechte
-                // dieselben Bytes und der Nutzer saehe nie einen Fehler.
-                try manifest.verify(directory: baseDirectory)
+                do {
+                    try manifest.verify(directory: baseDirectory)
+                } catch let integrity as ModelIntegrityError {
+                    // Genau ein Reparaturversuch. FluidAudios Downloader
+                    // ueberspringt jeden vorhandenen Zielpfad, deshalb pruefte
+                    // ohne das Loeschen jeder weitere Klick dieselben falschen
+                    // Bytes: der Nutzer saesse in einer Schleife aus roter
+                    // Meldung ohne Ausweg. Nur Dateien, die nachweislich von den
+                    // freigegebenen abweichen, und nur im Modellzwischenspeicher.
+                    let broken = manifest.mismatchingFiles(directory: baseDirectory)
+                    // Leer waere ein Widerspruch zum eben geworfenen Fehler und
+                    // hiesse, die Datei hat sich zwischen beiden Lesungen
+                    // geaendert. Dann nichts loeschen, sondern melden.
+                    guard !broken.isEmpty else { throw integrity }
+                    for relativePath in broken {
+                        try? FileManager.default.removeItem(
+                            at: baseDirectory.appendingPathComponent(relativePath)
+                        )
+                    }
+                    // Der Balken faengt sichtbar von vorn an: er ist monoton, und
+                    // ohne das Zuruecksetzen stuende er waehrend des erneuten
+                    // Ladens bei 95 Prozent.
+                    relay.reset()
+                    try await download(baseDirectory) { fraction in
+                        relay.report(fraction * Self.downloadShare)
+                    }
+                    try Task.checkCancellation()
+                    // Zweiter Fehlschlag geht durch. Ein weiterer Versuch braechte
+                    // dieselben Bytes und der Nutzer saehe nie einen Fehler.
+                    try manifest.verify(directory: baseDirectory)
+                }
+                try clearDiarizationModelInstallationMarker(in: baseDirectory)
+                // Der Abschluss gehoert in den Task, nicht hinter das `await`
+                // des Erstaufrufers: sonst kann sich ein wartender Zweiter
+                // abmelden, bevor er die 100 Prozent gesehen hat.
+                relay.report(1)
+            } catch {
+                if diarizationModelInstallationIsVerified(
+                    in: baseDirectory,
+                    manifest: manifest,
+                    ignoringIncompleteMarker: true
+                ) {
+                    try? clearDiarizationModelInstallationMarker(in: baseDirectory)
+                }
+                throw error
             }
-            try clearDiarizationModelInstallationMarker(in: baseDirectory)
-            // Der Abschluss gehoert in den Task, nicht hinter das `await`
-            // des Erstaufrufers: sonst kann sich ein wartender Zweiter
-            // abmelden, bevor er die 100 Prozent gesehen hat.
-            relay.report(1)
         }
         activeInstall = task
         defer { activeInstall = nil }
@@ -377,4 +407,24 @@ func requiredBundleURLs(baseDirectory: URL) throws -> [URL] {
             isDirectory: true
         ),
     ]
+}
+
+private func diarizationModelInstallationIsVerified(
+    in baseDirectory: URL,
+    manifest: ModelChecksumManifest,
+    ignoringIncompleteMarker: Bool
+) -> Bool {
+    if !ignoringIncompleteMarker,
+       diarizationModelInstallationIsIncomplete(in: baseDirectory)
+    {
+        return false
+    }
+    do {
+        try manifest.verify(directory: baseDirectory)
+        return try requiredBundleURLs(baseDirectory: baseDirectory).allSatisfy {
+            modelBundleIsComplete($0, fileManager: .default)
+        }
+    } catch {
+        return false
+    }
 }

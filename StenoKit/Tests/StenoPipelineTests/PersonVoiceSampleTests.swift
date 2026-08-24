@@ -211,6 +211,71 @@ struct PersonVoiceSampleTests {
         }
     }
 
+    @Test("the matching segment selects one exact asset and ambiguity disables playback")
+    func resolvesOnlyAnUnambiguousTrackOfTheSameKind() async throws {
+        try await withTemporaryDirectory { root in
+            let library = try Library.open(at: root)
+            let meeting = try await library.createMeeting(title: "Imports", status: .ready)
+            let firstAssetID = try await addTrack(
+                library,
+                meetingID: meeting.id,
+                kind: .imported,
+                contents: "first"
+            )
+            let secondAssetID = try await addTrack(
+                library,
+                meetingID: meeting.id,
+                kind: .imported,
+                contents: "second"
+            )
+            let target = DiarizationRunSegment(
+                clusterID: "second/speaker-0",
+                start: 12,
+                end: 18
+            )
+            let other = DiarizationRunSegment(
+                clusterID: "first/speaker-0",
+                start: 2,
+                end: 4
+            )
+            let runID = try await writeDiarizationRun(
+                library,
+                meetingID: meeting.id,
+                tracks: [
+                    track(assetID: firstAssetID, kind: .imported, segments: [other]),
+                    track(assetID: secondAssetID, kind: .imported, segments: [target]),
+                ]
+            )
+            let evidence = person(
+                withPrototypeIn: meeting.id,
+                runID: runID,
+                clusterID: target.clusterID,
+                channel: MediaAsset.Kind.imported.rawValue
+            )
+
+            var samples = await PersonVoiceSamples.resolve(
+                library: library,
+                person: evidence
+            )
+            #expect(samples.first?.playback?.assetID == secondAssetID)
+
+            try await overwriteDiarizationTracks(
+                library,
+                meetingID: meeting.id,
+                runID: runID,
+                tracks: [
+                    track(assetID: firstAssetID, kind: .imported, segments: [target]),
+                    track(assetID: secondAssetID, kind: .imported, segments: [target]),
+                ]
+            )
+            samples = await PersonVoiceSamples.resolve(
+                library: library,
+                person: evidence
+            )
+            #expect(samples.first?.playback == nil)
+        }
+    }
+
     @Test("a deleted meeting leaves the evidence listed but silent")
     func survivesADeletedMeeting() async throws {
         try await withTemporaryDirectory { root in
@@ -286,7 +351,8 @@ struct PersonVoiceSampleTests {
     private func person(
         withPrototypeIn meetingID: MeetingID,
         runID: RunID,
-        clusterID: String
+        clusterID: String,
+        channel: String = MediaAsset.Kind.systemTrack.rawValue
     ) -> Person {
         let personID = PersonID()
         return Person(
@@ -296,7 +362,7 @@ struct PersonVoiceSampleTests {
                 personID: personID,
                 embedding: [1, 0],
                 recordingType: .remote,
-                channel: MediaAsset.Kind.systemTrack.rawValue,
+                channel: channel,
                 meetingID: meetingID,
                 runID: runID,
                 clusterID: clusterID,
@@ -311,11 +377,12 @@ struct PersonVoiceSampleTests {
     private func addTrack(
         _ library: Library,
         meetingID: MeetingID,
-        kind: MediaAsset.Kind
+        kind: MediaAsset.Kind,
+        contents: String = "audio"
     ) async throws -> MediaAssetID {
         let source = FileManager.default.temporaryDirectory
             .appendingPathComponent("\(UUID().uuidString).caf")
-        try Data("audio".utf8).write(to: source)
+        try Data(contents.utf8).write(to: source)
         defer { try? FileManager.default.removeItem(at: source) }
         return try await library.registerMediaAsset(
             for: meetingID,
@@ -330,14 +397,15 @@ struct PersonVoiceSampleTests {
     private func writeDiarizationRun(
         _ library: Library,
         meetingID: MeetingID,
-        segments: [DiarizationRunSegment],
+        segments: [DiarizationRunSegment] = [],
         // Die Spur, die dieser Lauf diarisiert hat. Ohne sie zeigt das
         // Artefakt auf eine Spur, die es nicht gibt - und dann darf auch
         // nichts abgespielt werden.
         assetID: MediaAssetID = MediaAssetID(),
+        tracks: [DiarizationTrackResult]? = nil,
         createdAt: Date = Date()
     ) async throws -> RunID {
-        let layout = await library.layout
+        let layout = library.layout
         let run = ProcessingRun(
             meetingID: meetingID,
             kind: .diarization,
@@ -356,7 +424,7 @@ struct PersonVoiceSampleTests {
             jobID: JobID(),
             sourceRunID: RunID(),
             revisionID: RevisionID(),
-            tracks: [DiarizationTrackResult(
+            tracks: tracks ?? [DiarizationTrackResult(
                 assetID: assetID,
                 assetKind: .systemTrack,
                 engine: EngineDescriptor(name: "fixture", version: "1"),
@@ -368,5 +436,39 @@ struct PersonVoiceSampleTests {
             to: layout.runDiarization(meetingID, runID: run.id)
         )
         return run.id
+    }
+
+    private func track(
+        assetID: MediaAssetID,
+        kind: MediaAsset.Kind,
+        segments: [DiarizationRunSegment]
+    ) -> DiarizationTrackResult {
+        DiarizationTrackResult(
+            assetID: assetID,
+            assetKind: kind,
+            engine: EngineDescriptor(name: "fixture", version: "1"),
+            segments: segments,
+            clusters: []
+        )
+    }
+
+    private func overwriteDiarizationTracks(
+        _ library: Library,
+        meetingID: MeetingID,
+        runID: RunID,
+        tracks: [DiarizationTrackResult]
+    ) async throws {
+        let artifactURL = library.layout.runDiarization(meetingID, runID: runID)
+        let previous = try JSONDecoder().decode(
+            DiarizationArtifact.self,
+            from: Data(contentsOf: artifactURL)
+        )
+        let replacement = DiarizationArtifact(
+            jobID: previous.jobID,
+            sourceRunID: previous.sourceRunID,
+            revisionID: previous.revisionID,
+            tracks: tracks
+        )
+        try JSONEncoder().encode(replacement).write(to: artifactURL)
     }
 }

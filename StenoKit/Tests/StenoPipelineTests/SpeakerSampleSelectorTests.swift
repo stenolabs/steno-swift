@@ -82,7 +82,7 @@ struct SpeakerSampleSelectorTests {
 
     @Test("a long but word-poor turn loses against shorter word-rich turns")
     func chimeArtifactDemoted() {
-        // Synthetischer Regressionsfall: Turn bei 00:00 war durch einen
+        // Realfall aus einem echten Meeting: Turn bei 00:00 war durch den Zoom-
         // Beitrittston über 2 s lang, trug aber nur zwei Wörter (und die
         // vom falschen Sprecher). Er darf nicht die Inline-Probe sein und
         // fliegt raus, sobald fünf bessere existieren.
@@ -92,7 +92,7 @@ struct SpeakerSampleSelectorTests {
             clusterID: "system/a/S0",
             start: 0,
             end: 3,
-            text: "Test Person A"
+            text: "Tomin Reinhold"
         )]
         for index in 0..<3 {
             let start = TimeInterval(10 + index * 10)
@@ -112,7 +112,7 @@ struct SpeakerSampleSelectorTests {
         // Nur 3 vollwertige Proben existieren: die Liste bleibt bei 3,
         // statt mit dem Störschnipsel aufgefüllt zu werden.
         #expect(samples.count == 3)
-        #expect(!samples.contains { $0.text == "Test Person A" })
+        #expect(!samples.contains { $0.text == "Tomin Reinhold" })
     }
 
     @Test("merged fragments and resolutions contribute their turns")

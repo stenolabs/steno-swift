@@ -103,4 +103,73 @@ struct MissingDiarizationModelJobRetrierTests {
             #expect(try await store.load(job.id).status == .queued)
         }
     }
+
+    @Test("recovery skips a stale demo generation and keeps imported behavior")
+    func recoveryUsesCurrentMeetingGeneration() async throws {
+        try await withTemporaryDirectory { root in
+            let library = try Library.open(at: root)
+            let currentGeneration = MeetingTransferGenerationID()
+            let staleGeneration = MeetingTransferGenerationID()
+            let demo = try await library.createMeeting(
+                title: "Demo G2",
+                status: .ready,
+                metadata: MeetingMetadata(demoProvenance: DemoProvenance(
+                    datasetID: "steno-demo-v1",
+                    datasetVersion: "v2",
+                    itemID: "demo",
+                    installationGenerationID: currentGeneration
+                ))
+            )
+            let importGeneration = MeetingTransferGenerationID()
+            let imported = try await library.createMeeting(
+                title: "Imported",
+                status: .ready,
+                metadata: MeetingMetadata(transferReceipt: MeetingTransferReceipt(
+                    sourceMeetingID: MeetingID(),
+                    sourceRevisionID: nil,
+                    sourcePackageContentDigest: String(repeating: "a", count: 64),
+                    importedAt: Date(timeIntervalSinceReferenceDate: 1),
+                    sourceAppVersion: nil,
+                    includedCapabilities: [.audio],
+                    sourceLocaleIdentifier: "de-DE",
+                    sourceLocaleOrigin: .explicit,
+                    importGenerationID: importGeneration
+                ))
+            )
+            let store = try JobStore(layout: library.layout)
+            let stale = Job(
+                kind: .diarization,
+                meetingID: demo.id,
+                importGenerationID: staleGeneration,
+                status: .failed,
+                failureReason: .diarizationModelsNotInstalled
+            )
+            let current = Job(
+                kind: .diarization,
+                meetingID: demo.id,
+                importGenerationID: currentGeneration,
+                status: .failed,
+                failureReason: .diarizationModelsNotInstalled
+            )
+            let importedJob = Job(
+                kind: .diarization,
+                meetingID: imported.id,
+                importGenerationID: importGeneration,
+                status: .failed,
+                failureReason: .diarizationModelsNotInstalled
+            )
+            for job in [stale, current, importedJob] {
+                try await store.enqueue(job)
+            }
+
+            let requeued = try await MissingDiarizationModelJobRetrier.requeue(
+                jobStore: store
+            )
+
+            #expect(Set(requeued) == [current.id, importedJob.id])
+            #expect(try await store.load(stale.id).status == .failed)
+            #expect(try await store.load(current.id).status == .queued)
+            #expect(try await store.load(importedJob.id).status == .queued)
+        }
+    }
 }

@@ -8,11 +8,11 @@ public enum PromptDataClass: String, CaseIterable, Codable, Sendable {
     public var displayName: String {
         switch self {
         case .transcriptWithSpeakerNames:
-            "Transkript mit Sprechername"
+            "transcript with speaker names"
         case .participants:
-            "Teilnehmer"
+            "participants"
         case .userNotes:
-            "Eigene Notizen"
+            "your notes"
         }
     }
 }

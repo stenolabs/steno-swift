@@ -288,7 +288,7 @@ private struct ContactEditor: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            TextField("Organization", text: $organization, prompt: Text("Example GmbH"))
+            TextField("Organization", text: $organization, prompt: Text("Muster GmbH"))
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { commit() }
             TextField("E-mail", text: $email, prompt: Text("name@example.org"))

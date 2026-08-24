@@ -4,14 +4,14 @@ import StenoMacAudio
 import SwiftUI
 
 struct RecordingTrackPresentation: Equatable {
-    let actionTitle: String?
+    let actionTitle: LocalizedStringResource?
     let actionIcon: String?
-    let warning: String?
+    let warning: LocalizedStringResource?
     let isPaused: Bool
 
     init(status: RecordingTrackStatus?) {
         let status = status ?? RecordingTrackStatus()
-        let name = status.deviceName ?? "Microphone"
+        let name = status.deviceName ?? String(localized: "Microphone")
         if !status.deviceAvailable {
             actionTitle = nil
             actionIcon = nil
@@ -62,13 +62,22 @@ struct RecordingView: View {
             }
             .inspectorColumnWidth(min: 260, ideal: 320, max: 420)
         }
-        .toolbar {
-            ToolbarItem {
+        .toolbar(id: MacToolbarID.recording.rawValue) {
+            ToolbarItem(
+                id: MacToolbarItemID.recordingNotes.rawValue,
+                placement: .primaryAction
+            ) {
                 Toggle(isOn: $showNotes) {
                     Label("Notes", systemImage: "square.and.pencil")
                 }
                 .help("Take notes while recording")
             }
+            .defaultCustomization(
+                MacToolbarPresentation.defaultCustomization(
+                    for: .recordingNotes,
+                    in: .recording
+                )
+            )
         }
     }
 
@@ -113,49 +122,42 @@ struct RecordingView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
+            if !model.transcriptionLanguageSelection
+                .effectiveLocaleWasChosenExplicitly,
+               !model.availableLocales.isEmpty {
+                Label(
+                    "Transcription language is guessed as \(model.selectedTranscriptionLanguageName). Confirm it in Settings before you rely on a transcript.",
+                    systemImage: "questionmark.circle"
+                )
+                .font(.callout)
+                .foregroundStyle(.orange)
+            }
         }
         .padding()
         .background(.background.secondary)
     }
 
     private var transcript: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    ForEach(model.liveFinalLines) { line in
-                        TranscriptLineView(
-                            speaker: line.speaker,
-                            text: line.text,
-                            isVolatile: false
-                        )
-                        .id(line.id)
-                    }
-                    ForEach(
-                        AudioTrack.allCases.filter {
-                            !(model.liveVolatileText[$0] ?? "").isEmpty
-                        },
-                        id: \.self
-                    ) { track in
-                        TranscriptLineView(
-                            speaker: ChannelLabel.speakerLabel(track == .microphone ? "Ich" : "Andere"),
-                            text: model.liveVolatileText[track] ?? "",
-                            isVolatile: true
-                        )
-                        .id("volatile-\(track.rawValue)")
-                    }
-                }
-                .padding()
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .onChange(of: model.liveFinalLines.count) {
-                if let last = model.liveFinalLines.last {
-                    withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+        // Neueste zuerst: der Feed liefert die laufende Zeile oben, darunter
+        // die fertigen in absteigender Zeit. Ein Autoscroll erübrigt sich
+        // damit, und er kämpfte ohnehin gegen jeden Griff zum Scrollbalken.
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 10) {
+                ForEach(model.liveTranscriptRows) { row in
+                    TranscriptLineView(
+                        speaker: ChannelLabel.speakerLabel(
+                            row.block.channel.speakerLabel
+                        ),
+                        text: row.block.text,
+                        isVolatile: row.kind == .volatile
+                    )
                 }
             }
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .overlay {
-            if model.liveFinalLines.isEmpty
-                && model.liveVolatileText.values.allSatisfy(\.isEmpty) {
+            if model.liveTranscriptRows.isEmpty {
                 ContentUnavailableView(
                     "Waiting for speech",
                     systemImage: "waveform.badge.magnifyingglass",

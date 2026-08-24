@@ -116,7 +116,20 @@ public enum AtomicFile {
         }
     }
 
-    private static func synchronizeDirectory(_ directoryURL: URL) throws {
+    package static func synchronizeFile(_ fileURL: URL) throws {
+        let descriptor = fileURL.path.withCString {
+            Darwin.open($0, O_RDONLY | O_NOFOLLOW)
+        }
+        guard descriptor >= 0 else {
+            throw POSIXFailure(operation: "open file", code: errno)
+        }
+        defer { Darwin.close(descriptor) }
+        guard Darwin.fsync(descriptor) == 0 else {
+            throw POSIXFailure(operation: "fsync file", code: errno)
+        }
+    }
+
+    package static func synchronizeDirectory(_ directoryURL: URL) throws {
         let descriptor = directoryURL.path.withCString { Darwin.open($0, O_RDONLY) }
         guard descriptor >= 0 else {
             throw POSIXFailure(operation: "open directory", code: errno)

@@ -64,10 +64,16 @@ private func accumulateChunkEmbeddings(
     while sampleStart < audio.count, frameStart < maskFrameCount {
         let sampleEnd = min(sampleStart + chunkSamples, audio.count)
         let frameEnd = min(frameStart + framesPerChunk, maskFrameCount)
-        let chunk = Array(audio[sampleStart..<sampleEnd])
-        let chunkMasks = (0..<speakerCount).map {
-            Array(masks[$0][frameStart..<frameEnd])
-        }
+        let window = prepareSortformerEmbeddingWindow(
+            audio: Array(audio[sampleStart..<sampleEnd]),
+            masks: (0..<speakerCount).map {
+                Array(masks[$0][frameStart..<frameEnd])
+            },
+            samplesPerWindow: chunkSamples,
+            framesPerWindow: framesPerChunk
+        )
+        let chunk = window.audio
+        let chunkMasks = window.masks
         let topSlots = (0..<speakerCount)
             .map { slot in
                 (slot: slot, activity: chunkMasks[slot].reduce(0, +))
@@ -109,4 +115,31 @@ private func accumulateChunkEmbeddings(
         frameStart = frameEnd
     }
     return (sums, counts)
+}
+
+struct SortformerEmbeddingWindow: Equatable, Sendable {
+    let audio: [Float]
+    let masks: [[Float]]
+}
+
+/// WeSpeaker interprets both inputs on a fixed ten-second time axis. Padding
+/// only one side would make the final, shorter window select audio from a
+/// different point in time than its activity mask.
+func prepareSortformerEmbeddingWindow(
+    audio: [Float],
+    masks: [[Float]],
+    samplesPerWindow: Int,
+    framesPerWindow: Int
+) -> SortformerEmbeddingWindow {
+    SortformerEmbeddingWindow(
+        audio: padWithZeros(audio, to: samplesPerWindow),
+        masks: masks.map { padWithZeros($0, to: framesPerWindow) }
+    )
+}
+
+private func padWithZeros(_ values: [Float], to count: Int) -> [Float] {
+    let targetCount = max(0, count)
+    let retained = Array(values.prefix(targetCount))
+    guard retained.count < targetCount else { return retained }
+    return retained + Array(repeating: 0, count: targetCount - retained.count)
 }
