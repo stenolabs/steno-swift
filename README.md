@@ -191,7 +191,7 @@ Completed originals are never overwritten, and failed processing keeps the last 
 | Live and final transcription | Apple Speech Analyzer | Production default. Language availability comes from the operating system on the current device. |
 | Live and final transcription | FluidAudio Parakeet TDT | Optional. Final transcription is available for supported languages; live use is explicitly marked experimental. |
 | Speaker diarization | FluidAudio Sortformer and WeSpeaker | Runs locally. The current diarizer supports at most four speaker slots per audio track. |
-| Meeting minutes | Apple Intelligence | On-device default when the system model is available. |
+| Meeting minutes | Apple Intelligence (`SystemLanguageModel.default`) | On-device default when the system model is available. On OS 27, Apple selects AFM 3 Core Advanced where supported and falls back to AFM 3 Core; Steno records the actual variant on every generated report. |
 | Optional text models | Ollama, LM Studio, OpenAI, Anthropic, Amazon Bedrock, and OpenAI-compatible servers | Configured explicitly. Each report records the selected provider and endpoint revision. |
 
 Models are installed only after explicit consent.

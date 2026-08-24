@@ -1,4 +1,5 @@
 import FoundationModels
+import StenoDomain
 import Testing
 @testable import StenoIntelligence
 
@@ -13,6 +14,34 @@ struct FoundationModelsProviderTests {
         )
 
         #expect(window.maximumInputTokens == 2_944)
+    }
+
+    @Test("system model variants are preserved in immutable report metadata")
+    func systemModelVariantMetadata() {
+        #expect(
+            FoundationModelsProvider.engineDescriptor(for: .coreAdvanced3)
+                == EngineDescriptor(
+                    name: "FoundationModels",
+                    version: "26.0",
+                    modelVersion: "AFM 3 Core Advanced"
+                )
+        )
+        #expect(
+            FoundationModelsProvider.engineDescriptor(for: .core3)
+                == EngineDescriptor(
+                    name: "FoundationModels",
+                    version: "26.0",
+                    modelVersion: "AFM 3 Core"
+                )
+        )
+        #expect(
+            FoundationModelsProvider.engineDescriptor(for: .unknown("AFM Future"))
+                .modelVersion == "AFM Future"
+        )
+        #expect(
+            FoundationModelsProvider.engineDescriptor(for: .unknown(""))
+                .modelVersion == "SystemLanguageModel"
+        )
     }
 
     @Test("pre-26.4 token estimates are conservative for UTF-8 input")

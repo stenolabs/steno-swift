@@ -2,6 +2,23 @@ import Foundation
 import FoundationModels
 import StenoDomain
 
+enum FoundationModelsSystemVariant: Equatable, Sendable {
+    case coreAdvanced3
+    case core3
+    case unknown(String)
+
+    var modelVersion: String {
+        switch self {
+        case .coreAdvanced3:
+            "AFM 3 Core Advanced"
+        case .core3:
+            "AFM 3 Core"
+        case .unknown(let displayName):
+            displayName.isEmpty ? "SystemLanguageModel" : displayName
+        }
+    }
+}
+
 public struct FoundationModelsProvider: StructuredTextModelProvider {
     public let descriptor: EngineDescriptor
 
@@ -10,12 +27,55 @@ public struct FoundationModelsProvider: StructuredTextModelProvider {
     private let safetyTokens = 128
 
     public init(maximumResponseTokens: Int = 1024) {
-        self.model = .default
+        // Apple owns variant selection. `SystemLanguageModel.default` chooses
+        // AFM 3 Core Advanced on supported OS/device combinations and falls
+        // back to AFM 3 Core; Foundation Models exposes no public variant
+        // override. Keep one model instance for availability, token counts,
+        // context size, and generation so those observations cannot disagree.
+        let model = Self.preferredSystemModel()
+        self.model = model
         self.maximumResponseTokens = maximumResponseTokens
-        self.descriptor = EngineDescriptor(
-            name: "FoundationModels",
-            version: "26.0"
+        self.descriptor = Self.engineDescriptor(
+            for: Self.systemVariant(for: model)
         )
+    }
+
+    static func preferredSystemModel() -> SystemLanguageModel {
+        .default
+    }
+
+    static func engineDescriptor(
+        for variant: FoundationModelsSystemVariant
+    ) -> EngineDescriptor {
+        EngineDescriptor(
+            name: "FoundationModels",
+            version: "26.0",
+            modelVersion: variant.modelVersion
+        )
+    }
+
+    static func systemVariant(
+        for model: SystemLanguageModel
+    ) -> FoundationModelsSystemVariant {
+        #if compiler(>=6.4)
+        if #available(iOS 27.0, macOS 27.0, visionOS 27.0, *) {
+            if model.variant == .coreAdvanced3 {
+                return .coreAdvanced3
+            }
+            if model.variant == .core3 {
+                return .core3
+            }
+            return .unknown(model.variant.displayName)
+        }
+        #else
+        // A binary built with the 26.x SDK can run on OS 27, but that SDK
+        // cannot inspect `variant`. Keep the persisted report metadata honest
+        // instead of incorrectly claiming the Core fallback.
+        if #available(iOS 27.0, macOS 27.0, visionOS 27.0, *) {
+            return .unknown("SystemLanguageModel")
+        }
+        #endif
+        return .core3
     }
 
     public var availability: TextModelAvailability {
