@@ -1,68 +1,68 @@
-# Cross-platform UI QA vom 24.08.2026
+# Cross-platform UI QA on 24 August 2026
 
-## Umfang
+## Scope
 
-Geprueft wurde der konsolidierte Stand von `codex/ui-modernization` fuer macOS, iPhone und iPad.
+The consolidated `codex/ui-modernization` state was checked on macOS, iPhone, and iPad.
 
-Alle Laufzeittests mit Demo-Daten verwendeten isolierte Bibliotheks- und Modellverzeichnisse.
-Die echte Meeting-Bibliothek des Nutzers wurde nicht geoeffnet oder veraendert.
+Every runtime test using demo data used isolated library and model directories.
+The user's real meeting library was neither opened nor changed.
 
-## Gemessen und direkt beobachtet
+## Measured and directly observed
 
-- Die iPhone-Pruefung lief auf einem iPhone-17-Simulator mit iOS 26.5.
-- Die iPad-Pruefung lief auf einem iPad-Pro-13-Zoll-M5-Simulator mit iPadOS 26.5 in Hoch- und Querformat.
-- Die macOS-Pruefung lief mit einer isolierten temporaeren Bibliothek.
-- Heller und dunkler Darstellungsmodus wurden fuer die zentralen Bibliotheks-, Meeting-, Aufnahme-, Demo- und Einstellungsansichten visuell geprueft.
-- Die Demo-Bibliothek installiert drei klar mit `DEMO:` und `Demo` gekennzeichnete, lokale synthetische Meetings in einem eigenen Ordner.
-- Die Demo-Detailansicht nennt die synthetische Herkunft und zeigt keine unbestaetigten Sprecher als reale Personen an.
-- Die iPad-Rueckfrage fuer `Erneut transkribieren` aus dem Menue oben rechts erscheint zentriert im Hauptinhalt und nicht in der Seitenleiste.
-- Die Rueckfrage nennt die neue Revision, den Erhalt des bisherigen Transkripts und seiner Korrekturen, neue Cluster-Kennungen sowie die erneut notwendige Sprecherbestaetigung.
-- Die Aktion wurde bei der UI-Pruefung abgebrochen und deshalb nicht eingereiht.
-- Die installierte Offline-Modellzeile blieb auf iPhone- und iPad-Groesse unter 80 Punkten hoch und erschien im Laufzeittest als normale einzeilige Karte.
-- Die uebergrosse Zeile liess sich auf `LabeledContent` innerhalb dieser dynamischen List-Zeile eingrenzen.
-  Der Inhalt und die nachfolgenden Statuszeilen erzeugten die Hoehe nicht.
-  Der Ersatz durch eine explizite `HStack` beseitigte sie, und ein UIKit-Hierarchietest sichert die Zellhoehe auf beiden Geraetegroessen ab.
-- Fuer die gespeicherte deutsche Sprache enthielten beide Transkriptions-Picker jeweils zwei Eintraege: Apple Speech Analyzer und FluidAudio Parakeet TDT.
-  Ein Picker ist damit in dieser Konfiguration sachlich richtig.
-  Nicht installierte oder experimentell gesperrte Eintraege bleiben sichtbar und nennen ihren Zustand.
-- Der deutsch lokalisierte Lauf zeigte keine fehlenden deutschen Eintraege in den beiden App-Katalogen.
-- Die deutsch lokalisierte Datenschutzwarnung fuer externe Textmodelle nennt die uebertragenen Datenklassen, Ziel und fehlende Transportverschluesselung.
-- Das bisherige Steno-Icon der macOS- und iOS-Quellen war bytegleich.
-- Seine gemessenen Standard-Farbendpunkte sind `#0DACBD` und `#00717E`.
-- Die weisse Marke belegt im 1024-Pixel-Original die Grenzen x=302 bis 786 und y=186 bis 809.
-- Die vektorisierte S-Marke erreicht 99,313 Prozent Masken-IoU zum Rasteroriginal.
-- Der Punkt ist als exakter Vektorkreis erhalten.
-- Icon Composer, `actool`, beide App-Builds und die sichtbare Simulator-Darstellung wurden mit dem gemeinsamen Icon-Dokument geprueft.
-- macOS-App, macOS-Testbundle, iOS-Simulator-App, iOS-Testbundle, StenoiOSKit-Testbundle und signierte Geraete-App sind jeweils nicht-fette ARM64-Mach-O-Dateien.
-- Der signierte Build `org.steno.Steno` Version 1.0 Build 1 wurde auf dem iPhone 15 Pro und dem iPad Pro 11 Zoll installiert und anschliessend in beiden App-Listen gefunden.
+- iPhone verification used an iPhone 17 Simulator running iOS 26.5.
+- iPad verification used a 13-inch M5 iPad Pro Simulator running iPadOS 26.5 in portrait and landscape.
+- macOS verification used an isolated temporary library.
+- Light and dark appearance were visually checked for the central library, meeting, recording, demo, and settings views.
+- The demo library installs three local synthetic meetings, clearly labeled with `DEMO:` and `Demo`, in a dedicated folder.
+- The demo detail view identifies its synthetic origin and does not present unconfirmed speakers as real people.
+- The iPad confirmation dialog for "Transcribe Again" from the upper-right menu appears centered in the main content rather than in the sidebar.
+- The dialog explains the new revision, preservation of the previous transcript and its corrections, new cluster identifiers, and the need to confirm speakers again.
+- The action was canceled during UI verification and therefore was not enqueued.
+- The installed offline-model row remained under 80 points high at iPhone and iPad sizes and appeared as a normal single-line card at runtime.
+- The oversized row was isolated to `LabeledContent` within this dynamic list row.
+  Neither its content nor the following status rows caused the height.
+  Replacing it with an explicit `HStack` fixed the issue, and a UIKit hierarchy test now guards cell height at both device sizes.
+- For the stored German language, both transcription pickers contained exactly Apple Speech Analyzer and FluidAudio Parakeet TDT.
+  A picker is therefore appropriate in this configuration.
+  Uninstalled or experimentally gated choices remain visible and state their status.
+- The German-localized run showed no missing German entries in either app catalog.
+- The German-localized external text-model privacy warning names the transmitted data classes, destination, and lack of transport encryption.
+- The previous macOS and iOS Steno icon sources were byte-identical.
+- Their measured gradient endpoints are `#0DACBD` and `#00717E`.
+- In the 1024-pixel original, the white mark occupies x=302 through 786 and y=186 through 809.
+- The vectorized S mark reaches 99.313 percent mask intersection-over-union with the raster original.
+- The dot remains an exact vector circle.
+- Icon Composer, `actool`, both app builds, and visible Simulator rendering were checked with the shared icon document.
+- The macOS app, macOS test bundle, iOS Simulator app, iOS test bundle, StenoiOSKit test bundle, and signed device app are all thin ARM64 Mach-O files.
+- Signed build `org.steno.Steno`, version 1.0 build 1, was installed on an iPhone 15 Pro and 11-inch iPad Pro and then found in both application lists.
 
-## Vollstaendige Tests
+## Complete test runs
 
-- `swift test --package-path StenoKit`: 1082 Tests in 125 Suiten bestanden.
-- macOS-App-Suite: 319 Tests in 31 Suiten bestanden.
-- iOS-App-Suite: 476 Tests in 43 Suiten bestanden.
-- StenoiOSKit-Suite: 35 Tests in 5 Suiten bestanden.
-- Die Shell-Pruefungen fuer Apple-Silicon-only und die iOS-Buildargumente bestanden ebenfalls.
+- `swift test --package-path StenoKit`: 1,082 tests in 125 suites passed.
+- macOS app suite: 319 tests in 31 suites passed.
+- iOS app suite: 476 tests in 43 suites passed.
+- StenoiOSKit suite: 35 tests in five suites passed.
+- Shell checks for Apple-Silicon-only output and iOS build arguments also passed.
 
-Der erste vollstaendige iOS-Lauf deckte alte Tests auf, die sichtbare Texte fest auf Englisch erwarteten, obwohl der Testprozess deutsch lief.
-Die Produkttexte waren korrekt deutsch.
-Die Erwartungen wurden sprachstabil gemacht und die vollstaendige Suite danach erfolgreich wiederholt.
+The first complete iOS run exposed old tests that hard-coded visible English strings even though the test process ran in German.
+The product strings were correctly localized in German.
+The expectations were made language-stable and the complete suite then passed.
 
-Claude Fable pruefte den konsolidierten Diff als unabhaengige zweite Meinung.
-Der wesentliche uebernommene Hinweis war, feste Sprecherrollen nicht anhand ihres angezeigten Texts zu erkennen.
-`SpeakerPresentation` traegt diese Rollen nun typisiert, bestaetigte Nutzernamen wie `Me` bleiben unveraendert und nur der Quellenzusatz undurchsichtiger Cluster-Kennungen wird lokalisiert.
-Die gemeldete moegliche Umwandlung von `NaN` oder Unendlich in einen ganzzahligen Pegel wurde nach Quellverfolgung und einem Swift-Lauf verworfen: `AudioLevel` normalisiert diese Werte bereits beim oeffentlichen Initialisieren auf den gueltigen Pegelbereich.
+Claude Fable reviewed the consolidated diff independently.
+The main adopted recommendation was to stop recognizing fixed speaker roles from displayed text.
+`SpeakerPresentation` now carries these roles as types, confirmed user names such as `Me` remain unchanged, and only the source suffix of opaque cluster identifiers is localized.
+The reported possible conversion of `NaN` or infinity into an integer level was rejected after tracing the source and running Swift: `AudioLevel` already normalizes those inputs through its public initializer into the valid range.
 
-## Abgeleitet oder bewusst gestaltet
+## Inferred or deliberately designed
 
-- Der horizontale Anteil des Icon-Verlaufs von etwa 30 Prozent ist aus den gemessenen Eckfarben abgeleitet, nicht als Metadatum aus dem alten PNG auslesbar.
-- Dunkelmodus-Material und Icon-Composer-Rendition sind bewusste Designentscheidungen.
-- Die Zuordnung der uebergrossen Modellzeile zu `LabeledContent` beruht auf der isolierten Komponenten-Aenderung und dem reproduzierenden Zelltest.
-  Eine interne SwiftUI-Ursache unterhalb dieser Komponente ist nicht oeffentlich beobachtbar.
+- The roughly 30-percent horizontal extent of the icon gradient is inferred from the measured endpoint colors, not readable as metadata from the old PNG.
+- Dark-mode material and the Icon Composer rendition are deliberate design decisions.
+- Attribution of the oversized model row to `LabeledContent` rests on the isolated component change and reproducing cell test.
+  The internal SwiftUI cause below that component is not publicly observable.
 
-## Nicht gemessen
+## Not measured
 
-- VoiceOver wurde strukturell ueber Accessibility-Labels und Layouttests geprueft, aber nicht als vollstaendige gesprochene Sitzung mit Kopfhoerer abgenommen.
-- Die beiden physischen Installationen wurden technisch verifiziert.
-  Eine visuelle und interaktive Abnahme auf den physischen Displays wurde nicht automatisiert behauptet.
-- Die Ruecktranskription wurde in der isolierten iPad-Pruefung bewusst nicht gestartet, damit keine unnoetige Modellarbeit laeuft.
+- VoiceOver was checked structurally through accessibility labels and layout tests, but not as a complete spoken session with headphones.
+- Both physical installations were verified technically.
+  No automated claim is made about visual or interactive acceptance on the physical displays.
+- Re-transcription was deliberately not started in isolated iPad verification to avoid unnecessary model work.

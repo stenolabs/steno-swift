@@ -1,71 +1,60 @@
-# Synthetische Demo-Aufnahmen
+# Synthetic demo recordings
 
-Das Bundle enthält ausschließlich drei vorgerenderte, fiktive deutsche PCM16-Mono-WAVs mit 22.050 Hz.
+The bundle contains exactly three pre-rendered fictional German PCM16 mono WAV files at 22,050 Hz.
 
-Die Laufzeiten sind 67,452517 Sekunden für `projektauftakt`, 59,454240 Sekunden für `wochenrunde` und 59,866485 Sekunden für `produktinterview`.
+Their durations are 67.452517 seconds for `projektauftakt`, 59.454240 seconds for `wochenrunde`, and 59.866485 seconds for `produktinterview`.
 
-`projektauftakt` enthält zwei dokumentierte kurze Überlappungen mit zusammen 0,329161 Sekunden und maximal zwei gleichzeitigen Stimmen.
+`projektauftakt` contains two documented short overlaps totaling 0.329161 seconds, with at most two simultaneous voices.
+The other two timelines are sequential.
 
-Die beiden anderen Zeitachsen sind sequenziell.
+`render-demo-audio.sh` builds only inside a marked task-owned cache under `/private/tmp/steno-demo-generator-*`, verifies every pinned artifact, and bundles neither the model nor the generator.
 
-`render-demo-audio.sh` baut nur in einem markierten, task-eigenen Cache unter `/private/tmp/steno-demo-generator-*`, verifiziert alle festgelegten Artefakte und bündelt weder Modell noch Generator.
+The current user's effective UID owns the cache.
+Its root directory has mode 0700, and its non-symbolic ownership marker has mode 0600.
+Before use, the script also verifies ownership, type, and restrictive modes for `runs`, `downloads`, the lock, partial files, and run markers.
 
-Der Cache gehört nach effektiver UID dem laufenden Nutzer, sein Wurzelverzeichnis hat Modus 0700 und seine nicht symbolische Besitzmarkierung Modus 0600.
+Every build runs natively on Apple Silicon in its own temporary subdirectory.
+The shared download cache is locked exclusively, and fully verified files are published atomically.
 
-Auch `runs`, `downloads`, Lock, Teildateien und Laufmarkierungen werden vor der Nutzung auf Eigentümer, Typ und restriktive Modi geprüft.
+CMake is downloaded from its pinned GHCR digest URL.
+The process neither invokes nor modifies Homebrew.
 
-Jeder Build läuft nativ auf Apple Silicon in einem eigenen temporären Unterverzeichnis.
+The native Piper invocation sets `--noise_scale 0 --noise_w 0`, making each rendered clip byte-stable with the verified toolchain.
 
-Der geteilte Download-Cache ist exklusiv gesperrt, und vollständig geprüfte Dateien werden atomar veröffentlicht.
+Start positions and levels no longer depend on floating-point calculations.
+Every segment has an explicit `startFrame` and an integer gain multiplier with 16 fractional bits.
+The multipliers are 65,536 for 0 dB, 58,409 for -1 dB, and 61,870 for -0.5 dB.
+Human-readable `start` and `gainDB` values remain as documentation and are checked against these authoritative integers.
 
-CMake wird über die festgelegte GHCR-Digest-URL geladen; Homebrew wird weder aufgerufen noch verändert.
+Level adjustment rounds positive and negative PCM values to the nearest integer, with exact halves rounded away from zero.
+The mixer records the input peak, pre-limit peak, clipped-sample count, frame count, and output peak.
+The normal clipping budget is zero, and all three frozen files were generated with zero clipped samples.
 
-Der native Piper-Aufruf setzt `--noise_scale 0 --noise_w 0`, damit der gerenderte Clip bei diesem geprüften Toolchain-Stand byte-stabil ist.
+Audio, timeline, and metrics are first written to unique partial files.
+The WAV file is published atomically only after successful validation and after its companion artifacts.
 
-Startposition und Pegel sind keine Fließkommaberechnungen mehr.
+The wrapper additionally retains all three meetings in a unique run staging area.
+It verifies the script hash, meeting set, zero-clipping condition, and every frozen WAV size and hash before publishing a previously absent destination as one complete directory tree.
+Optional evidence is also published as a complete tree before the final audio output tree.
 
-Jedes Segment enthält einen expliziten `startFrame` sowie einen ganzzahligen Verstärkungszähler mit 16 Nachkommabits.
+On macOS, the final directory commit calls `renamex_np` with `RENAME_EXCL` directly.
+It therefore cannot replace a destination that appears between preflight and commit or adopt it as a parent directory.
 
-Die Zähler sind 65.536 für 0 dB, 58.409 für -1 dB und 61.870 für -0,5 dB.
+If the final output-tree commit fails after evidence has already been published, the wrapper renames only its own evidence tree, identified by device and inode, back to its original staging name using an exclusive rename and then cleans it up under controlled conditions.
+If identity differs, the discovered tree remains untouched and the run fails closed.
 
-`start` und `gainDB` bleiben lesbare Dokumentation und werden gegen diese verbindlichen Ganzzahlwerte geprüft.
+Two complete native runs using the same verified download cache but fresh source, build, install, and render directories produced byte-identical WAV files, timelines, and metrics.
 
-Bei der Pegelanpassung wird für positive und negative PCM-Werte exakt auf den nächsten ganzzahligen Wert gerundet; ein halber Wert wird jeweils von null weg gerundet.
+Verified toolchain: macOS 26.5.2 build 25F84, Xcode 26.6 build 17F113, Apple Clang 21.0.0 `clang-2100.1.1.101`, Python 3.14.7, jq 1.7.1-apple, and CMake 4.4.2.
 
-Der Mixer misst Eingangspeak, Peak vor Begrenzung, Anzahl begrenzter Samples, Framezahl und Ausgangspeak.
+Piper was pinned to `38917ffd8c0e219c6581d73e07b30ef1d572fce1`, Piper Phonemize to `7e9174083b94fcc3c51c983a2394593abd81925b`, and eSpeak NG to `5c3a2e79c24f92cd408d067a9aa47553927ec891`.
+A small pinned patch removes eSpeak's Sonic fetch, which otherwise runs even with `USE_LIBSONIC` disabled.
 
-Das normale Clipping-Budget ist null, und alle drei eingefrorenen Dateien wurden mit null begrenzten Samples erzeugt.
+All pins, URLs, byte counts, checksums, licenses, and the common verification date of 23 August 2026 are recorded in `scripts/demo/demo-script.json`.
 
-Audio, Timeline und Metriken werden zunächst in eindeutige Teildateien geschrieben; die WAV-Datei wird erst nach erfolgreicher Validierung und zuletzt atomar veröffentlicht.
+Piper and Piper Voices were verified as MIT licensed.
+The voice model card identifies its MLS training material as CC BY 4.0.
+eSpeak NG is GPL-3.0-or-later and remains an unbundled development dependency.
 
-Der Wrapper hält zusätzlich alle drei Meetings vollständig in einem eindeutigen Lauf-Staging zurück.
-
-Er prüft Skript-Hash, Meeting-Menge, Null-Clipping sowie alle eingefrorenen WAV-Größen und -Hashes, bevor er ein noch nicht vorhandenes Zielverzeichnis als vollständigen Verzeichnisbaum veröffentlicht.
-
-Optionale Evidenz wird ebenfalls als vollständiger Baum und vor dem abschließenden Audio-Ausgabebaum veröffentlicht.
-
-Der finale Verzeichnis-Commit verwendet auf macOS direkt `renamex_np` mit `RENAME_EXCL` und kann deshalb kein zwischen Vorprüfung und Commit auftauchendes Ziel ersetzen oder als Elternverzeichnis verwenden.
-
-Scheitert der abschließende Ausgabebaum nach bereits veröffentlichter Evidenz, wird nur der anhand von Gerät und Inode identifizierte eigene Evidenzbaum exklusiv auf seinen ursprünglichen Stagingnamen zurückbenannt und kontrolliert bereinigt.
-
-Bei einer Identitätsabweichung bleibt der vorgefundene Baum unangetastet und der Lauf schlägt geschlossen fehl.
-
-Zwei vollständige native Läufe mit demselben verifizierten Download-Cache, aber frischen Quell-, Build-, Installations- und Renderverzeichnissen ergaben byte-identische WAVs, Timelines und Metriken.
-
-Geprüfter Werkzeugstand: macOS 26.5.2 (25F84), Xcode 26.6 (17F113), Apple Clang 21.0.0 (`clang-2100.1.1.101`), Python 3.14.7, jq 1.7.1-apple und CMake 4.4.2.
-
-Piper stand auf `38917ffd8c0e219c6581d73e07b30ef1d572fce1`, Piper Phonemize auf `7e9174083b94fcc3c51c983a2394593abd81925b` und eSpeak NG auf `5c3a2e79c24f92cd408d067a9aa47553927ec891`.
-
-Ein kleiner festgelegter Patch entfernt eSpeaks sonst auch bei deaktiviertem `USE_LIBSONIC` ausgeführten Sonic-Fetch aus der Quellkette.
-
-Die Pins, URLs, Bytezahlen, Prüfsummen, Lizenzen und das einheitliche Prüfdatum 23. August 2026 stehen vollständig in `scripts/demo/demo-script.json`.
-
-Piper und Piper Voices wurden als MIT geprüft.
-
-Die Modellkarte erklärt das MLS-Trainingsmaterial als CC BY 4.0.
-
-eSpeak NG ist GPL-3.0-or-later und nur eine nicht gebündelte Entwicklungsabhängigkeit.
-
-Es stand kein bestätigter Hörpfad zur Verfügung.
-
-Eine manuelle Hörannahme für Sprachverständlichkeit, Stimmtrennung und die zwei kurzen Überlappungen bleibt offen.
+No confirmed listening path was available during generation.
+Manual listening acceptance for intelligibility, voice separation, and the two short overlaps remains open.

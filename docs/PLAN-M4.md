@@ -1,5 +1,7 @@
 # Meilenstein 4: Vorlagen und Foundation Models
 
+> Historical, non-normative milestone record retained in German. Use `ARCHITECTURE.md` and `FEATURE-PARITY.md` for current status.
+
 Umsetzungsplan zu `ARCHITECTURE.md` Abschnitt 10, Meilenstein 4.
 Reihenfolge verbindlich; jeder Schritt endet mit grünem `swift test` und einem Commit.
 Grundsatz aus der Architektur: Ohne Modell bleibt alles andere vollständig nutzbar; kein externer Dienst wird je automatisch kontaktiert (Foundation Models laufen on-device).

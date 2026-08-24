@@ -1,5 +1,7 @@
 # Meilenstein 1: App-Hülle, Bibliothek, Aufnahme, Import, Live-Transkript
 
+> Historical, non-normative milestone record retained in German. Use `ARCHITECTURE.md` and `FEATURE-PARITY.md` for current status.
+
 Umsetzungsplan zu `ARCHITECTURE.md` Abschnitt 10, Meilenstein 1.
 Reihenfolge ist verbindlich; jeder Schritt endet mit grünem `swift test` und einem Commit.
 

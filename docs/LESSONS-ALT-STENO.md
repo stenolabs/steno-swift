@@ -1,5 +1,7 @@
 # Übergabe: Sprecher-Erkennung für die Swift/macOS-Fassung
 
+> Historical, non-normative record retained in German. Use `ARCHITECTURE.md` and `FEATURE-PARITY.md` for current guidance.
+
 Kontext für die neue Session: Du baust eine macOS-only Swift-Version von stenoAI.
 Was hier steht, stammt aus dem Python/Electron-Original — es sind **gemessene
 Ergebnisse und Entwurfsentscheidungen, die dort Wochen gekostet haben**, nicht

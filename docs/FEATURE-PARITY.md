@@ -1,134 +1,134 @@
-# Feature-Parität: stenoai (alt) gegen Steno (neu)
+# Feature parity: legacy stenoai and current Steno
 
-Gepflegtes Abhak-Dokument.
-Stand: 2026-08-19.
-Legende: [x] in der neuen App vorhanden und verifiziert, [ ] offen, (M4)/(M5)/... = geplanter Meilenstein laut ARCHITECTURE.md Abschnitt 10, "bewusst nicht" = Entscheidung gegen Übernahme mit Begründung.
+Maintained checklist.
+Status: 19 August 2026.
+Legend: `[x]` means implemented and verified in the new app, `[ ]` means open, `(M4)/(M5)/...` is a planned milestone from `ARCHITECTURE.md` section 10, and "intentionally omitted" records a reasoned decision not to carry a feature forward.
 
-Der Haken steht hier für "gebaut und getestet".
-Wo eine zusätzliche Hardware- oder Sichtprüfung offen ist, steht das ausdrücklich am jeweiligen Punkt oder im zugehörigen Handoff.
+A checked item means built and tested.
+Any outstanding hardware or visual verification is stated on the item or in its associated handoff.
 
-## Aufnahme und Import
+## Recording and import
 
-- [x] Mikrofonaufnahme (neu: eigene unveränderliche Spur statt Stereo-Mix)
-- [x] Systemaudio-Aufnahme (neu: CoreAudio Process Tap in-process, gerätewechselfest; alt: Electron-Loopback)
-- [x] Getrennte Originalspuren (neu; alt hatte nur eine Stereo-WebM, Trennung erst nachträglich)
-- [x] Import externer Audiodateien mit Duplikatschutz (neu: provenanceKey per SHA-256)
-- [x] Crash-Sicherheit der Aufnahme (neu: kill -9 verlustfrei mit automatischer Adoption; alt: verwaiste Aufnahmen)
-- [x] Mikrofonspur manuell pausieren und fortsetzen (nur die Mikrofonspur; während der Pause wird zeitkorrekte Stille geschrieben)
-- [x] Laufende Mikrofonspur bei Geräteausfall erhalten (an Startgerät per UID gebunden, Stille während der Lücke, automatische Wiederaufnahme nur mit demselben Gerät; automatisiert und mit AirPods hardwaregetestet)
-- [ ] Aufnahme fortsetzen / an bestehende Notiz anhängen (alt: --append-to)
-- [ ] Automatische Meeting-Erkennung per Mic-Monitor samt Benachrichtigung (alt: mic_monitor-Sidecar; neu geplant als interner Dienst)
-- [ ] Stille-Auto-Stopp (alt: silence-auto-stop)
-- [ ] Globaler Aufnahme-Hotkey (alt: Cmd+Shift+R)
-- [ ] Menüleisten-Icon / Tray-Steuerung
-- [x] Mikrofonauswahl.
-  Die Automatik erkennt das eindeutig von bekannten Browsern oder Meeting-Apps verwendete Eingabegerät; bei keinem, mehreren, unbekannten oder nicht vollständig auflösbaren Treffern fordert Steno die bewusste manuelle Wahl.
-  Die Wahl bleibt gespeichert und wird beim Start per UID gebunden, ohne Fallback auf ein anderes Gerät.
-  Automatisiert getestet; Sicht- und Meeting-App-Realtest offen.
+- [x] Microphone recording with a separate immutable track instead of a stereo mix.
+- [x] System-audio recording using an in-process CoreAudio Process Tap that survives device changes; the legacy app used Electron loopback.
+- [x] Separate original tracks; the legacy app split a stereo WebM only after recording.
+- [x] External audio import with SHA-256 provenance-key duplicate protection.
+- [x] Crash-safe recording with lossless `kill -9` recovery and automatic adoption; legacy recordings could become orphaned.
+- [x] Manually pause and resume only the microphone track while writing time-correct silence during the pause.
+- [x] Preserve an active microphone track through device loss by binding to the starting device UID, writing silence during the gap, and resuming only with that same device. Verified automatically and with AirPods hardware.
+- [ ] Resume recording or append to an existing note; legacy flag: `--append-to`.
+- [ ] Automatic meeting detection and notification through an internal mic-monitor service.
+- [ ] Silence-triggered automatic stop.
+- [ ] Global recording shortcut, formerly Command-Shift-R.
+- [ ] Menu bar item and tray controls.
+- [x] Microphone selection.
+  Automatic selection recognizes a uniquely resolved input device used by a known browser or meeting app.
+  No match, multiple matches, unknown matches, or incomplete resolution requires deliberate manual selection.
+  The selected UID is persisted and bound at start without falling back to another device.
+  Automated tests pass; visual and real meeting-app verification remain open.
 
-## Transkription
+## Transcription
 
-- [x] Live-Transkript während der Aufnahme (neu: SpeechAnalyzer-Streaming statt 400-ms-Redecode; vorläufig/final unterscheidbar)
-- [x] Finaler Transkriptionslauf mit Wortzeitstempeln (neu: je Wort; alt: Token-Ebene nur im Parakeet-Pfad)
-- [x] Sprachauswahl mit Persistenz (neu: Picker aus SpeechTranscriber-Sprachen)
-- [x] ASR-Benchmark und aktenkundige Engine-Entscheidung (docs/BENCH-M2-ASR.md; WER 21,3 gegen Parakeet 18,31, RTF 2,3x schneller)
-- [ ] Reproduzierbares Benchmark-Setup fuer lokale ASR- und Diarisierungsmodelle: Manifest-, Hash-, WER/CER-, Eigennamen- und RTTM/dscore-Werkzeuge sind gebaut und uebernehmen den verifizierten Steno-Legacy-Scoringvertrag; offen bleiben die unveraenderlichen Audioausschnitte, manuell geprueften Referenzen sowie die M5-Air-Laeufe zu Hall, Uebersprechen, Zeitstempeln und Sprecherzuordnung.
-- [ ] Benchmark-Korpus zweistufig aufbauen: das CC-BY-4.0-lizenzierte `Koelner Korpus des Kiezdeutschen` ist mit DOI und Quelldatei-Pruefsummen als separater Stresstest registriert, braucht aber noch zeitliche Ausrichtung und manuelle Ausschnittpruefung; fuer den standarddeutschen Haupttest ist OOCC wegen guter manueller Zeitstempel technisch vorgemerkt, seine CC-BY-NC-ND-4.0-Lizenz erfuellt jedoch nicht die freie Produktreferenz und die endgueltige Quelle bleibt offen.
-- [ ] Automatische Spracherkennung ("auto"; alt: 13 kuratierte + 99 Passthrough-Sprachen)
-- [x] Transkript-Neuberechnung aus der UI ("Transcribe Again" im Kontextmenü; das alte Transkript bleibt als Revision, der Dialog nennt den Preis: Sprecher müssen danach neu bestätigt werden)
-- [ ] Fallback-Engine bei ASR-Crash (alt: whisper.cpp-Fallback; neu: Live-Revision bleibt als Rettungsnetz)
-- [ ] iOS: Der vorbestehende Statuswechsel von `.unavailable` zu `.ready` oder `.modelsRequired` lädt die neue Revision nicht in jedem Fall ohne erneutes Öffnen.
-- bewusst nicht: Parakeet/MLX als Primär-Engine (Provider-Grenze hält die Tür offen, Revisionsauslöser in BENCH-M2-ASR.md)
-- bewusst nicht: Windows-Support (neue App ist macOS-nativ)
+- [x] Live transcript during recording using SpeechAnalyzer streaming instead of 400-millisecond re-decoding, with provisional and final results distinguished.
+- [x] Final transcription with per-word timestamps.
+- [x] Persistent language selection from the languages supported by SpeechTranscriber.
+- [x] ASR benchmark and recorded engine decision in `docs/BENCH-M2-ASR.md`: WER 21.3 versus Parakeet 18.31 and 2.3 times faster RTF.
+- [ ] Complete the reproducible local ASR and diarization benchmark setup. Manifest, hashing, WER/CER, named-term, RTTM, and dscore tools exist and preserve the verified legacy scoring contract. Immutable audio excerpts, manually checked references, and M5 Air runs for reverberation, crosstalk, timestamps, and speaker assignment remain open.
+- [ ] Complete the two-tier benchmark corpus. The CC BY 4.0 `Kölner Korpus des Kiezdeutschen` is registered as a stress test with DOI and source checksums but still needs alignment and manual excerpt review. OOCC has strong manual timestamps for standard German but its CC BY-NC-ND 4.0 license does not meet the freely usable product-reference requirement, so the final main source remains open.
+- [ ] Automatic language detection using an `auto` option.
+- [x] Re-run transcription from the UI using "Transcribe Again". The old transcript remains a revision, and the dialog warns that speakers must be reconfirmed.
+- [ ] Fallback engine after an ASR crash; the live revision currently remains as a safety net.
+- [ ] iOS does not always load the new revision without reopening when an existing status changes from `.unavailable` to `.ready` or `.modelsRequired`.
+- Intentionally omitted: Parakeet or MLX as the primary engine. The provider boundary remains available and `BENCH-M2-ASR.md` defines reconsideration triggers.
+- Intentionally omitted: Windows support. The new app is native to Apple platforms.
 
-## Sprecher (Diarisierung und Identität)
+## Speakers: diarization and identity
 
-- [x] Akustische Diarisierung je Spur (neu: Sortformer in-process, verhaltensgleich verifiziert, DER 20,34 = Alt-Basislinie)
-- [x] Voiceprint-Embeddings je Cluster (WeSpeaker-Zentroide, overlap-bereinigt)
-- [x] Wort-Alignment Transkript zu Sprechersegmenten (Satz-Mittelpunkt, wortweiser Split ab 5 s, nie Text verwerfen)
-- [x] Personenregister mit kontextgetaggten Prototypen und Hard Negatives (13 Alt-Invarianten als Testkatalog)
-- [x] Vorschlags-Engine mit den geeichten Gates (confirmed/possible/none, meetingweite Exklusivität, Run-Provenienz)
-- [x] Sprecher-Review-UI: Bestätigen, Zuweisen (Many-to-one), Neue Person, "Mehrere Personen", Generisch; Namensauflösung im Transkript; Hörproben je Cluster (Zitat + Audio aus demselben Turn)
-- [x] Personenverwaltung in den Einstellungen: alle Profile, Umbenennen, Zusammenführen, Löschen mit Rücknahme; je Stimmprobe Herkunft, Hörprobe und Ausschließen statt Löschen; Hard Negatives sichtbar und entschärfbar (alt: nur Liste, eine Hörprobe, Löschen; siehe docs/PLAN-PEOPLE.md)
-- [ ] Selbst-Voiceprint ("Ich"-Erkennung über Meetings hinweg; alt: enroll-self; Fables Vorschlag "This is you"-Markierung gehört hierher)
-- [ ] Manuelles Anlernen einer Stimme ohne Meeting (`manualEnrollment` existiert im Datenmodell, der Aufnahmeweg nicht)
-- [ ] Sitzungsübergreifende Vorschläge in der UI sichtbar
-- [ ] Mehr als vier Sprecher je Kanal (offene ML-Frage; VBx-Pfad gemessen unbrauchbar, siehe ARCHITECTURE.md Risiken)
+- [x] Acoustic diarization per track using in-process Sortformer, behaviorally verified at legacy baseline DER 20.34.
+- [x] Overlap-cleaned WeSpeaker centroid embeddings per cluster.
+- [x] Word alignment from transcript to speaker segments using sentence midpoint, word-level splitting from five seconds, and no discarded text.
+- [x] People registry with context-tagged prototypes and hard negatives, backed by the 13 legacy invariants as tests.
+- [x] Suggestion engine with calibrated `confirmed`, `possible`, and `none` gates, meeting-wide exclusivity, and run provenance.
+- [x] Speaker-review UI for confirm, many-to-one assignment, new person, multiple people, and generic labels; resolved names in transcripts; and quote-plus-audio samples from the same turn.
+- [x] People management in Settings: rename, merge, undoable delete, provenance and audio per sample, exclusion instead of deletion, and visible, reversible hard negatives. See `docs/PLAN-PEOPLE.md`.
+- [ ] Self voiceprint for recognizing "Me" across meetings.
+- [ ] Manual voice enrollment outside a meeting. `manualEnrollment` exists in the data model but no capture path exists.
+- [ ] Visible cross-meeting suggestions in the UI.
+- [ ] More than four speakers per channel. The measured VBx path is unusable; see the risks in `ARCHITECTURE.md`.
 
-## Intelligenz (Zusammenfassungen, Vorlagen, Chat)
+## Intelligence: summaries, templates, and chat
 
-- [x] Zusammenfassung / Besprechungsprotokoll on-device (Foundation Models, Map-Reduce über Turn-Grenzen, guided generation; Realtest an einem echten Meeting offen)
-- [x] iOS-Protokollpfad mit Apple als Kaltstartstandard, optionalen OpenAI-kompatiblen Endpunkten, gepinnter Revision und Eingabe, unveränderlichen Versionen, Fortschritt, Fehler, Abbruch, Copy und Share.
-  Builds, vollständige App-Suites und alle zehn StenoKit-Testtargets sind grün; der Simulator ist kein Beleg für `SystemLanguageModel` oder echte Netzwerkberechtigungen.
-- [ ] Apple-Foundation-Models-Hardwareabnahme auf einem Apple-Intelligence-fähigen iPhone oder iPad im Flugmodus mit harmloser deutscher Fixture: Generate, Regenerate sowie Copy, Share und Cancel beobachten.
-- [ ] iOS-LM-Studio-Abnahme, nachdem ein konkreter lokaler Endpunkt und eine nicht sensitive synthetische Fixture gewählt wurden: echte `/models`- und `/chat/completions`-Aufrufe prüfen.
-- [ ] iOS-Sichtabnahme der Protokollansicht: iPhone-Hochformat, iPad Hoch- und Querformat, Sidebar sichtbar und verborgen, Darstellung und Scrollen des langen Reports, zwei Versionen und Versionsauswahl.
-- [ ] iOS-Sichtabnahme der externen Auswahl mit sichtbarem Host und den exakten Datenklassen.
-- [ ] iOS-Sichtabnahme, dass die alte Version während `Pending` und `Failed` sichtbar bleibt.
-- [ ] iOS-Sichtabnahme von Copy für die gewählte Version.
-- [ ] iOS-Sichtabnahme des geöffneten Share-Sheets und seines Inhalts.
-- [ ] iOS-Sichtabnahme, dass die Einstellungen nicht selbstständig testen.
-- [ ] (M4) Vorlagen/Templates (Ergebnisprotokoll, Verkaufsnotiz, kommunale Sitzung, eigene Templates)
-- [ ] Direkte Gemma-Downloads für iOS.
-- [x] Report-Versionen je Meeting (mehrere Fassungen nebeneinander, Revision-gepinnt, Quarantäne-Restore)
-- [ ] (M4) Titel-Generierung
-- [x] (M5) Optionale externe LLM-Provider mit nativen Dialekten fuer Ollama, LM Studio, OpenAI, Anthropic und Bedrock sowie einem konservativen OpenAI-kompatiblen Fallback (nie automatisch, Wahl am Job gepinnt, Provider sichtbar am Report; Realtest mit LM Studio/MLX gemma-4-e4b und mit Ollama/Gemma 4 auf Mac und iPad-Simulator bestanden; Cloud-Vertraege lokal mit HTTP-Fixtures verifiziert, keine bezahlte Cloud-Anfrage ausgefuehrt)
-- [ ] Transkript-Chat / Query (alt: query, chat-global über alle Notizen)
-- bewusst nicht: Ollama bündeln und dessen Prozess verwalten (Architekturentscheidung)
+- [x] On-device summary and meeting minutes using Foundation Models, turn-boundary MapReduce, and guided generation. A real-meeting hardware test remains open.
+- [x] iOS report flow with Apple as the cold-start default, optional OpenAI-compatible endpoints, pinned revision and input, immutable versions, progress, errors, cancellation, copy, and share.
+  Builds, complete app suites, and all ten StenoKit test targets pass.
+  The simulator does not prove `SystemLanguageModel` behavior or real network permissions.
+- [ ] Verify Apple Foundation Models on Apple Intelligence-capable iPhone or iPad hardware in airplane mode with a harmless German fixture, including Generate, Regenerate, Copy, Share, and Cancel.
+- [ ] Verify iOS with LM Studio after selecting a specific local endpoint and non-sensitive synthetic fixture, including real `/models` and `/chat/completions` requests.
+- [ ] Visually verify the report view on iPhone portrait and iPad portrait and landscape, with sidebar shown and hidden, a long report, two versions, and version selection.
+- [ ] Visually verify external-model selection with the host and exact data classes visible.
+- [ ] Visually verify that the old version remains visible during `Pending` and `Failed` states.
+- [ ] Visually verify Copy for the selected version.
+- [ ] Visually verify the open share sheet and its contents.
+- [ ] Visually verify that Settings does not test endpoints automatically.
+- [ ] (M4) Templates for results, sales notes, municipal meetings, and user-defined formats.
+- [ ] Direct Gemma downloads on iOS.
+- [x] Multiple immutable report versions per meeting, pinned to a revision, with quarantine restoration.
+- [ ] (M4) Title generation.
+- [x] (M5) Optional external LLM providers with native dialects for Ollama, LM Studio, OpenAI, Anthropic, and Bedrock, plus a conservative OpenAI-compatible fallback. Providers are never contacted automatically, selection is pinned to the job, and the provider remains visible on the report. Real tests passed with LM Studio/MLX Gemma 4 and Ollama/Gemma 4 on Mac and iPad Simulator. Cloud contracts were verified locally with HTTP fixtures, without paid cloud requests.
+- [ ] Transcript query and global chat across notes.
+- Intentionally omitted: bundling and managing an Ollama process.
 
-## Bibliothek und Verwaltung
+## Library and management
 
-- [x] Meetingliste mit Status
-- [x] Persistente Job-Queue mit Crash-Recovery (neu; alt: größte Recovery-Lücke)
-- [x] Versionierte Transkript-Revisionen, Benutzer-Edits nie stillschweigend ersetzt (neu)
-- [x] Meeting löschen (Papierkorb, Bestätigungsdialog, Jobs werden storniert)
-- [x] Meeting umbenennen (Kontextmenü)
-- [x] Sidebar-Gruppierung nach Alter (Heute, Gestern, letzte 7/30 Tage, danach Monat, Zukünftiges eigen; Produktanforderung vom 05.08.)
-- [x] Ordner / Organisation mit genau einer Zuordnung je Meeting.
-  macOS und iOS verwenden denselben persistenten Baum mit Wurzelordnern und einer Kindebene.
-  Auf iOS zeigt eine native, stabile Sidebar-Liste den Baum mit Disclosure und Einrückung sowie ungeordnete Meetings in Datumsabschnitten.
-  Anlegen, Umbenennen, Löschen, Verschieben und Hochstufen sind über Kontextmenüs erreichbar; typisiertes Ziehen ist eine zusätzliche Touch-Interaktion.
-  Bekannter iPad-Gerätefehler, im Tracker als Issue 1 geführt; der vollständige Kontextmenüweg funktioniert als Workaround.
-  Alt-Ordner werden beim Import gesetzt und für den Altbestand einmalig übernommen.
-- [x] Suchfeld über der Meetingliste (nativ `.searchable`, reiner Titelfilter, diakritika-unempfindlich; die Volltextsuche bleibt vertagt).
-  Auf iOS öffnet ein Suchtreffer seine Ordner-Vorfahren nur vorübergehend und überschreibt den persistenten Disclosure-Zustand nicht.
-- [x] Ordner umsortieren.
-  Auf macOS und iOS stehen `Move Up` und `Move Down` im Kontextmenü zur Verfügung.
-  Auf iOS können Ordner zusätzlich per Ziehen verschachtelt oder an die Wurzel hochgestuft werden.
-- bewusst nicht auf iOS: Mehrfachauswahl und Sammelverschieben bleiben macOS-spezifisch.
-- bewusst nicht: eigener Sidebar-Kopf mit App-Namen und Chevron nach Vorbild der Codex-App (Produktwunsch vom 06.08., nach Fables Einspruch zurückgezogen: `.navigationTitle` rendert den Namen bereits systemseitig, es gibt nur eine Bibliothek, also keinen Kontext zum Wechseln, und "Neuer Chat" existiert als "New meeting" in der Toolbar)
-- [x] Benutzernotizen während der Aufnahme und am Meeting (NotesSection in RecordingView und MeetingDetailView; Zeitmarke per Cmd-M)
-- [x] Transkript-Editor (Korrektur je Zeile über den Stift; jede Korrektur wird eine `userEdit`-Revision, die erkannte Fassung bleibt lesbar. Ein Neulauf nach einer Korrektur überschreibt sie nicht, sondern wartet als geparkter Kandidat - und ist jetzt über ein Banner übernehmbar, vorher war er unerreichbar)
-- [x] Suche im Transkript (eigene Leiste mit Cmd-F; bewusst kein zweites `.searchable`, weil die Seitenleiste das Suchfeld des Fensters belegt)
-- [ ] Suche über Meetings (vertagt: Suchindex-Entscheidung, ARCHITECTURE.md Abschnitt 11)
-- [ ] Speicherort wählbar (alt: storage_path; neu: bisher nur STENO_LIBRARY_DIR)
-- bewusst nicht: "Aufnahmen nach Verarbeitung löschen"-Default (alt: keep_recordings=false; neu sind Originale unantastbar)
+- [x] Meeting list with status.
+- [x] Persistent job queue with crash recovery.
+- [x] Versioned transcript revisions that never silently replace user edits.
+- [x] Delete meetings through Trash with confirmation and job cancellation.
+- [x] Rename meetings through the context menu.
+- [x] Age-based sidebar groups: Today, Yesterday, last 7 and 30 days, then month, with future items separate.
+- [x] Folder organization with exactly one assignment per meeting.
+  macOS and iOS share one persistent tree with root folders and one child level.
+  iOS uses a stable native sidebar with disclosure, indentation, and unfiled meetings in date sections.
+  Create, rename, delete, move, and promote are available from context menus, with typed drag as an additional touch interaction.
+  A known iPad hardware bug is tracked as issue 1; the complete context-menu path is the workaround.
+  Legacy folder assignments are imported and adopted once for existing data.
+- [x] Native `.searchable` title filter above the meeting list, insensitive to diacritics. Full-text search remains deferred.
+  On iOS, a search result temporarily opens its ancestor folders without overwriting persistent disclosure state.
+- [x] Reorder folders with Move Up and Move Down on macOS and iOS; iOS additionally supports nesting and promotion by drag.
+- Intentionally omitted on iOS: multi-selection and batch movement remain macOS-specific.
+- Intentionally omitted: a custom sidebar header with the app name and a switcher chevron. The system navigation title already supplies the name, there is only one library, and "New meeting" already exists in the toolbar.
+- [x] User notes during recording and in meeting details, with Command-M timestamps.
+- [x] Per-line transcript editor. Every correction becomes a `userEdit` revision and preserves the recognized version. Re-transcription parks a candidate instead of replacing an edit, and a banner can activate that candidate.
+- [x] Transcript search with Command-F. It intentionally avoids a second `.searchable` because the sidebar owns the window search field.
+- [ ] Search across meetings, deferred with the search-index decision in `ARCHITECTURE.md` section 11.
+- [ ] User-selectable storage location; only `STENO_LIBRARY_DIR` currently exists.
+- Intentionally omitted: deleting recordings after processing by default. Originals are immutable.
 
-## Export und Austausch
+## Export and exchange
 
-- [x] (M6) Steno-Altimport (nicht destruktiv, dedupliziert über legacy:<stem>; Realtest mit einem importierten Datenbestand einschließlich Personen-Profilen, Stimmproben, Reports, Notizen und Ordner-Metadatum bestanden; Chat-Sessions bewusst nicht)
-- [ ] Obsidian-Export (nur nach aktiver Freigabe, Klartext-Hinweis; als Produktentscheidung vertagt, siehe HANDOFF spätere Liste)
-- [x] Markdown-Export einzelner Meetings ("Export as Markdown…" im Kontextmenü: Titel, Datum, Teilnehmer, Notiz, Berichte, Transkript mit Zeitmarken; unbestätigte Sprecher behalten ihre technische Bezeichnung statt eines geratenen Namens)
-- [ ] Teilen/Share-Menü, PDF-Export (alt: share menu)
-- [x] Audio-Export einzelner Spuren aus der UI ("Export Audio…" im Kontextmenü, Spurwahl im Dialog; kopiert das Original unverändert heraus statt zu konvertieren - an ihm hängt jede Zeitmarke)
-- [ ] Granola-Importer über API (neu, kein Alt-Feature; Vorbild: openoeats hat einen Granola-Importer, Produkthinweis vom 05.08.)
+- [x] (M6) Non-destructive legacy Steno import deduplicated by `legacy:<stem>`. A real import including people, voice samples, reports, notes, and folder metadata passed. Chat sessions are intentionally excluded.
+- [ ] Obsidian export, only after active approval and a plaintext warning; deferred as a product decision.
+- [x] Markdown export for individual meetings with title, date, participants, note, reports, and timestamped transcript. Unconfirmed speakers retain technical labels instead of guessed names.
+- [ ] Share menu and PDF export.
+- [x] Export individual original audio tracks from the UI without conversion, preserving the audio to which every timestamp refers.
+- [ ] Granola API importer, a new feature inspired by OpenOats rather than legacy parity.
 
-## Plattform und Betrieb
+## Platform and operation
 
-- [x] Native macOS-App (SwiftUI, XcodeGen; alt: Electron + PyInstaller-Python + Sidecars)
-- [x] App-Nap-Sperre während Aufnahme, Freier-Platz-Prüfung
-- [ ] Garantierte Fertigstellung langer iOS-Nachverarbeitung im Hintergrund.
-- [ ] (M7) Bibliotheksverschlüsselung als Beta (Kopie-Prüfung-Umschalten, Recovery-Code)
-- [x] Onboarding/Setup-Prüfung (Erstlauf-Assistent mit Rechtshinweis, Profil, Transkriptionssprache, Modellzustand und getrennter Prüfung von Mikrofon- und Systemaudio-Berechtigung; über das Hilfe-Menü erneut erreichbar)
-- [ ] Kalender-Integration (alt: calendar-auth, Pre-Meeting-Benachrichtigungen)
-- [ ] Benachrichtigungen (Notiz fertig, Stille erkannt)
-- [ ] Launch on Login, Dock-Icon-Präferenz
-- [ ] Deep Links (alt: stenoai:// für Shortcuts)
-- [ ] Signierte Distribution + Updates (vertagt, ARCHITECTURE.md Abschnitt 11)
-- bewusst nicht: Telemetrie (neu: keine; falls je, opt-in und inhaltsfrei)
-- bewusst nicht: Org-/Adapter-Anbindung und Cloud-Backup der alten App (nicht Teil des lokalen Produktkerns; Neubewertung frühestens nach M8)
+- [x] Native SwiftUI macOS app generated with XcodeGen; the legacy app used Electron, PyInstaller Python, and sidecars.
+- [x] App Nap prevention during recording and free-space checks.
+- [ ] Guaranteed completion of long iOS background processing.
+- [ ] (M7) Library-encryption beta using copy, verify, switch, and a recovery code.
+- [x] First-run onboarding with legal notice, profile, transcription language, model status, and separate checks for microphone and system-audio permission; available again from Help.
+- [ ] Calendar integration and pre-meeting notifications.
+- [ ] Notifications for completed notes and detected silence.
+- [ ] Launch at Login and Dock icon preference.
+- [ ] Deep links for Shortcuts, formerly `stenoai://`.
+- [ ] Signed distribution and updates, deferred in `ARCHITECTURE.md` section 11.
+- Intentionally omitted: telemetry. Any future telemetry must be opt-in and content-free.
+- Intentionally omitted: legacy organization adapters and cloud backup. Reconsider no earlier than M8.
 
-## Pflegehinweis
+## Maintenance
 
-Beim Abschluss eines Meilensteins die betroffenen Kästchen abhaken und das Standdatum oben aktualisieren.
-Neue Alt-Features, die beim Steno-Altimport (M6) auffallen, hier nachtragen statt still zu ignorieren.
+When a milestone completes, update the affected boxes and status date.
+Add legacy features discovered during import work here instead of ignoring them silently.

@@ -1,3 +1,5 @@
 // Copy this file to .steno-signing.xcconfig and insert your Apple team ID.
+// Use a bundle identifier registered to that team for physical devices.
 // The local file is ignored so account metadata is never committed.
 DEVELOPMENT_TEAM = YOUR_TEAM_ID
+STENO_BUNDLE_IDENTIFIER = com.example.Steno

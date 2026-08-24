@@ -1,5 +1,7 @@
 # Personenverwaltung in den Einstellungen
 
+> Historical, non-normative work package retained in German. New people and identity work must be documented in English.
+
 Stand: 2026-08-06.
 Entwurf fachlich abgestimmt, Zweitmeinung von Fable eingeholt und in Teilen gegen den urspruenglichen Wunsch uebernommen.
 

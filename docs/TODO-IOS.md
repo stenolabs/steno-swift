@@ -1,4 +1,4 @@
-# Offene Punkte iOS
+# Open iOS items
 
-Derzeit keine offenen Punkte.
-Stand: 23.08.2026.
+There are currently no untracked open items.
+Status: 23 August 2026.

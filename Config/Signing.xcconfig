@@ -1,2 +1,5 @@
-// Local signing is optional so a fresh clone still builds for simulators.
+// Defaults keep fresh clones buildable for simulators and local Mac builds.
+STENO_BUNDLE_IDENTIFIER = org.steno.Steno
+
+// Local signing and a private bundle ID are optional overrides.
 #include? "../.steno-signing.xcconfig"

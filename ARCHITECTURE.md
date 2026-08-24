@@ -1,54 +1,54 @@
-# Steno für macOS - Architektur
+# Steno for macOS - Architecture
 
-Stand: 2026-08-04.
-Verfasser: Claude (Fable 5), auf Basis der in `HANDOFF.md` genannten Quellen, alle lokal geprüft.
-Kennzeichnung im Text: **[Fakt]** ist an einer lokalen Quelle verifiziert, **[Annahme]** ist plausibel aber ungemessen, **[Empfehlung]** ist eine Entscheidung dieses Entwurfs.
+Status: 4 August 2026.
+Author: Claude (Fable 5), based on the sources named in `HANDOFF.md`, all verified locally.
+Labels in this document: **[Fact]** was verified against a local source, **[Assumption]** is plausible but unmeasured, and **[Recommendation]** is a decision made by this design.
 
-## 1. Gesamtentscheidung
+## 1. Overall decision
 
-Steno wird eine native Swift-App mit einem einzigen Repository, einem lokalen SwiftPM-Paket `StenoKit` mit klar geschnittenen Targets und einem dünnen macOS-App-Target.
-Der Kern ist eine **dateibasierte, versionierte Bibliothek** mit unveränderlichen Originalen, append-only Verarbeitungsläufen und expliziten Revisionen, ohne Datenbank-Abhängigkeit im ersten Schnitt.
-Transkription läuft primär über Apples `SpeechAnalyzer`/`SpeechTranscriber` (im macOS-26-SDK verifiziert, inklusive `audioTimeRange` für Wortzeitstempel und `volatileResults` für vorläufige Live-Ergebnisse).
-Diarisierung übernimmt der vorhandene Sortformer/WeSpeaker-Code aus dem Sidecar als internes Swift-Target, in-process statt als Unterprozess.
-Die Sprecheridentitätslogik aus `speaker_suggestions.py` wird als Swift-Domänenmodell neu geschnitten, ihre 13 gemessen begründeten Invarianten werden übernommen.
+Steno is a native Swift app in a single repository, with a local SwiftPM package named `StenoKit`, clearly separated targets, and a thin macOS app target.
+Its core is a **file-based, versioned library** with immutable originals, append-only processing runs, and explicit revisions, without a database dependency in the initial implementation.
+Transcription primarily uses Apple's `SpeechAnalyzer` and `SpeechTranscriber` APIs, verified in the macOS 26 SDK, including `audioTimeRange` for word timestamps and `volatileResults` for provisional live results.
+Diarization uses the existing Sortformer and WeSpeaker code from the sidecar as an internal Swift target, in process rather than as a subprocess.
+The speaker-identity logic from `speaker_suggestions.py` is reshaped as a Swift domain model while preserving its 13 measurement-backed invariants.
 
-### Notwendige Korrekturen an den Annahmen des Handoffs
+### Required corrections to the handoff assumptions
 
-1. **"Mikrofon und Systemaudio bleiben als getrennte lokale Originalspuren erhalten" beschreibt einen Neubau, keinen Port.**
-   [Fakt] Die heutige App nimmt eine einzige Stereo-WebM/Opus-Datei auf (Mikro=links, System=rechts, 48 kHz, `useSystemAudioCapture.ts:318-461`) und splittet erst nachträglich per ffmpeg auf 16 kHz mono (`transcriber.py:1877`).
-   Die neue Aufnahmearchitektur schreibt von Anfang an zwei getrennte, unveränderliche Spuren.
-2. **"Der Live-Pfad dekodiert ca. alle 400 ms ein wachsendes Fenster" stimmt nur halb.**
-   [Fakt] Das Intervall ist 0,4 s, aber das Fenster ist auf 15 s gedeckelt und gleitet danach (`simple_recorder.py:2202-2203, 2576`); ein Keep-Pace-Guard streckt das Intervall bei Überlast bis 8 s.
-   Die echten Probleme sind der doppelte Decode (Partial und Final je Utterance), ein einziger synchroner Consumer-Thread mit Backpressure auf der stdin-Pipe und der veraltete `ScriptProcessorNode` im Renderer.
-   Das Zielbild bleibt richtig: eine streaming-native Pipeline ohne wiederholtes Dekodieren, die `SpeechAnalyzer` nativ liefert.
-3. **Der experimentelle Offline-Diarizer aus `/private/tmp/wt-4plus` ist gemessen nicht auslieferbar.**
-   [Fakt] VBx/AHC über 18 AMI-dev-Meetings: DER 40,01 gegen Sortformers 20,34; ohne Constraints DER 52,70; der Constraint-Pfad ist nicht deterministisch (ungeseedetes KMeans in FluidAudios `KMeansClustering.swift:64`).
-   Der eigentliche Mehr-als-vier-Sprecher-Vergleich (8-Sprecher-Konkat in `work/eightspk/`) wurde begonnen, aber nie gescored.
-   Konsequenz: Das Domänenmodell darf keine Slot-Grenze kennen, aber die Engine-Frage für mehr als vier Sprecher ist offen und bleibt hinter der Provider-Grenze.
-4. **Die Vier-Slot-Grenze gilt pro Kanal, nicht pro Meeting.**
-   [Fakt] Mit Mikro- und Systemspur sind heute bis zu acht Cluster möglich; ein Cross-Channel-Identity-Matching existiert nicht (`transcriber.py:1281`).
-5. **LM Studio wird heute nirgends unterstützt.**
-   [Fakt] `ai_provider` kennt `local` (gebündeltes Ollama), `remote` (Ollama-URL), `cloud`, `adapter` (`config.py:1781`); LM Studio kommt im Repository nicht vor.
-   Die OpenAI-kompatible Provider-Grenze der neuen App deckt LM Studio, fremdes Ollama und Cloud-APIs mit einem Vertrag ab.
-6. **Der Schutz der Originale widerspricht dem heutigen Default.**
-   [Fakt] `keep_recordings: false` löscht Audio nach der Verarbeitung (`config.py:693-763`).
-   In der neuen App sind Originale unveränderlich und werden nie automatisch gelöscht.
-7. **Die größte Recovery-Lücke heute ist die fehlende persistente Job-Queue.**
-   [Fakt] `processingQueue` ist In-Memory; nach einem Crash zwischen Stop und Verarbeitung bleibt die Aufnahme verwaist (`app/main.js`, `live-snapshot-sweep.js:12-20`).
-   Die neue App persistiert Verarbeitungsläufe als Teil des Datenmodells.
-8. **Alignment-Feinarbeit lohnt auf Konferenzmaterial nicht.**
-   [Fakt] Overlap-Voting, Island-Smoothing, A-B-A-Kollaps: Exposure 0 bis 0,3 Prozent, alle "nicht bauen" (`HANDOFF-feat-speaker-alignment.md:60-72`).
-   Übernommen werden nur der wortweise Split langer Sätze (ab 5 s, `transcriber.py:570`), Overlap-Clamping und die Distanzgrenze für den Nearest-Fallback.
-   Ungemessen bleibt der Fall mehrerer Personen an einem Mikrofon; er ist Benchmark-Aufgabe, nicht Architekturannahme.
+1. **"Microphone and system audio remain separate local original tracks" describes a new implementation, not a port.**
+   [Fact] The current app records one stereo WebM/Opus file, with microphone on the left and system audio on the right at 48 kHz (`useSystemAudioCapture.ts:318-461`), and only later splits it into 16 kHz mono files with ffmpeg (`transcriber.py:1877`).
+   The new recording architecture writes two separate, immutable tracks from the start.
+2. **"The live path decodes a growing window about every 400 ms" is only partly correct.**
+   [Fact] The interval is 0.4 seconds, but the window is capped at 15 seconds and then slides (`simple_recorder.py:2202-2203, 2576`); a keep-pace guard stretches the interval to as much as eight seconds under load.
+   The real problems are duplicate decoding for partial and final output, one synchronous consumer thread with backpressure on the stdin pipe, and the obsolete `ScriptProcessorNode` in the renderer.
+   The target remains valid: a streaming-native pipeline without repeated decoding, which `SpeechAnalyzer` provides natively.
+3. **The experimental offline diarizer from `/private/tmp/wt-4plus` is measurably not ready to ship.**
+   [Fact] Across 18 AMI development meetings, VBx/AHC produced DER 40.01 compared with Sortformer's 20.34; without constraints DER was 52.70; and the constrained path is nondeterministic because FluidAudio's `KMeansClustering.swift:64` uses unseeded K-means.
+   The actual more-than-four-speaker comparison, the eight-speaker concatenation in `work/eightspk/`, was started but never scored.
+   Consequently, the domain model must not impose a slot limit, but the engine choice for more than four speakers remains open behind the provider boundary.
+4. **The four-slot limit applies per channel, not per meeting.**
+   [Fact] With microphone and system tracks, as many as eight clusters are currently possible; cross-channel identity matching does not exist (`transcriber.py:1281`).
+5. **LM Studio is not currently supported anywhere.**
+   [Fact] `ai_provider` knows `local` for bundled Ollama, `remote` for an Ollama URL, `cloud`, and `adapter` (`config.py:1781`); LM Studio does not appear in the repository.
+   The new app's OpenAI-compatible provider boundary covers LM Studio, external Ollama instances, and cloud APIs under one contract.
+6. **Protecting originals conflicts with the current default.**
+   [Fact] `keep_recordings: false` deletes audio after processing (`config.py:693-763`).
+   In the new app, originals are immutable and are never deleted automatically.
+7. **The largest current recovery gap is the lack of a persistent job queue.**
+   [Fact] `processingQueue` is in memory; after a crash between stopping and processing, the recording remains orphaned (`app/main.js`, `live-snapshot-sweep.js:12-20`).
+   The new app persists processing runs as part of its data model.
+8. **Further alignment tuning is not worthwhile on conference material.**
+   [Fact] Overlap voting, island smoothing, and A-B-A collapse affect between 0 and 0.3 percent of the material and were all classified as "do not build" (`HANDOFF-feat-speaker-alignment.md:60-72`).
+   Only the word-level split of long sentences starting at five seconds (`transcriber.py:570`), overlap clamping, and the distance limit for nearest fallback are retained.
+   The case of multiple people sharing one microphone remains unmeasured; it is a benchmark task, not an architecture assumption.
 
-## 2. Module und Abhängigkeiten
+## 2. Modules and dependencies
 
-Ein Repository, ein lokales SwiftPM-Paket `StenoKit` mit mehreren Targets, ein Xcode-App-Target.
-[Empfehlung] Ein Paket mit Targets statt vieler Pakete: echte Grenzen über Target-Abhängigkeiten, ohne Versions- und Release-Overhead zwischen künstlich getrennten Paketen.
+One repository contains one local SwiftPM package, `StenoKit`, with several targets and one Xcode app target.
+[Recommendation] Use one package with multiple targets instead of many packages: target dependencies provide real boundaries without versioning and release overhead between artificial packages.
 
-```
+```text
                         ┌─────────────────────┐
-                        │      Steno.app       │  macOS-only (SwiftUI, AppKit bei Bedarf)
+                        │      Steno.app       │  macOS-only (SwiftUI, AppKit when needed)
                         └──────────┬──────────┘
               ┌───────────────┬────┴─────┬────────────────┐
      ┌────────▼───────┐ ┌────▼─────┐ ┌──▼───────────┐ ┌──▼──────────┐
@@ -69,117 +69,119 @@ Ein Repository, ein lokales SwiftPM-Paket `StenoKit` mit mehreren Targets, ein X
                         └─────────────────┘
 ```
 
-| Target | Inhalt | iOS-wiederverwendbar |
+| Target | Contents | Reusable on iOS |
 |---|---|---|
-| `StenoDomain` | Reine Werttypen: Meeting, MediaAsset, Transcript, Revision, ProcessingRun, Person, Prototype, IDs. Keine I/O, keine Plattform-Frameworks. | Ja, vollständig |
-| `StenoLibrary` | Bibliothekslayout auf Platte, atomare Writes, Schema-Versionierung und Migration, persistente Run-Queue, Integritätsprüfung. | Ja (FileManager-basiert) |
-| `StenoTranscription` | ASR-Provider-Vertrag, `SpeechAnalyzerProvider`, Wort-Alignment-Regeln (wortweiser Split, Clamping). | Ja (Speech gibt es auf iOS 26) |
-| `StenoDiarization` | Diarisierungs-Provider-Vertrag, `FluidSortformerProvider` (portierter Sidecar-Code), Embedding-Extraktion. | Ja (CoreML/FluidAudio läuft auf iOS), aber erst nach Bedarf |
-| `StenoIdentity` | Sprecheridentität: Prototypen, Hard Negatives, Vorschlags-Gates, Run-Provenienz, Merge-Logik. | Ja, vollständig |
-| `StenoIntelligence` | Vorlagen, `FoundationModelsProvider`, `OpenAICompatibleProvider` (LM Studio, Ollama, Cloud), strikt optional. | Ja |
-| `StenoExchange` | Nicht destruktiver Steno-Altimport, Obsidian-Export, generische Exporte (Markdown, JSON). | Ja |
-| `StenoPipeline` | Orchestrierung der Verarbeitungsläufe: Zustandsmaschine, Wiederaufnahme nach Crash, Fortschritt. | Ja |
-| `StenoMacAudio` | Bewusst macOS-spezifisch: AVAudioEngine-Mikrofonaufnahme, CoreAudio Process Tap für Systemaudio, Mic-Monitor als interner Dienst (portiert aus `mic_monitor.swift`), Berechtigungen, Geräteverwaltung. | Nein, bewusst nicht |
-| `Steno.app` | SwiftUI-Oberfläche, Menüleiste, Einstellungen, Onboarding. | Nein, bewusst nicht |
+| `StenoDomain` | Pure value types: Meeting, MediaAsset, Transcript, Revision, ProcessingRun, Person, Prototype, and IDs. No I/O and no platform frameworks. | Yes, fully |
+| `StenoLibrary` | On-disk library layout, atomic writes, schema versioning and migration, persistent run queue, and integrity checks. | Yes, based on FileManager |
+| `StenoTranscription` | ASR provider contract, `SpeechAnalyzerProvider`, and word-alignment rules such as word-level splitting and clamping. | Yes, Speech is available on iOS 26 |
+| `StenoDiarization` | Diarization provider contract, `FluidSortformerProvider` using ported sidecar code, and embedding extraction. | Yes, Core ML and FluidAudio run on iOS, but only when needed |
+| `StenoIdentity` | Speaker identity: prototypes, hard negatives, suggestion gates, run provenance, and merge logic. | Yes, fully |
+| `StenoIntelligence` | Templates, `FoundationModelsProvider`, and `OpenAICompatibleProvider` for LM Studio, Ollama, and cloud services; strictly optional. | Yes |
+| `StenoExchange` | Non-destructive legacy Steno import, Obsidian export, and generic exports such as Markdown and JSON. | Yes |
+| `StenoPipeline` | Processing-run orchestration: state machine, crash recovery, and progress. | Yes |
+| `StenoMacAudio` | Intentionally macOS-specific: AVAudioEngine microphone capture, CoreAudio Process Tap for system audio, the mic monitor ported from `mic_monitor.swift`, permissions, and device management. | Intentionally no |
+| `Steno.app` | SwiftUI interface, menu bar, settings, and onboarding. | Intentionally no |
 
-Abhängigkeitsregeln:
-`StenoDomain` hängt von nichts ab.
-Alles hängt von `StenoDomain` ab, nichts von der App.
-Provider-Targets kennen `StenoLibrary` nur lesend über schmale Protokolle, die Pipeline schreibt.
-Externe Abhängigkeit im ersten Schnitt: nur FluidAudio 0.15.2 (bereits gepinnt und im Sidecar produktiv bewährt).
+Dependency rules:
+`StenoDomain` depends on nothing.
+Everything depends on `StenoDomain`, and nothing depends on the app.
+Provider targets know `StenoLibrary` only through narrow read-only protocols; the pipeline performs writes.
+The only external dependency in the initial implementation is FluidAudio 0.15.2, already pinned and proven in production by the sidecar.
 
-## 3. Datenmodell
+## 3. Data model
 
-Die Bibliothek ist ein Verzeichnis mit definiertem, versioniertem Layout.
-[Empfehlung] Dateibasiert statt SQLite/SwiftData im ersten Schnitt: atomare Writes sind im Altprojekt bewährt, die Verschlüsselungs-Beta (Kopie erstellen, prüfen, umschalten) und der Obsidian-Export arbeiten natürlich auf Dateien, und es entsteht keine Abhängigkeit.
-Ein rein abgeleiteter Suchindex (später SQLite FTS oder Spotlight) darf jederzeit gelöscht und neu gebaut werden.
+The library is a directory with a defined, versioned layout.
+[Recommendation] Prefer files over SQLite or SwiftData initially: atomic writes are proven in the legacy project, the encryption beta naturally works by creating, verifying, and activating a copy, Obsidian export is file-oriented, and no additional dependency is introduced.
+A purely derived search index, later using SQLite FTS or Spotlight, may be deleted and rebuilt at any time.
 
-```
+```text
 StenoLibrary/
   library.json                     # {schemaVersion, libraryId, createdAt}
   meetings/<meetingID>/
-    meeting.json                   # Titel, Datum, Status, Teilnehmerliste (meeting-skopiert)
-    media/<assetID>.caf            # unveränderliche Originale, eine Datei je Spur
-    media/<assetID>.json           # MediaAsset-Metadaten inkl. provenanceKey
+    meeting.json                   # title, date, status, meeting-scoped participants
+    media/<assetID>.caf            # immutable originals, one file per track
+    media/<assetID>.json           # MediaAsset metadata including provenanceKey
     runs/<runID>/
-      run.json                     # Art, Engine+Version, Parameter, Status, Zeiten
-      transcript.json              # ASR-Ausgabe mit Wortzeitstempeln (bei ASR-Läufen)
-      diarization.json             # Sprechersegmente + Cluster-Embeddings (bei Diar-Läufen)
+      run.json                     # kind, engine and version, parameters, status, times
+      transcript.json              # ASR output with word timestamps for ASR runs
+      diarization.json             # speaker segments and cluster embeddings for diarization runs
     transcript/
-      revisions/<revisionID>.json  # append-only, nie überschrieben
-      current.json                 # Zeiger auf die aktuelle Revision
-    notes/…, reports/…             # Vorlagenergebnisse, Nutzernotizen
+      revisions/<revisionID>.json  # append-only, never overwritten
+      current.json                 # pointer to the current revision
+    notes/…, reports/…             # template results and user notes
   identity/
-    persons.json                   # Personen mit Prototypen und Hard Negatives
+    persons.json                   # people with prototypes and hard negatives
   jobs/
-    <jobID>.json                   # persistente Verarbeitungsqueue
-  exports/                         # Protokoll der Exporte (nicht die Exportziele selbst)
+    <jobID>.json                   # persistent processing queue
+  exports/                         # export records, not the exported files themselves
 ```
 
-Kernentitäten (alle `Codable`, alle mit `schemaVersion` je Dokument):
+Core entities, all `Codable` and each document carrying a `schemaVersion`:
 
-- **Meeting**: Klammer um Medien, Läufe, Transkript, Ergebnisse. Trägt die meeting-skopierte Teilnehmerliste (Invariante aus dem Altsystem: Anwesenheit übersteht Re-Diarisierung).
-- **MediaAsset**: unveränderliches Original. `kind` (micTrack, systemTrack, imported), Aufnahmegerät, Sample-Rate, Dauer, `provenanceKey`.
-- **ProcessingRun**: ein Lauf einer Engine über definierte Eingaben. `kind` (liveASR, finalASR, diarization, identitySuggestion, templateRender, export), `engine` (Name + Version + Modellversion), Parameter, Status (queued, running, finished, failed, cancelled), Eingabe-IDs, Fehlerdetails. Läufe werden nie gelöscht, nur ihr Speicherplatz für Großartefakte kann kompaktiert werden.
-- **TranscriptRevision**: vollständiger Transkriptstand als Folge von Turns mit Segmenten und Wörtern (`text`, `start`, `end` je Wort), Sprecherzuordnung je Turn (Cluster-Referenz oder bestätigte Person), `origin` (liveProvisional, finalRun(runID), userEdit(parentRevisionID)).
-- **SpeakerCluster** (je Diarisierungslauf): `clusterID`, Kanal, Segmente, Embedding (256 floats), Sprechdauer, `containsMultipleSpeakers`, `reviewState`.
-- **Person / SpeakerPrototype / HardNegative**: wie im Altsystem, kontextgetaggt (`recordingType`, `channel`, `meetingID`, `runID`), nie gemittelt über Kontexte hinweg.
-- **UserCorrection**: als eigene Revision mit `origin: userEdit`, nie als In-place-Änderung.
-- **TemplateResult**: Ergebnis eines Vorlagenlaufs, referenziert Transkript-Revision und Modell.
-- **ExportRecord**: was wann wohin exportiert wurde, mit Revision-Referenz.
+- **Meeting**: Groups media, runs, transcript, and results. It carries the meeting-scoped participant list, preserving the legacy-system invariant that attendance survives re-diarization.
+- **MediaAsset**: Immutable original. Stores `kind` such as micTrack, systemTrack, or imported, plus recording device, sample rate, duration, and `provenanceKey`.
+- **ProcessingRun**: One engine run over defined inputs. Stores `kind`, engine and model versions, parameters, status, input IDs, and error details. Runs are never deleted, although storage for large derived artifacts may be compacted.
+- **TranscriptRevision**: A complete transcript state consisting of turns, segments, and words with `text`, `start`, and `end` per word; a speaker assignment per turn; and `origin` as liveProvisional, finalRun(runID), or userEdit(parentRevisionID).
+- **SpeakerCluster**, scoped to a diarization run: `clusterID`, channel, segments, a 256-float embedding, speaking duration, `containsMultipleSpeakers`, and `reviewState`.
+- **Person / SpeakerPrototype / HardNegative**: As in the legacy system, tagged by context using `recordingType`, `channel`, `meetingID`, and `runID`, and never averaged across contexts.
+- **UserCorrection**: A separate revision with `origin: userEdit`, never an in-place mutation.
+- **TemplateResult**: The result of a template run, referencing a transcript revision and model.
+- **ExportRecord**: Records what was exported, when, and where, with a revision reference.
 
-## 4. IDs, Provenienz, Revisionsregeln
+## 4. IDs, provenance, and revision rules
 
-- Alle IDs sind UUIDv7 (zeitlich sortierbar, kollisionsfrei), erzeugt bei Entstehung, nie wiederverwendet.
-- **provenanceKey** je MediaAsset: SHA-256 über die Audiobytes bei Import; bei eigenen Aufnahmen `meetingID/trackKind`. Der Steno-Altimport bildet zusätzlich `legacy:<stem>` ab. Ein Import mit bekanntem provenanceKey wird abgelehnt beziehungsweise als Duplikat gemeldet; genau das verhindert doppelte Importe.
-- **Unveränderliche Originale**: `media/*.caf` wird nach Abschluss der Aufnahme nie mehr beschrieben; jede Verarbeitung liest, schreibt aber nur in `runs/`.
-- **Revisionsregeln**: Revisionen sind append-only; `current.json` ist ein atomarer Zeiger. Ein finaler ASR-Lauf erzeugt eine neue Revision und ersetzt niemals eine Benutzerkorrektur stillschweigend: Existieren Benutzer-Edits über einer älteren Basis, wird der neue Stand als Kandidat abgelegt und in der UI zur Übernahme angeboten, nicht automatisch umgeschaltet.
-- **Run-Provenienz** für Identität: jede Bestätigung referenziert `runID` und `clusterID`; nach Re-Diarisierung werden alte Bestätigungen als veraltet markiert statt fälschlich als bestätigt angezeigt (Invariante und Fehlklasse aus dem Altsystem, `prototype_run_matches`).
-- Getrennt gespeichert wird, was getrennt entsteht: Originale (unveränderlich), Lauf-Artefakte (reproduzierbar, kompaktierbar), Benutzerentscheidungen (wertvollstes Gut, klein, nie automatisch veränderbar).
+- All IDs are UUIDv7 values, time-sortable and collision-resistant, created once and never reused.
+- **provenanceKey** for each MediaAsset: SHA-256 of the audio bytes on import; for native recordings, `meetingID/trackKind`. Legacy Steno imports additionally map `legacy:<stem>`. An import with a known provenanceKey is rejected or reported as a duplicate.
+- **Immutable originals**: `media/*.caf` is never written after recording completes; all processing reads originals but writes only under `runs/`.
+- **Revision rules**: Revisions are append-only and `current.json` is an atomic pointer. A final ASR run creates a new revision and never silently replaces a user correction. If user edits exist on an older base, the new state is stored as a candidate and offered in the UI instead of being activated automatically.
+- **Run provenance** for identity: every confirmation references `runID` and `clusterID`; after re-diarization, old confirmations are marked stale instead of being displayed falsely as confirmed. This preserves the legacy invariant represented by `prototype_run_matches`.
+- Store separately what is created separately: immutable originals, reproducible and compactable run artifacts, and small, valuable user decisions that are never changed automatically.
 
-## 5. Datenflüsse
+## 5. Data flows
 
-**Live-Aufnahme.**
-`StenoMacAudio` startet zwei Capture-Pfade: AVAudioEngine-Tap für das Mikrofon und CoreAudio Process Tap für Systemaudio.
-Jede Spur geht in einen Ring-Puffer mit zwei Konsumenten: einem inkrementellen Disk-Writer (CAF, flush-freundlich, crash-tolerant) und der Live-Pipeline.
-Die Live-Pipeline speist je Spur einen eigenen `SpeechTranscriber` mit `volatileResults`; vorläufige Ergebnisse erscheinen sofort im Transkript-Panel und sind als vorläufig markiert.
-Live-Sprecherzuordnung ist im ersten Schnitt reine Kanalzuordnung ("Ich"/"Andere"), wie heute.
-Kein erneutes Dekodieren: die Streaming-API ersetzt den 400-ms-Redecode-Pfad des Altsystems vollständig.
+**Live recording.**
+`StenoMacAudio` starts an AVAudioEngine tap for microphone audio and a CoreAudio Process Tap for system audio.
+Each track enters a ring buffer with an incremental, crash-tolerant CAF writer and the live pipeline as consumers.
+The live pipeline feeds each track to its own `SpeechTranscriber` with `volatileResults`; provisional results appear immediately and are visibly marked.
+Initial live speaker assignment is channel-only, "Me" and "Others", as it is today.
+The streaming API fully replaces the legacy 400-millisecond re-decode path.
 
-**Externer Import.**
-Datei wählen, per AVFoundation dekodieren, provenanceKey berechnen, als MediaAsset kopieren (nie verschieben), Meeting anlegen, finalen Verarbeitungsjob einreihen.
+**External import.**
+Select a file, decode it through AVFoundation, calculate its provenanceKey, copy it as a MediaAsset without moving it, create a meeting, and enqueue a final processing job.
 
-**Finaler ASR-Lauf.**
-Nach Stop oder Import erzeugt `StenoPipeline` einen persistierten Job: je Spur ein `SpeechTranscriber`-Lauf über die ganze Datei mit `audioTimeRange` je Wort, Ergebnis als `runs/<id>/transcript.json`, daraus eine neue TranscriptRevision, die die Live-Revision ersetzt (Regeln aus Abschnitt 4).
+**Final ASR run.**
+After stop or import, `StenoPipeline` creates a persistent job: one full-file `SpeechTranscriber` run per track with `audioTimeRange` for every word, output at `runs/<id>/transcript.json`, followed by a new TranscriptRevision according to section 4.
 
-**Diarisierung.**
-Je Spur läuft der `FluidSortformerProvider` (portierter Sidecar-Code: overlap-bereinigte Masken, 10-s-Fenster, WeSpeaker-Zentroide) über die Originaldatei.
-Ausgabe sind Sprechersegmente plus ein Embedding je Cluster.
-Das Alignment ordnet Sätze dem Segment am Satz-Mittelpunkt zu; Sätze ab 5 s über mehreren Sprechern werden wortweise zugeordnet; Unplatzierbares behält das Kanal-Label und wird nie verworfen (übernommene, gemessene Regeln).
+**Diarization.**
+`FluidSortformerProvider` runs per track over the original file using overlap-cleaned masks, ten-second windows, and WeSpeaker centroids.
+Its output consists of speaker segments plus one embedding per cluster.
+Alignment assigns sentences to the segment at their midpoint; sentences of at least five seconds spanning multiple speakers are assigned word by word; anything unplaceable retains its channel label and is never discarded.
 
-**Sprecheridentifikation.**
-`StenoIdentity` merged Fragmente je Kanal (Distanz kleiner gleich 0,10), rechnet Kandidaten über minimale Distanz zu kontextpassenden Prototypen, wendet die Gates an (Distanz 0,40, Margin 0,10, 20 s, 3 Segmente, mittlere Turn-Länge 1,55 s, mindestens 2 bestätigte Meetings) und liefert `confirmed`/`possible`/`none`.
-Nichts wird automatisch benannt; nur der Mensch bestätigt, Bestätigungen erzeugen Prototypen und gegenseitige Hard Negatives, Re-Zuordnung entfernt alte Evidenz run-skopiert.
+**Speaker identification.**
+`StenoIdentity` merges fragments per channel when distance is at most 0.10, calculates candidates using minimum distance to context-compatible prototypes, applies the gates of distance 0.40, margin 0.10, 20 seconds, three segments, mean turn length 1.55 seconds, and at least two confirmed meetings, then returns `confirmed`, `possible`, or `none`.
+Nothing is named automatically.
+Only a person confirms a suggestion; confirmations create prototypes and mutual hard negatives, and reassignment removes old evidence scoped to the run.
 
-**Manuelle Korrektur.**
-Jede Korrektur (Text, Sprecher, Segmentgrenzen) erzeugt eine neue Revision mit `origin: userEdit`; Undo ist Zeigerbewegung, nichts wird überschrieben.
+**Manual correction.**
+Every correction to text, speaker, or segment boundaries creates a new revision with `origin: userEdit`; undo moves a pointer and overwrites nothing.
 
-**Vorlagenauswertung.**
-`StenoIntelligence` rendert eine Vorlage gegen die aktuelle Revision; primär Foundation Models on-device, optional ein bewusst konfigurierter OpenAI-kompatibler Endpunkt.
-Ohne LLM bleiben Transkript, Sprecher und Export vollständig nutzbar.
+**Template evaluation.**
+`StenoIntelligence` renders a template against the current revision, primarily using on-device Foundation Models and optionally a deliberately configured OpenAI-compatible endpoint.
+Transcript, speaker features, and export remain fully usable without an LLM.
 
 **Export.**
-`StenoExchange` schreibt Markdown (mit Frontmatter) in ein vom Benutzer gewähltes Ziel; Obsidian-Export nur nach aktiver Freigabe, mit deutlichem Klartext-Hinweis; jeder Export erzeugt einen ExportRecord.
+`StenoExchange` writes Markdown with frontmatter to a user-selected destination.
+Obsidian export requires active approval and a clear plaintext warning, and every export creates an ExportRecord.
 
-## 6. Provider-Verträge
+## 6. Provider contracts
 
-Klein, konkret, ohne generische Überbauten.
+Keep contracts small and concrete, without generic abstractions.
 
 ```swift
 protocol TranscriptionProvider {
-    var descriptor: EngineDescriptor { get }   // Name, Version, Modellstand
+    var descriptor: EngineDescriptor { get }   // name, version, model revision
     func liveSession(format: AudioFormat, locale: Locale) async throws -> LiveTranscriptionSession
-    func transcribeFile(_ url: URL, locale: Locale) async throws -> TranscriptOutput  // mit Wortzeitstempeln
+    func transcribeFile(_ url: URL, locale: Locale) async throws -> TranscriptOutput  // includes word timestamps
 }
 
 protocol LiveTranscriptionSession {
@@ -191,10 +193,10 @@ protocol LiveTranscriptionSession {
 protocol DiarizationProvider {
     var descriptor: EngineDescriptor { get }
     func diarize(_ url: URL, hints: DiarizationHints) async throws -> DiarizationOutput
-    // DiarizationHints: optionale minimale Sprecherzahl; Output: Segmente + Embeddings je Cluster
+    // DiarizationHints: optional minimum speaker count; output: segments and embeddings per cluster
 }
 
-protocol SpeakerSuggestionEngine {   // reine Domänenlogik, kein ML-Provider
+protocol SpeakerSuggestionEngine {   // pure domain logic, not an ML provider
     func suggestions(for run: DiarizationOutput, in context: IdentityContext) -> [ClusterSuggestion]
 }
 
@@ -208,76 +210,78 @@ protocol Exporter {
 }
 ```
 
-Benchmark-Kandidaten wie Nemotron oder ein späterer VBx-Pfad implementieren `TranscriptionProvider` beziehungsweise `DiarizationProvider` und werden erst nach eigenen Messungen produktiv geschaltet.
-Der `EngineDescriptor` landet in jedem `run.json`, damit jedes Artefakt seinem Erzeuger zuordenbar bleibt.
+Benchmark candidates such as Nemotron or a future VBx path implement `TranscriptionProvider` or `DiarizationProvider` and are enabled in production only after dedicated measurements.
+The `EngineDescriptor` is stored in every `run.json` so each artifact remains attributable to its producer.
 
-## 7. Verhalten im Fehlerfall
+## 7. Failure behavior
 
-- **Absturz während der Aufnahme**: CAF wird inkrementell geschrieben; beim nächsten Start findet die Recovery ein Meeting im Zustand `recording` ohne laufenden Prozess, schließt die Dateien, markiert die Aufnahme als "unterbrochen" und reiht den finalen Lauf ein. Nichts wird verworfen.
-- **Absturz während der Verarbeitung**: Jobs liegen in `jobs/` mit Status und Wiederholungszähler; beim Start werden `running`-Jobs auf `queued` zurückgesetzt und idempotent neu ausgeführt (Läufe schreiben erst temporär, dann atomar).
-- **Abbruch durch den Benutzer**: Job-Status `cancelled`, Teilartefakte werden gelöscht, das Meeting bleibt mit Live-Revision nutzbar.
-- **Energiesparzustand**: Aufnahme setzt `ProcessInfo.beginActivity` gegen App-Nap/Idle-Sleep; Verarbeitungsjobs sind unterbrechbar und werden nach dem Aufwachen fortgesetzt.
-- **Modellfehler**: Ein fehlgeschlagener Lauf beschädigt nie den vorherigen Stand; die letzte gültige Revision bleibt aktuell, der Fehler steht als `failed`-Run mit Details sichtbar im Meeting. Fallback-Kette: finaler ASR-Lauf scheitert, dann bleibt die Live-Revision final nutzbar (Rettungsnetz-Prinzip aus dem Altsystem, dort Issue #207).
-- **Zu wenig Speicherplatz**: Vor Aufnahmestart und vor großen Läufen wird freier Platz geprüft; während der Aufnahme führt Unterschreiten einer Schwelle zu Warnung und sauberem Stop mit intaktem Original statt stillem Verlust.
-- **Beschädigte Artefakte**: Jedes JSON-Dokument trägt `schemaVersion`; Parser lehnen ab statt zu raten. Ein beschädigtes Lauf-Artefakt wird quarantänisiert (`.corrupt`-Suffix), der Lauf gilt als `failed` und ist reproduzierbar; beschädigte Originale werden nie überschrieben, nur gemeldet.
-- **Erneuter Start**: Die Startsequenz ist genau eine Funktion: Bibliothek validieren, Migration falls nötig (immer Kopie-dann-Umschalten bei strukturellen Änderungen), Recovery-Sweep, Queue fortsetzen.
+- **Crash during recording**: CAF is written incrementally. On the next launch, recovery finds a meeting in `recording` state without a running process, closes the files, marks the recording as interrupted, and enqueues the final run. Nothing is discarded.
+- **Crash during processing**: Jobs under `jobs/` carry status and retry count. On launch, `running` jobs are reset to `queued` and rerun idempotently. Runs write to temporary files before an atomic move.
+- **User cancellation**: The job receives status `cancelled`, partial artifacts are deleted, and the meeting remains usable with its live revision.
+- **Low-power state**: Recording uses `ProcessInfo.beginActivity` to prevent App Nap and idle sleep. Processing jobs are interruptible and resume after wake.
+- **Model failure**: A failed run never damages the previous state. The last valid revision stays current, and a visible `failed` run stores the error details. If final ASR fails, the live revision remains usable as the final result, following the legacy safety-net principle from issue #207.
+- **Low disk space**: Free space is checked before recording and large runs. Crossing a threshold during recording produces a warning and a clean stop with an intact original instead of silent loss.
+- **Corrupt artifacts**: Every JSON document carries `schemaVersion`; parsers reject invalid data instead of guessing. A corrupt run artifact is quarantined with a `.corrupt` suffix, the reproducible run is marked `failed`, and corrupt originals are reported but never overwritten.
+- **Relaunch**: Startup validates the library, migrates if needed using copy then switch for structural changes, runs recovery, and resumes the queue.
 
-## 8. Datenschutz, Logging, Verschlüsselung
+## 8. Privacy, logging, and encryption
 
-- **Logging**: ausschließlich `os.Logger` mit Privacy-Annotationen; Gesprächsinhalte, Dateinamen, Transkripttexte und Modellausgaben sind grundsätzlich `.private` oder gar nicht geloggt. Es gibt keine Telemetrie im ersten Schnitt; falls später, dann opt-in und inhaltsfrei.
-- **Netzwerkgrenze**: `StenoIntelligence` ist die einzige Stelle mit Netzwerkzugriff, und nur bei explizit konfiguriertem externem Provider; ein App-interner Schalter erzwingt "nur lokal". Modell-Downloads (SpeechAnalyzer-Assets über `AssetInventory`, FluidAudio-Modelle) sind Systemfunktionen beziehungsweise einmalige, sichtbare Downloads ohne Inhaltsdaten.
-- **Verschlüsselungs-Beta** (zunächst deaktiviert): Aktivierung erzeugt eine vollständige verschlüsselte Kopie der Bibliothek (Dateiebene, Schlüssel im Keychain plus Recovery-Code für den Benutzer), entschlüsselt sie zur Prüfung vollständig zurück, vergleicht, und schaltet erst dann atomar um; die alte Bibliothek bleibt bis zur expliziten Löschung durch den Benutzer liegen. Niemals In-place.
-   [Fakt] Das stärkste Schutzargument sind die Stimm-Embeddings als biometrische Daten (Entwurf `encryption-at-rest.md` im Altprojekt).
-- **Recovery-Grenzen**: Ohne Schlüssel und ohne Recovery-Code sind verschlüsselte Daten verloren; das wird bei Aktivierung unmissverständlich gesagt und der Recovery-Code verpflichtend bestätigt.
-- iCloud-Synchronisation und automatische Cloud-Importe bleiben ausgeschlossen, bis Verschlüsselung und Wiederherstellung zuverlässig funktionieren.
+- **Logging**: Use only `os.Logger` with privacy annotations. Conversation content, file names, transcript text, and model output are `.private` or not logged. The initial implementation has no telemetry; any future telemetry must be opt-in and content-free.
+- **Network boundary**: `StenoIntelligence` is the only component with network access, and only when an external provider is configured explicitly. An in-app switch enforces local-only operation. Model downloads through SpeechAnalyzer `AssetInventory` and FluidAudio are visible system or one-time downloads that carry no conversation content.
+- **Encryption beta**, initially disabled: Enabling it creates a complete encrypted copy of the library at file level, with a key in Keychain and a recovery code for the user, fully decrypts that copy for verification, compares it, and only then switches atomically. The old library remains until the user deletes it explicitly. Encryption is never in place.
+  [Fact] Voice embeddings as biometric data provide the strongest reason for protection, as described by `encryption-at-rest.md` in the legacy project.
+- **Recovery limits**: Encrypted data is lost without both the key and recovery code. Activation states this unambiguously and requires confirmation of the recovery code.
+- iCloud sync and automatic cloud imports remain excluded until encryption and recovery are dependable.
 
-## 9. Test- und Benchmarkstrategie
+## 9. Test and benchmark strategy
 
-- **Unit-Ebene** (schnell, deterministisch): Domäneninvarianten in `StenoDomain`/`StenoIdentity` (die 13 Invarianten des Altsystems werden als Testkatalog übernommen), Storage-Migrationen, Revisionsregeln, Alignment-Regeln mit synthetischen Wortzeitstempeln.
-- **Integrationsebene**: Pipeline-Läufe gegen kleine echte Audiofixtures (mit `say` erzeugte Sprache wie im Alt-E2E), Crash-Recovery-Tests (Prozess töten, neu starten, Zustand prüfen), Storage-Roundtrips.
-- **Benchmark-Kit**: `~/Dev/sandbox/steno-diar-bench` (AMI dev/test, CCC-Fenster, dscore, DER/JER-Dreiteilung) wird weiterverwendet; die neue App bekommt ein CLI-Target `steno-bench`, das dieselben RTTM-Formate erzeugt, damit alte und neue Zahlen vergleichbar bleiben.
-- **Offene Messfragen mit Priorität**:
-  1. SpeechAnalyzer gegen Parakeet auf Deutsch und Englisch (WER, Wortzeitstempel-Güte, Latenz, Energie); das entscheidet, ob die primäre ASR-Referenz hält. [Annahme] SpeechAnalyzer ist gut genug; ungemessen.
-  2. Mehrere Personen an einem Mikrofon: echtes Material mit zeitaufgelöster Referenz beschaffen (die dokumentierte Lücke beider Alt-Handoffs); ohne dieses Material keine Alignment-Feinarbeit.
-  3. Der ungescorte 8-Sprecher-Fall (`work/eightspk/`) wird zu Ende gemessen, bevor irgendeine Mehr-als-vier-Engine gebaut wird.
-  4. Lange Sitzungen (4 h): Speicher- und Energieprofil der Streaming-Pipeline; Ziel ist konstanter Speicher statt wachsender Fenster.
-- **Echtzeitfähigkeit**: Live-Pfad wird mit synthetischer Echtzeit-Einspeisung gemessen (Muster aus dem Alt-`@perf`-Spec); Kriterium ist, dass die Pipeline dauerhaft schneller als Echtzeit bleibt, auch bei zwei aktiven Spuren.
+- **Unit level**, fast and deterministic: domain invariants in `StenoDomain` and `StenoIdentity`, including the 13 legacy invariants as a test catalog, storage migrations, revision rules, and alignment rules using synthetic word timestamps.
+- **Integration level**: Pipeline runs against small real audio fixtures, including speech created with `say`; crash-recovery tests that terminate the process, relaunch, and inspect state; and storage round trips.
+- **Benchmark kit**: Continue using `~/Dev/sandbox/steno-diar-bench` with AMI development and test sets, CCC windows, dscore, and three-way DER/JER reporting. The new app receives a `steno-bench` CLI target that emits the same RTTM format so old and new measurements remain comparable.
+- **Open measurement questions, in priority order**:
+  1. Compare SpeechAnalyzer with Parakeet in German and English for WER, word-timestamp quality, latency, and energy. [Assumption] SpeechAnalyzer is good enough; this is unmeasured.
+  2. Obtain real, time-aligned reference material with multiple people sharing one microphone. Do no further alignment tuning without this material.
+  3. Finish scoring the eight-speaker case in `work/eightspk/` before building any more-than-four-speaker engine.
+  4. Profile memory and energy for four-hour sessions. The streaming pipeline must use constant memory rather than growing windows.
+- **Real-time capability**: Measure the live path using synthetic real-time feeding based on the legacy `@perf` spec. The pipeline must remain faster than real time indefinitely, including with two active tracks.
 
-## 10. Vertikale Meilensteine
+## 10. Vertical milestones
 
-Reihenfolge wie im Handoff, mit einer Korrektur: Meilenstein 1 braucht bereits minimale SpeechAnalyzer-Integration, denn "sichtbares Transkript" ohne ASR ist leer; Meilenstein 2 vertieft dann Finallauf und Benchmarks.
+The order follows the handoff with one correction: milestone 1 already needs minimal SpeechAnalyzer integration because a visible transcript without ASR would be empty; milestone 2 then deepens final processing and benchmarks.
 
-1. **App-Hülle, Bibliothek, Aufnahme, Import, Live-Transkript.**
-   Akzeptanz: Aufnahme erzeugt zwei getrennte CAF-Originale; Import kopiert mit provenanceKey; Live-Transkript erscheint während der Aufnahme; Kill -9 während der Aufnahme verliert kein Audio; Bibliothek übersteht Neustart mit Recovery-Sweep.
-2. **Finaler ASR-Lauf und Benchmarks.**
-   Akzeptanz: Finallauf ersetzt Live-Revision regelkonform, Wortzeitstempel je Wort vorhanden; WER-Vergleich SpeechAnalyzer gegen Parakeet-Referenzzahlen dokumentiert; Entscheidung über die ASR-Referenz aktenkundig.
-3. **Diarisierung und Sprecheridentität als interne Module.**
-   Akzeptanz: Sortformer-Port liefert auf den AMI-Fixtures DER im Rahmen der Alt-Basislinie (20,3 auf dev Array1-01, 8,98 auf IS1008a/b); Identitätsvorschläge reproduzieren die Gates; Bestätigen, Umbenennen, Many-to-one und Mixed-Marking funktionieren mit Run-Provenienz.
-4. **Vorlagen mit Foundation Models.**
-   Akzeptanz: Besprechungsprotokoll-Vorlage on-device; ohne Modell bleibt alles andere nutzbar.
-5. **Optionale externe LLM-Provider.**
-   Akzeptanz: LM Studio und eigenes Ollama über einen OpenAI-kompatiblen Vertrag, nie automatisch kontaktiert, Provider sichtbar am Ergebnis.
-6. **Steno-Altimport und Obsidian-Export.**
-   Akzeptanz: Import kopiert, verändert die alte Installation nie, dedupliziert über provenanceKey/legacy-Stems; Export nur nach Freigabe, mit Klartext-Hinweis.
-7. **Verschlüsselungs-Beta.**
-   Akzeptanz: Kopie-Prüfung-Umschalten nachgewiesen, Recovery-Code-Pflicht, alte Bibliothek bleibt bis zur expliziten Löschung.
-8. **Später: iCloud, automatische Importe.** Erst nach 7.
+1. **App shell, library, recording, import, and live transcript.**
+   Acceptance: recording creates two separate CAF originals; import copies with provenanceKey; live transcript appears during recording; `kill -9` during recording loses no audio; the library survives relaunch and recovery.
+2. **Final ASR run and benchmarks.**
+   Acceptance: the final run replaces the live revision according to the rules and includes timestamps for every word; a WER comparison of SpeechAnalyzer against Parakeet reference values is documented; the ASR reference decision is recorded.
+3. **Diarization and speaker identity as internal modules.**
+   Acceptance: the Sortformer port stays within the legacy AMI-fixture DER baseline, 20.3 on development Array1-01 and 8.98 on IS1008a/b; identity suggestions reproduce the gates; confirmation, renaming, many-to-one assignment, and mixed marking work with run provenance.
+4. **Templates with Foundation Models.**
+   Acceptance: an on-device meeting-minutes template; everything else remains usable without the model.
+5. **Optional external LLM providers.**
+   Acceptance: LM Studio and a custom Ollama instance use one OpenAI-compatible contract, are never contacted automatically, and the producing provider is visible on each result.
+6. **Legacy Steno import and Obsidian export.**
+   Acceptance: import copies and never changes the old installation, deduplicates using provenanceKey and legacy stems; export occurs only after approval and shows a plaintext warning.
+7. **Encryption beta.**
+   Acceptance: the copy, verify, and switch sequence is demonstrated; recovery code is mandatory; the old library remains until explicit deletion.
+8. **Later: iCloud and automatic imports.** Only after milestone 7.
 
-## 11. Risiken und vertagte Entscheidungen
+## 11. Risks and deferred decisions
 
-**Risiken:**
-- SpeechAnalyzer-Qualität (insbesondere Deutsch, Fachvokabular, lange Sitzungen) ist ungemessen; Gegenmaßnahme ist die frühe Benchmark in Meilenstein 2 und die kleine Provider-Grenze.
-- Mehr als vier Sprecher pro Kanal bleibt ungelöst; der VBx-Pfad ist gemessen schlechter und nicht deterministisch. Das Produktversprechen "unterscheidet mehr als vier Teilnehmende" ist heute nur kanalübergreifend einlösbar (Mikro plus System), nicht innerhalb eines Kanals. Das ist der größte Widerspruch zwischen Produktziel und vorhandener Technik.
-- FluidAudio lädt Modelle von Hugging Face nach; Modell-Asset-Verwaltung (Bündeln, Pinnen, Offline-Fähigkeit) braucht eine bewusste Lösung, sonst erbt die App die fragile Download-Löschlogik des Altsystems.
-- Mehrere Personen an einem Mikrofon: ohne Messmaterial bleibt jede Aussage dazu Annahme.
-- CoreAudio Process Taps für Systemaudio erfordern Berechtigungen und haben App-übergreifende Eigenheiten; früh im Meilenstein 1 gegen reale Konferenz-Apps testen.
+**Risks:**
 
-**Bewusst vertagt (offene Produktentscheidungen):**
-1. Codec der Originalspuren (Start: CAF/PCM 16 bit; ALAC-Umstieg als Platzoption).
-2. Ob ein SQLite-Suchindex in Meilenstein 2 oder später kommt.
-3. Nemotron oder andere ASR-Alternativen: erst nach der SpeechAnalyzer-Benchmark überhaupt bewerten.
-4. UI-Designsprache und Markenauftritt der neuen App.
-5. Distribution (Developer-ID-Signierung, Notarisierung, Updates); im ersten Schnitt lokaler Build.
-6. iOS: Domäne und Verträge bleiben portabel, aber keine iOS-Zeile vor stabilem macOS-Kern.
-7. Verschlüsselungs-Detailentwurf (Schlüsselformat, Recovery-Code-UX) vor Meilenstein 7.
-8. Ob das Sprecherzahl-Eingabefeld je kommt; falls ja, mit der Frage "wie viele haben gesprochen", nicht "wie viele nahmen teil".
+- SpeechAnalyzer quality, especially for German, specialist vocabulary, and long sessions, is unmeasured. Mitigation is the early milestone 2 benchmark and the narrow provider boundary.
+- More than four speakers per channel remains unresolved. The measured VBx path is worse and nondeterministic. The product claim of distinguishing more than four participants is currently supportable only across microphone and system channels, not within one channel.
+- FluidAudio downloads models from Hugging Face. Model-asset management, including bundling, pinning, and offline availability, requires an explicit solution or the app will inherit the legacy system's fragile download-and-delete behavior.
+- Multiple people sharing one microphone remain unmeasured, so every claim about that case is an assumption.
+- CoreAudio Process Taps for system audio require permissions and have app-specific behavior. Test them against real conferencing apps early in milestone 1.
+
+**Deliberately deferred product decisions:**
+
+1. Original-track codec, initially 16-bit PCM in CAF, with ALAC as a later space-saving option.
+2. Whether to add a SQLite search index in milestone 2 or later.
+3. Nemotron or other ASR alternatives, to be considered only after the SpeechAnalyzer benchmark.
+4. UI design language and branding for the new app.
+5. Distribution through Developer ID signing, notarization, and updates; the initial implementation is a local build.
+6. iOS: keep the domain and contracts portable, but write no iOS-specific code before the macOS core is stable.
+7. Detailed encryption design, including key format and recovery-code UX, before milestone 7.
+8. Whether a speaker-count field should ever exist. If it does, ask "how many people spoke?", not "how many people attended?".

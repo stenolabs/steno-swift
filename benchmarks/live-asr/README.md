@@ -1,27 +1,27 @@
-# Live-ASR-Benchmark auf Apple Silicon
+# Live ASR benchmark on Apple Silicon
 
-Dieser Benchmark vergleicht drei lokale Live-Pfade mit denselben deutschen Audiodateien:
+This benchmark compares three local live paths against the same German audio files:
 
-- Apple `SpeechAnalyzer` aus Stenos produktivem Provider.
-- FluidAudio Parakeet TDT aus Stenos noch verborgenem Liveadapter.
-- FluidAudio Nemotron 3.5 ASR Streaming Multilingual aus einem getrennten, exakt gepinnten Paket.
+- Apple `SpeechAnalyzer` through Steno's production provider.
+- FluidAudio Parakeet TDT through Steno's currently hidden live adapter.
+- FluidAudio Nemotron 3.5 ASR Streaming Multilingual through a separate, exactly pinned package.
 
-Die Benchmarkwerkzeuge ändern keine Einstellung der Steno-App und installieren kein Modell in Stenos Bibliothek.
-Audio, Referenzen, Modellgewichte und Ergebnisse bleiben außerhalb von Git.
+The benchmark tools do not change Steno app settings and do not install models into Steno's library.
+Audio, references, model weights, and results remain outside Git.
 
-## Voraussetzungen
+## Requirements
 
-- Apple Silicon mit macOS 26 oder neuer.
-- Für Apple muss das deutsche `SpeechTranscriber`-Asset bereits über Steno installiert sein.
-- Das offizielle FluidAudio-Parakeet-Modell muss als lokaler Modellordner vorliegen.
-- Der erste Nemotron-Lauf braucht Internetzugang und lädt die Variante `de-DE/2240ms` in den angegebenen Cache.
-- Das Corpus-Manifest muss `ready` sein und ausschließlich explizite deutsche `de-DE`-Samples enthalten.
+- Apple Silicon running macOS 26 or newer.
+- Apple's German `SpeechTranscriber` asset must already have been installed through Steno.
+- The official FluidAudio Parakeet model must exist as a local model directory.
+- The first Nemotron run requires network access and downloads the `de-DE/2240ms` variant into the specified cache.
+- The corpus manifest must be `ready` and contain only explicit German `de-DE` samples.
 
-Apple und Nemotron erhalten explizit `de-DE`, und Nemotron läuft zusätzlich mit erzwungenem deutschen Präfix.
-FluidAudio 0.15.5 reicht im vorhandenen Parakeet-Sliding-Window-API keine Sprache an den Decoder weiter.
-Der Parakeet-Lauf misst damit bewusst den echten aktuellen Steno-Livepfad, dessen Ergebnis nur als `de-DE` gekennzeichnet wird, während die Decodierung im Modellstandard bleibt.
+Apple and Nemotron receive `de-DE` explicitly, and Nemotron additionally runs with a forced German prefix.
+FluidAudio 0.15.5 does not pass a language to the decoder through its existing Parakeet sliding-window API.
+The Parakeet run therefore measures Steno's real current live path: its output is labeled `de-DE`, while decoding uses the model default.
 
-## Runner bauen
+## Build the runners
 
 ```sh
 swift build -c release --package-path StenoKit --product steno-live-transcribe
@@ -30,15 +30,15 @@ swift build -c release \
   --product steno-nemotron-live-bench
 ```
 
-`NemotronRunner/Package.resolved` pinnt FluidAudio auf Commit `667181a368da13b3a9178e310414e9dcbe8f23ce`.
-Damit verändert dieser Versuch weder Stenos produktive FluidAudio-Version noch dessen Diarisierung.
+`NemotronRunner/Package.resolved` pins FluidAudio to commit `667181a368da13b3a9178e310414e9dcbe8f23ce`.
+This experiment therefore changes neither Steno's production FluidAudio version nor its diarization implementation.
 
-## Schneller Qualitätslauf
+## Fast quality run
 
-Der schnelle Modus verwendet fuer Parakeet und Nemotron 250-ms-Eingabebloecke.
-Apple bekommt 4-Sekunden-Bloecke, damit auch der laengste Corpus-Ausschnitt in seine auf 64 Bloecke begrenzte Live-Eingabewarteschlange passt.
-Ein Hardwarevergleich auf dem M5 Air ergab fuer denselben Ausschnitt mit 20-ms-Echtzeit- und 4-Sekunden-Schnellzufuhr identische WER- und CER-Werte.
-Latenzwerte dieses Modus sind nicht als Nutzerlatenz zu interpretieren.
+Fast mode feeds Parakeet and Nemotron in 250-millisecond chunks.
+Apple receives four-second chunks so that even the longest corpus excerpt fits into its live-input queue, which is limited to 64 chunks.
+A hardware comparison on the M5 Air produced identical WER and CER for the same excerpt with 20-millisecond real-time feeding and four-second fast feeding.
+Do not interpret this mode's latency values as user-visible latency.
 
 ```sh
 python3 scripts/benchmark/run_live_asr_matrix.py \
@@ -52,10 +52,10 @@ python3 scripts/benchmark/run_live_asr_matrix.py \
   --mode fast
 ```
 
-## Echtzeit-Latenzlauf
+## Real-time latency run
 
-Der Echtzeitmodus verwendet 20-ms-Eingabeblöcke und verlangt genau einen expliziten Ausschnitt.
-Nur hier sind `timeToFirstTextSeconds` und die Folge der Liveupdates als sichtbare Nutzerlatenz aussagekräftig.
+Real-time mode uses 20-millisecond input chunks and requires exactly one explicit excerpt.
+Only this mode makes `timeToFirstTextSeconds` and the sequence of live updates meaningful as visible user latency.
 
 ```sh
 python3 scripts/benchmark/run_live_asr_matrix.py \
@@ -70,11 +70,11 @@ python3 scripts/benchmark/run_live_asr_matrix.py \
   --sample oocc-v2-free-conversation-03
 ```
 
-## Ergebnisse
+## Results
 
-Jede Engine schreibt eine JSON-Hypothese mit Endtext, vorläufigen und bestätigten Updates, Audiozeit, Wanduhrzeit und Zeit bis zum ersten Text.
-Der vorhandene `score_asr.py` erzeugt daraus WER, CER, Auslassungsrate und Recall der registrierten Eigennamen.
-`run-fast.json` beziehungsweise `run-realtime.json` pinnt zusätzlich Manifest- und Runner-Prüfsummen sowie Host und Betriebssystem.
+Each engine writes a JSON hypothesis containing final text, provisional and confirmed updates, audio duration, wall-clock duration, and time to first text.
+The existing `score_asr.py` derives WER, CER, omission rate, and registered named-term recall.
+`run-fast.json` and `run-realtime.json` additionally pin the manifest and runner checksums, host, and operating system.
 
-Ein fehlendes Apple-Sprachasset, ein nicht regulärer Modellpfad oder ein nicht passendes Manifest beendet den Lauf sichtbar.
-Der Benchmark lädt keine Apple- oder Parakeet-Modelle selbstständig nach.
+A missing Apple speech asset, non-regular model path, or incompatible manifest fails the run visibly.
+The benchmark does not download Apple or Parakeet models automatically.

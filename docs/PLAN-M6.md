@@ -1,5 +1,7 @@
 # Meilenstein 6: Steno-Altimport
 
+> Historical, non-normative milestone record retained in German. Use `LEGACY-FORMATS.md` and `FEATURE-PARITY.md` for current status.
+
 Umsetzungsplan zu `ARCHITECTURE.md` Abschnitt 10, Meilenstein 6 - auf Produktentscheidung (2026-08-05) reduziert auf den Altimport; Obsidian-Export und Granola-Importer sind vertagt (siehe HANDOFF, spätere Liste).
 Formatgrundlage ist `docs/LEGACY-FORMATS.md`; sie ist die verbindliche Referenz für alle Parser.
 Reihenfolge verbindlich; jeder Schritt endet mit grünem `swift test` und einem Commit.

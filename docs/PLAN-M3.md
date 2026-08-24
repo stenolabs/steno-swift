@@ -1,5 +1,7 @@
 # Meilenstein 3: Diarisierung und Sprecheridentität als interne Module
 
+> Historical, non-normative milestone record retained in German. Use `ARCHITECTURE.md` and `FEATURE-PARITY.md` for current status.
+
 Umsetzungsplan zu `ARCHITECTURE.md` Abschnitt 10, Meilenstein 3.
 Reihenfolge verbindlich; jeder Schritt endet mit grünem `swift test` und einem Commit.
 Referenzwissen: Der bestehende Sidecar-Code liegt in `~/Dev/Repositorys/stenoai/diarize-sidecar/Sources/main.swift` (eigener Code, Übernahme erlaubt); die Identitätslogik in `~/Dev/Repositorys/stenoai/src/speaker_suggestions.py` und `/private/tmp/wt-455b` (fachlich übernehmen, nicht zeilenweise portieren).

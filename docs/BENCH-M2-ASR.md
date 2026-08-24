@@ -1,36 +1,44 @@
-# Meilenstein 2: SpeechAnalyzer-Benchmark (ASR-Referenzentscheidung)
+# Milestone 2: SpeechAnalyzer benchmark and ASR reference decision
 
-Gemessen am 2026-08-05 auf dieser Maschine (macOS 26.5, Apple Silicon).
-Methodik und Rohdaten: `~/Dev/sandbox/steno-diar-bench`, Abschnitt 2g in RESULTS.md; Scoring identisch zur Parakeet-Basislinie aus Abschnitt 2d (gleiche Single-Stream-Referenz, gleicher Normalizer, gleiches jiwer).
+Measured on 5 August 2026 on this machine running macOS 26.5 on Apple Silicon.
+Method and raw data are stored in `~/Dev/sandbox/steno-diar-bench`, section 2g of `RESULTS.md`.
+Scoring matches the Parakeet baseline from section 2d, using the same single-stream reference, normalizer, and jiwer version.
 
-## Ergebnis
+## Result
 
-| Engine | WER (length-weighted, 6 AMI-dev-Meetings, Array1-01) | RTF |
-|---|---|---|
-| Parakeet TDT v3 (stenoai-Basislinie) | 18,31 % | 0,0271 |
-| SpeechAnalyzer (macOS 26) | 21,30 % | 0,0116 |
+| Engine | WER, length-weighted across six AMI-dev meetings using Array1-01 | RTF |
+|---|---:|---:|
+| Parakeet TDT v3, Steno Legacy baseline | 18.31% | 0.0271 |
+| SpeechAnalyzer on macOS 26 | 21.30% | 0.0116 |
 
-- Parakeet gewinnt jedes der sechs Meetings, mit 1,5 bis 6,8 Punkten; die Lücke wächst mit dem Überlappungsanteil.
-- SpeechAnalyzer ist 2,3-mal schneller und liefert Wortzeitstempel nativ im Streaming-Vertrag, ohne Python, ohne Modell-Bundling, ohne ffmpeg.
-- Beide Systeme sind deletionsdominiert; ein erheblicher Teil davon ist das dokumentierte Artefakt der zusammengelegten Single-Stream-Referenz bei Überlappung, kein verlorenes Audio.
-- AMI Array1-01 ist Fernfeld-Array-Audio, der harte Fall. Über Nahbesprechungsmikrofon und Systemaudio-Loopback (Stenos Hauptfall) sagt die Messung nichts direkt aus.
-- Deutsch bleibt für beide Engines unmessbar: kein Referenzkorpus (offener Punkt aus RESULTS.md 2d, erneut bestätigt).
+- Parakeet wins all six meetings by 1.5 to 6.8 percentage points, and the gap grows with overlap share.
+- SpeechAnalyzer is 2.3 times faster and provides native word timestamps through a streaming contract without Python, bundled models, or FFmpeg.
+- Deletions dominate both systems.
+  A substantial share comes from the documented artifact of merging overlapping speech into a single-stream reference rather than from lost audio.
+- AMI Array1-01 is far-field array audio and represents the difficult case.
+  This measurement says nothing directly about close-talk microphones and system-audio loopback, which are Steno's main use case.
+- German remained unmeasured for both engines because no suitable reference corpus was available, repeating the open point from `RESULTS.md` section 2d.
 
-## Entscheidung (aktenkundig gemäß ARCHITECTURE.md, Meilenstein 2)
+## Recorded decision from architecture milestone 2
 
-**SpeechAnalyzer bleibt die primäre ASR-Referenz.** Begründung:
+**SpeechAnalyzer remains the primary ASR reference.**
 
-1. Die Lücke von 3 WER-Punkten liegt im Fernfeld-Worst-Case; der Produkt-Hauptfall (Nahfeld-Mikro plus getrennte Systemaudio-Spur) ist akustisch deutlich gutmütiger.
-2. Die Architekturvorteile sind strukturell: nativer Streaming-Vertrag mit vorläufigen und finalen Ergebnissen (ersetzt den Redecode-Pfad des Altsystems), Wortzeitstempel ohne Zusatzaufwand, keine Fremdlaufzeit, Modellverwaltung durchs System.
-3. Der Provider-Vertrag hält die Tür offen: Ein Parakeet- oder Nemotron-Provider ist ein Benchmark-Kandidat hinter derselben Grenze, falls die Qualität im echten Nutzungsprofil nicht reicht.
+1. The three-point WER gap occurs in the far-field worst case.
+   The main product case, a close microphone plus a separate system-audio track, is acoustically less difficult.
+2. The architectural advantages are structural: a native streaming contract with provisional and final results replaces the legacy re-decode path, word timestamps require no additional machinery, no foreign runtime is needed, and the operating system manages the model.
+3. The provider boundary remains open.
+   Parakeet or Nemotron can remain benchmark candidates behind the same interface if quality proves insufficient for real use.
 
-Revisionsauslöser (wann diese Entscheidung neu bewertet wird):
+Revisit this decision when any of the following occurs:
 
-- Ein deutsches Referenzmaterial entsteht (z. B. ein von Hand korrigiertes CCC-Zehnminutenfenster) und zeigt eine deutlich größere Lücke als im Englischen.
-- Reale Meetings zeigen systematische Auslassungen, die das AMI-Deletionsprofil widerspiegeln.
-- Ein Nahfeld-Benchmark zeigt mehr als ~3 Punkte Abstand zugunsten einer Alternative.
+- A German reference becomes available, such as a manually corrected ten-minute CCC excerpt, and shows a substantially larger gap than the English material.
+- Real meetings show systematic omissions resembling the AMI deletion profile.
+- A close-talk benchmark shows an alternative leading by more than approximately three WER points.
 
-## Nebenbefund mit Fix
+## Secondary finding and fix
 
-Der LocaleResolver löste BCP-47-Anfragen mit Bindestrich (en-US, de-DE) gegen die Unterstrich-Identifier von SpeechTranscriber (en_US, de_DE) nicht exakt auf und fiel auf die erstbeste gleiche Sprache zurück (real: en_ZA, de_AT).
-Gefixt mit normalisiertem Vergleich plus Region-Fallback und Regressionstest; der WER-Effekt war vernachlässigbar (21,19 gegen 21,30), weil der Normalizer Dialektschreibungen absorbiert.
+`LocaleResolver` did not match hyphenated BCP 47 requests such as `en-US` and `de-DE` exactly against the underscore identifiers returned by `SpeechTranscriber`, such as `en_US` and `de_DE`.
+It therefore fell back to the first locale with the same language, which was `en_ZA` or `de_AT` in the observed runs.
+
+The resolver now compares normalized identifiers, then applies an explicit region fallback, with a regression test.
+The WER effect was negligible, 21.19% versus 21.30%, because the normalizer absorbs dialect-specific spelling variants.

@@ -1,167 +1,167 @@
-# Lokaler deutscher Sprachbenchmark: OOCC-v2-Vorlauf
+# Local German speech benchmark: OOCC v2 preflight
 
-Stand: 14. August 2026.
+Recorded on 14 August 2026.
 
-## Ergebnis
+## Result
 
-Auf den sieben Freigespräch-Ausschnitten des Open Oldenburg Conversation Corpus v2 erreicht Apples produktiver `SpeechAnalyzerProvider` die niedrigste längengewichtete Wortfehlerrate.
+Across the seven free-conversation excerpts from the Open Oldenburg Conversation Corpus v2, Apple's production `SpeechAnalyzerProvider` achieves the lowest length-weighted word error rate.
 
-| Engine | WER | Fehler / Referenzwörter | Laufzeit | RTF |
+| Engine | WER | Errors / reference words | Runtime | RTF |
 |---|---:|---:|---:|---:|
-| Apple SpeechAnalyzer | **19,19 %** | 495 / 2.579 | 5,61 s | 0,00686 |
-| FluidAudio Parakeet TDT v3 | 21,68 % | 559 / 2.579 | 21,12 s | 0,02587 |
-| Parakeet Primeline DE CoreML | 21,56 % | 556 / 2.579 | 19,31 s | 0,02365 |
+| Apple SpeechAnalyzer | **19.19%** | 495 / 2,579 | 5.61 s | 0.00686 |
+| FluidAudio Parakeet TDT v3 | 21.68% | 559 / 2,579 | 21.12 s | 0.02587 |
+| Parakeet Primeline DE CoreML | 21.56% | 556 / 2,579 | 19.31 s | 0.02365 |
 
-Apple gewinnt sechs der sieben Gespräche.
-Das reguläre Parakeet gewinnt nur Ausschnitt 1.
-Der deutsche Primeline-Fine-Tune verbessert das reguläre Parakeet insgesamt um 0,12 Prozentpunkte, bleibt aber 2,36 Prozentpunkte hinter Apple.
+Apple wins six of the seven conversations.
+Regular Parakeet wins only excerpt 1.
+The German Primeline fine-tune improves over regular Parakeet by 0.12 percentage points overall but remains 2.36 points behind Apple.
 
-Der erste Primeline-Lauf enthält 13,4 Sekunden einmalige CoreML-Kompilierung des FP16-Encoders.
-Über die bereits aufgewärmten Ausschnitte 2 bis 7 beträgt die RTF 0,00714 für Apple, 0,00919 für das reguläre Parakeet und 0,00721 für Primeline.
-Alle drei Engines bleiben damit deutlich schneller als Echtzeit.
+The first Primeline run includes 13.4 seconds of one-time CoreML compilation for the FP16 encoder.
+Across the already warmed excerpts 2 through 7, RTF is 0.00714 for Apple, 0.00919 for regular Parakeet, and 0.00721 for Primeline.
+All three engines remain substantially faster than real time.
 
-## Eigennamen und benannte Begriffe
+## Proper names and named terms
 
-Ein zweiter Durchlauf bewertet 16 eindeutige Eigennamen und Werktitel aus den manuell korrigierten Referenzen der Ausschnitte 3, 4 und 7.
-Die Liste lautet `Mareike Fallwickel`, `Und alles so still`, `Die Wut die bleibt`, `Witches bitches it-girls`, `Pandora`, `Neuseeland`, `Kaikoura`, `Irland`, `Dublin`, `Galway`, `Cliffs of Moher`, `Harry Potter`, `Niederlanden`, `Niederländisch`, `Niederlandistik` und `Niedersachsen`.
-Ein Begriff gilt nur dann als Treffer, wenn er nach derselben Unicode-, Groß-/Kleinschreibungs- und Zeichensetzungsnormalisierung vollständig im Hypothesentext vorkommt.
+A second pass evaluates 16 unique proper names and work titles from the manually corrected references for excerpts 3, 4, and 7.
+The list is `Mareike Fallwickel`, `Und alles so still`, `Die Wut die bleibt`, `Witches bitches it-girls`, `Pandora`, `Neuseeland`, `Kaikoura`, `Irland`, `Dublin`, `Galway`, `Cliffs of Moher`, `Harry Potter`, `Niederlanden`, `Niederländisch`, `Niederlandistik`, and `Niedersachsen`.
+A term counts as a hit only when it appears in full in the hypothesis after the same Unicode, case, and punctuation normalization.
 
-| Engine | Exakte Treffer | Recall |
+| Engine | Exact hits | Recall |
 |---|---:|---:|
-| Apple SpeechAnalyzer | **12 / 16** | **75,00 %** |
-| FluidAudio Parakeet TDT v3 | 9 / 16 | 56,25 % |
-| Parakeet Primeline DE CoreML | 9 / 16 | 56,25 % |
+| Apple SpeechAnalyzer | **12 / 16** | **75.00%** |
+| FluidAudio Parakeet TDT v3 | 9 / 16 | 56.25% |
+| Parakeet Primeline DE CoreML | 9 / 16 | 56.25% |
 
-Apple erkennt als einzige Engine `Und alles so still`, `Cliffs of Moher` und `Niederlandistik` exakt.
-Alle drei Engines verfehlen `Mareike Fallwickel`, `Die Wut die bleibt`, `Witches bitches it-girls` und `Kaikoura`.
-Der Eigennamen-Test bestätigt damit Apples Vorsprung auf diesem Korpus, obwohl einzelne Fach- oder Ortsnamen in realen Besprechungen weiterhin modellabhängig falsch geschrieben werden können.
-Der Wert misst das Vorkommen jedes eindeutigen Begriffs genau einmal und weder die Zahl aller Nennungen noch Auslassungen eines wiederholt gesprochenen Namens.
+Apple is the only engine to recognize `Und alles so still`, `Cliffs of Moher`, and `Niederlandistik` exactly.
+All three miss `Mareike Fallwickel`, `Die Wut die bleibt`, `Witches bitches it-girls`, and `Kaikoura`.
+The named-term test therefore confirms Apple's lead on this corpus, although model-dependent misspellings of technical or place names remain possible in real meetings.
+The metric counts each unique term once and measures neither every mention nor omissions of a repeatedly spoken name.
 
-## Einzelwerte
+## Per-excerpt measurements
 
-| Ausschnitt | Dauer | Apple WER | Parakeet WER | Primeline WER | Sortformer DER |
+| Excerpt | Duration | Apple WER | Parakeet WER | Primeline WER | Sortformer DER |
 |---|---:|---:|---:|---:|---:|
-| 01 | 159,4 s | 19,50 % | **18,58 %** | 19,95 % | 17,02 % |
-| 02 | 117,7 s | 18,63 % | 20,34 % | **18,14 %** | 4,05 % |
-| 03 | 147,4 s | **22,09 %** | 25,24 % | 25,97 % | 5,22 % |
-| 04 | 97,0 s | **17,71 %** | 18,80 % | 20,98 % | 10,96 % |
-| 05 | 115,1 s | **24,93 %** | 26,06 % | 28,33 % | 3,59 % |
-| 06 | 88,5 s | **15,87 %** | 26,35 % | 21,26 % | 1,97 % |
-| 07 | 91,6 s | **13,75 %** | 15,61 % | 14,87 % | 4,08 % |
+| 01 | 159.4 s | 19.50% | **18.58%** | 19.95% | 17.02% |
+| 02 | 117.7 s | 18.63% | 20.34% | **18.14%** | 4.05% |
+| 03 | 147.4 s | **22.09%** | 25.24% | 25.97% | 5.22% |
+| 04 | 97.0 s | **17.71%** | 18.80% | 20.98% | 10.96% |
+| 05 | 115.1 s | **24.93%** | 26.06% | 28.33% | 3.59% |
+| 06 | 88.5 s | **15.87%** | 26.35% | 21.26% | 1.97% |
+| 07 | 91.6 s | **13.75%** | 15.61% | 14.87% | 4.08% |
 
-Die sieben Dateien enthalten zusammen 816,65 Sekunden Audio.
-Sortformer erkennt in jedem Ausschnitt exakt die zwei vorhandenen Sprechercluster.
-Der dauergewichtete Mittelwert der sieben Einzelmessungen beträgt 7,33 % DER und 18,67 % JER.
-Ohne überlappende Rede beträgt der entsprechende DER-Mittelwert 7,38 %.
+The seven files contain 816.65 seconds of audio in total.
+Sortformer identifies exactly the two present speaker clusters in every excerpt.
+The duration-weighted mean of the seven individual measurements is 7.33% DER and 18.67% JER.
+Without overlapping speech, the corresponding DER mean is 7.38%.
 
-## Messaufbau
+## Measurement setup
 
-Die Messung lief als lokaler Vorlauf auf einem Mac mini mit Apple M4, 24 GB Arbeitsspeicher und macOS 26.5.2 Build 25F84.
-Der geplante Vergleich auf dem M5 Air mit macOS 27 konnte noch nicht ausgeführt werden, weil das Gerät im privaten Netz zwar auf ICMP antwortete, aber weder SSH noch Bildschirmfreigabe oder Dateifreigabe erreichbar waren.
+The preflight ran locally on a Mac mini with Apple M4, 24 GB of memory, and macOS 26.5.2 build 25F84.
+The planned comparison on the M5 Air running macOS 27 could not initially run because the device answered ICMP on the private network but exposed neither SSH, screen sharing, nor file sharing.
 
-Verwendet wurden die sieben Dateien `1_free_conversation_clip.mov` bis `7_free_conversation_clip.mov` aus OOCC v2 Task 1 und die zugehörigen manuell korrigierten CSV-Transkripte.
-Die Audioquellen wurden mit FFmpeg deterministisch auf Mono, 16 kHz und PCM S16LE gemischt.
-Die Wortreferenz folgt der zeitlichen Reihenfolge der manuell korrigierten Wörter.
-Die Sprecherreferenz übernimmt die getrennten OOCC-Kanäle `LEFT` und `RIGHT` und fasst Wörter derselben Person bei höchstens 350 ms Abstand zu RTTM-Segmenten zusammen.
+The inputs were the seven files `1_free_conversation_clip.mov` through `7_free_conversation_clip.mov` from OOCC v2 task 1 and their manually corrected CSV transcripts.
+FFmpeg mixed the sources deterministically to mono, 16 kHz, PCM S16LE.
+The word reference follows the chronological order of manually corrected words.
+The speaker reference uses the separate OOCC `LEFT` and `RIGHT` channels and joins consecutive words from the same person into RTTM segments when gaps do not exceed 350 milliseconds.
 
-Die WER wurde mit `scripts/benchmark/score_asr.py` und dem Normalisierer `steno-de-v1` berechnet.
-Die Diarisierung wurde mit `scripts/benchmark/score_diarization.py`, dscore Commit `e02f949ac6592279300a2c33d03daf9e0c12fd27` und einem Collar von 250 ms bewertet.
+WER was calculated with `scripts/benchmark/score_asr.py` and normalizer `steno-de-v1`.
+Diarization was scored with `scripts/benchmark/score_diarization.py`, dscore commit `e02f949ac6592279300a2c33d03daf9e0c12fd27`, and a 250-millisecond collar.
 
-Apple lief über Stenos produktives Kommando `steno-transcribe` und damit über `SpeechAnalyzerProvider`.
-Das reguläre Parakeet lief über Stenos produktiven `ParakeetTranscriptionProvider` mit FluidAudio 0.15.5, `melChunkContext = false` und dem Modell `parakeet-tdt-0.6b-v3-coreml`.
-Primeline lief direkt über denselben FluidAudio-Decoder mit `melChunkContext = false`, deutscher Sprachvorgabe und dem Modell-Commit `d912a28d658a93c7eba99760d52a462f1bd3810a`.
-Der direkte Primeline-Aufruf war nötig, weil Stenos produktiver Installer derzeit absichtlich nur die geprüften Checksummen des offiziellen Parakeet-Modells akzeptiert.
-Die Diarisierung lief über Stenos produktives `steno-diarize-bench`, `FluidSortformerProvider`, `Sortformer_v2.1` und `wespeaker_v2`.
+Apple ran through Steno's production `steno-transcribe` command and therefore through `SpeechAnalyzerProvider`.
+Regular Parakeet ran through Steno's production `ParakeetTranscriptionProvider` with FluidAudio 0.15.5, `melChunkContext = false`, and model `parakeet-tdt-0.6b-v3-coreml`.
+Primeline ran directly through the same FluidAudio decoder with `melChunkContext = false`, an explicit German language request, and model commit `d912a28d658a93c7eba99760d52a462f1bd3810a`.
+The direct Primeline invocation was necessary because Steno's production installer deliberately accepts only the verified checksums of the official Parakeet model.
+Diarization ran through Steno's production `steno-diarize-bench`, `FluidSortformerProvider`, `Sortformer_v2.1`, and `wespeaker_v2`.
 
-## Lizenz und Aussagegrenzen
+## License and interpretation boundaries
 
-OOCC v2 ist laut ausgeliefertem Quellenpaket unter CC BY-NC-ND 4.0 lizenziert.
-Der Korpus bleibt deshalb ein lokaler, nichtkommerzieller Forschungskandidat und wird nicht als frei wiederverwendbare Produktbasis eingecheckt.
-Die geprüften Quellarchive waren exakt die im Manifest registrierten Dateien mit MD5 `2dedd7b8aea80bec39f6815a6ad9f104` für Audio und Video sowie `2d512c753d4275e497b38548b362cf5b` für die Transkripte.
+According to the bundled source package, OOCC v2 is licensed under CC BY-NC-ND 4.0.
+The corpus therefore remains a local non-commercial research candidate and is not committed as a freely reusable product foundation.
+The verified source archives were exactly the files registered in the manifest, with MD5 `2dedd7b8aea80bec39f6815a6ad9f104` for audio and video and `2d512c753d4275e497b38548b362cf5b` for the transcripts.
 
-Überlappende Wörter haben in einem linearen Mischtranskript keine vollständig eindeutige Reihenfolge.
-Die WER ist deshalb ein reproduzierbarer Engine-Vergleich auf demselben Vertrag, aber keine absolute linguistische Gütezahl für simultane Rede.
-Die DER-Aggregation ist der dauergewichtete Mittelwert der sieben getrennten dscore-Läufe und keine gemeinsame Mikroauswertung über eine zusammengefügte RTTM-Datei.
-Die Messung enthält nur spontane Zweipersonengespräche und deckt weder große Besprechungsräume noch Fachbegriffe, Dialekt, mehr als vier Personen oder Kiezdeutsch ab.
+Overlapping words do not have a fully unambiguous order in a linear mixed transcript.
+WER is therefore a reproducible engine comparison under one shared contract, not an absolute linguistic quality score for simultaneous speech.
+The DER aggregation is the duration-weighted mean of seven separate dscore runs, not a joint micro-evaluation over one concatenated RTTM file.
+The measurement contains only spontaneous two-person conversations and covers neither large meeting rooms, specialist terminology, dialect, more than four people, nor Kiezdeutsch.
 
-## Vorbereitung des Livevergleichs
+## Live-comparison preparation
 
-Fuer den M5-Air-Lauf liegt ein getrenntes Live-Benchmarkwerkzeug fuer Apple SpeechAnalyzer, Stenos verborgenen Parakeet-Liveadapter und FluidAudio Nemotron 3.5 ASR Streaming Multilingual vor.
-Der Nemotron-Runner pinnt FluidAudio auf Commit `667181a368da13b3a9178e310414e9dcbe8f23ce`, damit Stenos produktive FluidAudio-Version und Diarisierung unveraendert bleiben.
-Das lokale Uebertragungspaket unter `/private/tmp/steno-oocc-benchmark` umfasst sieben validierte OOCC-Samples, beide arm64-Release-Runner, das gepruefte Parakeet-Modell, Startskripte und SHA-256-Pruefsummen.
-Der Matrix-Trockenlauf plant fuer die sieben Samples exakt 42 Schritte: je drei Engines und drei anschliessende ASR-Auswertungen.
+A separate live benchmark was prepared for the M5 Air to compare Apple SpeechAnalyzer, Steno's hidden Parakeet live adapter, and FluidAudio Nemotron 3.5 ASR Streaming Multilingual.
+The Nemotron runner pins FluidAudio to commit `667181a368da13b3a9178e310414e9dcbe8f23ce` so that Steno's production FluidAudio version and diarization remain unchanged.
+The local transfer package under `/private/tmp/steno-oocc-benchmark` contains seven validated OOCC samples, both ARM64 release runners, the verified Parakeet model, launch scripts, and SHA-256 checksums.
+The matrix dry run plans exactly 42 steps for seven samples: three engines and three subsequent ASR evaluations per sample.
 
-Ein Parakeet-Live-Smoke-Test mit Ausschnitt 7 lief nach Behebung eines echten Abschluss-Haengers in 4,77 Sekunden durch, erzeugte neun sichtbare Updates und erreichte 15,99 Prozent WER bei einer RTF von 0,0520.
-Der Hänger entstand, weil FluidAudio 0.15.5 seine Update-Stream nach `finish()` offen laesst, obwohl der Modell-Endtext bereits vorliegt.
-Steno beendet den Stream nun selbst und verwendet den von FluidAudio gelieferten Endtext.
-Der vorhandene Parakeet-Sliding-Window-Manager reicht `de-DE` in FluidAudio 0.15.5 nicht bis zum Decoder weiter.
-Der Vergleich misst daher diesen echten Steno-Livepfad, waehrend nur Apple und Nemotron eine explizite deutsche Modellvorgabe erhalten.
+A Parakeet live smoke test with excerpt 7 completed in 4.77 seconds after fixing a real completion hang, produced nine visible updates, and reached 15.99% WER at RTF 0.0520.
+The hang occurred because FluidAudio 0.15.5 leaves its update stream open after `finish()` even though final model text is already available.
+Steno now closes the stream itself and uses the final text supplied by FluidAudio.
+The existing Parakeet sliding-window manager in FluidAudio 0.15.5 does not pass `de-DE` through to the decoder.
+The comparison therefore measures Steno's real live path, while only Apple and Nemotron receive an explicit German model request.
 
-Apple meldete auf dem Mac mini beim Live- und beim unveraenderten bisherigen Datei-Runner bereits im System-Preflight `noSupportedLocale`.
-Da beide Runner gleich scheitern, ist das kein belegter Fehler des neuen Live-CLI.
-Der M5-Air-Lauf prueft deshalb zuerst Betriebssystem, installierte deutsche Speech-Assets und Apple-Verfuegbarkeit, bevor Qualitaets- oder Latenzzahlen verglichen werden.
+On the Mac mini, Apple reported `noSupportedLocale` during system preflight in both the live runner and the unchanged existing file runner.
+Because both runners fail identically, this does not establish a bug in the new live CLI.
+The M5 Air run therefore checks the operating system, installed German speech assets, and Apple availability before comparing quality or latency.
 
-## Livevergleich auf dem M5 Air
+## Live comparison on the M5 Air
 
-Der Livevergleich lief anschliessend erfolgreich auf einem MacBook Air `Mac17,4` mit Apple M5, 10 CPU-Kernen, 16 GB Arbeitsspeicher und macOS 27.0 Build `26A5406e`.
-Das deutsche Apple-Sprachmodell war installiert und fuer `de-DE` verfuegbar.
-Alle 21 Qualitaetslaeufe und die drei Echtzeitlaeufe wurden lokal auf dem Air ausgefuehrt.
+The live comparison subsequently completed on a MacBook Air `Mac17,4` with Apple M5, ten CPU cores, 16 GB of memory, and macOS 27.0 build `26A5406e`.
+The German Apple speech model was installed and available for `de-DE`.
+All 21 quality runs and three real-time runs executed locally on the Air.
 
-### Endqualitaet im schnellen Modus
+### Final quality in fast mode
 
-| Engine | WER | CER | Auslassungsrate | Fehler / Referenzwoerter | RTF |
+| Engine | WER | CER | Omission rate | Errors / reference words | RTF |
 |---|---:|---:|---:|---:|---:|
-| Apple SpeechAnalyzer | **19,15 %** | **12,48 %** | **10,90 %** | 494 / 2.579 | **0,00810** |
-| FluidAudio Parakeet TDT v3 Live | 20,90 % | 14,44 % | 11,48 % | 539 / 2.579 | 0,00820 |
-| FluidAudio Nemotron 3.5 ASR Streaming Multilingual | 22,41 % | 13,51 % | 11,75 % | 578 / 2.579 | 0,01153 |
+| Apple SpeechAnalyzer | **19.15%** | **12.48%** | **10.90%** | 494 / 2,579 | **0.00810** |
+| FluidAudio Parakeet TDT v3 Live | 20.90% | 14.44% | 11.48% | 539 / 2,579 | 0.00820 |
+| FluidAudio Nemotron 3.5 ASR Streaming Multilingual | 22.41% | 13.51% | 11.75% | 578 / 2,579 | 0.01153 |
 
-Apple gewinnt auch im Livepfad die laengengewichtete Gesamt-WER.
-Parakeet liegt 1,75 Prozentpunkte und Nemotron 3,26 Prozentpunkte hinter Apple.
-Parakeet gewinnt die Ausschnitte 1 und 2, Apple die Ausschnitte 3, 5, 6 und 7, und Apple sowie Nemotron erreichen auf Ausschnitt 4 denselben gerundeten WER-Wert.
-Die sieben Dateien enthalten zusammen 816,65 Sekunden Audio.
-Die gemessene Verarbeitung nach dem Aufbau der jeweiligen Live-Session entspricht etwa 123-facher Echtzeit fuer Apple, 122-facher Echtzeit fuer Parakeet und 87-facher Echtzeit fuer Nemotron.
-Modellladen und Prozessstart sind in diesen RTF-Werten nicht enthalten und muessen fuer einen Kaltstartvergleich getrennt gemessen werden.
+Apple also wins the total length-weighted WER on the live path.
+Parakeet trails Apple by 1.75 percentage points and Nemotron by 3.26 points.
+Parakeet wins excerpts 1 and 2, Apple wins excerpts 3, 5, 6, and 7, and Apple and Nemotron reach the same rounded WER on excerpt 4.
+The seven files contain 816.65 seconds of audio.
+Measured processing after creation of each live session corresponds to approximately 123 times real time for Apple, 122 times for Parakeet, and 87 times for Nemotron.
+These RTF values exclude model loading and process startup, which require a separate cold-start comparison.
 
-Der schnelle Modus verwendet fuer Parakeet und Nemotron 250-ms-Bloecke.
-Apple bekommt 4-Sekunden-Bloecke, weil sein auf 64 Bloecke begrenzter Live-Eingabepuffer bei einer ungehemmten 250-ms-Zufuhr sichtbar ueberlief.
-Auf Ausschnitt 3 erzeugten 4-Sekunden-Schnellzufuhr und 20-ms-Echtzeitzufuhr bei allen drei Engines exakt dieselbe WER und CER.
-Damit ist fuer diesen geprueften Ausschnitt kein Qualitaetsunterschied durch die engine-spezifische Schnellzufuhr sichtbar.
+Fast mode uses 250-millisecond chunks for Parakeet and Nemotron.
+Apple receives four-second chunks because its live input buffer, limited to 64 chunks, visibly overflowed during unrestricted 250-millisecond feeding.
+On excerpt 3, four-second fast feeding and 20-millisecond real-time feeding produced exactly the same WER and CER for all three engines.
+No quality difference caused by engine-specific fast feeding is visible for this verified excerpt.
 
-### Eigennamen und Werktitel im Livepfad
+### Proper names and work titles on the live path
 
-Die bereits manuell markierten 16 Begriffe aus den Ausschnitten 3, 4 und 7 wurden ohne erneute Transkription gegen die neuen Live-Hypothesen ausgewertet.
+The 16 terms already marked manually in excerpts 3, 4, and 7 were evaluated against the new live hypotheses without retranscription.
 
-| Engine | Exakte Treffer | Recall |
+| Engine | Exact hits | Recall |
 |---|---:|---:|
-| Apple SpeechAnalyzer | **12 / 16** | **75,00 %** |
-| FluidAudio Parakeet TDT v3 Live | 11 / 16 | 68,75 % |
-| FluidAudio Nemotron 3.5 ASR Streaming Multilingual | 9 / 16 | 56,25 % |
+| Apple SpeechAnalyzer | **12 / 16** | **75.00%** |
+| FluidAudio Parakeet TDT v3 Live | 11 / 16 | 68.75% |
+| FluidAudio Nemotron 3.5 ASR Streaming Multilingual | 9 / 16 | 56.25% |
 
-Apple verfehlt weiterhin `Mareike Fallwickel`, `Die Wut die bleibt`, `Witches bitches it-girls` und `Kaikoura`.
-Parakeet erkennt zusaetzlich `Niederlandistik` nicht exakt.
-Nemotron verfehlt ausserdem `Und alles so still` und `Cliffs of Moher`.
-Apple gewinnt damit auch diesen kleinen Eigennamen-Test, obwohl der Abstand zu Parakeet geringer ist als beim bisherigen Datei-Pfad.
-Die Stichprobe ist fuer belastbare Fachwort- oder Teilnehmernamen-Aussagen weiterhin zu klein.
+Apple still misses `Mareike Fallwickel`, `Die Wut die bleibt`, `Witches bitches it-girls`, and `Kaikoura`.
+Parakeet additionally misses the exact form `Niederlandistik`.
+Nemotron also misses `Und alles so still` and `Cliffs of Moher`.
+Apple therefore wins this small named-term test as well, although its lead over Parakeet is smaller than on the existing file path.
+The sample remains too small for defensible claims about specialist terms or participant names.
 
-### Sichtbare Echtzeitlatenz auf Ausschnitt 3
+### Visible real-time latency on excerpt 3
 
-| Engine | Erster Text | Erster bestaetigter Abschnitt | Updates | WER |
+| Engine | First text | First confirmed section | Updates | WER |
 |---|---:|---:|---:|---:|
-| FluidAudio Nemotron 3.5 | **4,54 s** | kein bestaetigtes Live-Event | 63 | 25,97 % |
-| Apple SpeechAnalyzer | 11,70 s | 23,26 s | 553 | **21,84 %** |
-| FluidAudio Parakeet TDT v3 | 13,16 s | **13,16 s** | 13 | 23,30 % |
+| FluidAudio Nemotron 3.5 | **4.54 s** | no confirmed live event | 63 | 25.97% |
+| Apple SpeechAnalyzer | 11.70 s | 23.26 s | 553 | **21.84%** |
+| FluidAudio Parakeet TDT v3 | 13.16 s | **13.16 s** | 13 | 23.30% |
 
-Nemotron liefert den fruehesten ersten Text, aber sein erstes Update lautet nur `mal gerade was liest du so` und der aktuelle Runner erhaelt kein als final markiertes Live-Event.
-Apple zeigt nach 11,70 Sekunden zuerst nur `Ja` und bestaetigt den ersten Abschnitt deutlich spaeter.
-Parakeet zeigt nach 13,16 Sekunden direkt einen laengeren bestaetigten Abschnitt.
-Ein einzelner Zeitwert fuer den ersten Text reicht deshalb nicht aus, um die wahrgenommene Livequalitaet zu bewerten.
-Fuer die Produktentscheidung sollten kuenftig zusaetzlich Zeit bis zu einem Mindestumfang und Stabilitaet der Korrekturen gemessen werden.
+Nemotron produces the earliest text, but its first update contains only `mal gerade was liest du so`, and the current runner receives no live event marked final.
+Apple first shows only `Ja` after 11.70 seconds and confirms the first section substantially later.
+Parakeet shows a longer confirmed section immediately after 13.16 seconds.
+One time-to-first-text value is therefore insufficient to describe perceived live quality.
+Future product decisions should additionally measure time to a minimum useful amount of text and correction stability.
 
-## Empfehlung
+## Recommendation
 
-Apple bleibt für diesen Korpus die Qualitätsbasis und soll weiterhin ohne Zusatzdownload verfügbar sein.
-Das reguläre Parakeet und Primeline sollen nicht allein aufgrund allgemeiner Modellkarten als bessere deutsche Standardeinstellung gelten.
-Primeline bleibt für einen zweiten Korpus mit Fachsprache und kurzen deutschen Äußerungen interessant, weil es dort laut Modellzweck Vorteile haben kann, die OOCC nicht abbildet.
-Nemotron ist wegen seiner fruehen ersten Ausgabe als experimenteller Livepfad interessant, ersetzt Apple auf Basis der gemessenen Endqualitaet aber noch nicht.
-Sortformer zählt die Sprecher zuverlässig, braucht aber insbesondere bei Ausschnitt 1 und 4 eine gezielte Segmentierungsanalyse.
-Als naechster belastbarer Schritt folgen ein Kaltstartvergleich, ein Fachnamen-Korpus mit Notizen und Teilnehmernamen sowie der separat ausgerichtete Kiezdeutsch-Stresstest.
+Apple remains the quality baseline for this corpus and should continue to be available without an additional download.
+Neither regular Parakeet nor Primeline should be treated as the better German default based only on general model cards.
+Primeline remains interesting for a second corpus containing specialist language and short German utterances because its stated model purpose may offer advantages not represented by OOCC.
+Nemotron is interesting as an experimental live path because of its early first output, but the measured final quality does not yet justify replacing Apple.
+Sortformer counts the speakers reliably but needs targeted segmentation analysis for excerpts 1 and 4 in particular.
+The next defensible steps are a cold-start comparison, a specialist-name corpus containing notes and participant names, and the separately aligned Kiezdeutsch stress test.

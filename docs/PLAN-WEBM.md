@@ -1,5 +1,7 @@
 # Arbeitspaket: WebM/Opus lesbar machen (Altimport-Audio)
 
+> Historical, non-normative work package retained in German. New import work must be documented in English.
+
 Anlass: Realtest vom 2026-08-06. Die alte Steno-App nahm Systemaudio als WebM/Opus auf.
 macOS kann WebM in keiner Variante öffnen (CoreAudio `AudioFileOpenURL failed`, AVFoundation `Cannot Open`, beides an nutzereigenen Dateien geprüft).
 Betroffen waren mehrere importierte Spuren.

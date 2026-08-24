@@ -1,5 +1,7 @@
 # Code-Review der gesamten Codebasis - 20.08.2026
 
+> Historical, non-normative code review retained in German. New reviews and follow-up documentation must be written in English.
+
 Vollstaendiger Review von StenoKit, macOS-App und iOS-App auf Stand `03193e5` (main).
 Vorgehen: 8 Subsystem-Reviewer (Opus 5), danach je ein adversarialer Pruefer, der jeden Befund am Code widerlegen sollte.
 Nur Befunde, deren Fehlerpfad der Pruefer selbst nachvollzogen hat, gelten als bestaetigt.

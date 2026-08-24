@@ -1,152 +1,188 @@
-# Altdaten-Formate der stenoai-App (Import-Spezifikation)
+# Legacy stenoai data formats: import specification
 
-Analysiert 2026-08-05 (Explore-Agent, Driver-geprüft) aus dem Schreib-Code des Alt-Repos `~/Dev/Repositorys/stenoai` (Autorität) und den echten Nutzdaten unter `~/Library/Application Support/stenoai/` (Bestätigung).
-Legende: [C] = im Code belegt, [D] = nur aus Beispieldateien geschlossen.
+Analyzed on 5 August 2026 from the writer code in the authoritative legacy repository at `~/Dev/Repositorys/stenoai`, then checked against real user data under `~/Library/Application Support/stenoai/`.
+Legend: `[C]` means established by code and `[D]` means inferred only from example data.
 
-## 0. Verzeichnis-Layout
+## 0. Directory layout
 
-[C] `src/config.py get_data_dirs`: Basis = `storage_path` aus config.json, sonst `~/Library/Application Support/stenoai`, sonst Repo-Root (Dev).
+[C] `src/config.py get_data_dirs`: base is `storage_path` from `config.json`, otherwise `~/Library/Application Support/stenoai`, otherwise the repository root during development.
 
-```
-<base>/recordings/     Audio (.webm Opus eigene Sysaudio-Aufnahmen, .m4a/.wav Importe)
+```text
+<base>/recordings/     Audio: .webm Opus native system-audio recordings, .m4a/.wav imports
 <base>/transcripts/    <stem>_transcript.txt
 <base>/output/         <stem>_summary.md|json, _reports.json, _speakers.json,
                        _original.json, _overrides.json, <safeSessionStem>_notes.txt
 <base>/folders.json
 <base>/chat_sessions_v2.json
-<base>/config.json     (person_profiles, voiceprints, custom_templates, template_overrides)
+<base>/config.json     person_profiles, voiceprints, custom_templates, template_overrides
 ```
 
-[D] Real: 17 Recordings, 23 Transkripte, 54 Output-Dateien (19 `_summary.md`, 14 `_speakers.json`, 13 `_reports.json`, 4 `_summary.json`, 3 `_original.json`, 1 `_overrides.json`).
+[D] Observed: 17 recordings, 23 transcripts, and 54 output files, including 19 `_summary.md`, 14 `_speakers.json`, 13 `_reports.json`, four `_summary.json`, three `_original.json`, and one `_overrides.json`.
 
-## 1. Der Stem als Herkunfts-ID
+## 1. Stem as provenance identifier
 
-[C] Stem = Dateiname der Audiodatei ohne Extension. Eigene Aufnahmen: `sysaudio-<epoch_ms>-<SafeName>` (`Date.now()` in Millisekunden = Aufnahmestart; `safeName = sessionName.replace(/[^a-zA-Z0-9_-]/g,'_').slice(0,64)`). Importe: Original-Basename unsanitisiert ([D] Umlaute/Leerzeichen kommen vor).
+[C] The stem is the audio file name without its extension.
+Native recordings use `sysaudio-<epoch_ms>-<SafeName>`, where `Date.now()` in milliseconds is the recording start and `safeName = sessionName.replace(/[^a-zA-Z0-9_-]/g,'_').slice(0,64)`.
+Imports use the unsanitized original basename, and observed data includes spaces and umlauts.
 
-- Alle Sidecars sind stem-gekoppelt; `_speakers.json.meeting_id` == Stem, `person_profiles[].prototypes[].meeting_id` == Stem. [C]
-- [C] Kollisionsrisiko dokumentiert (main.js: "meeting.wav und meeting.m4a kollidieren"); `.md`- und `.json`-Summary desselben Stems werden auf einen Key kollabiert (`summaryStemKey`), `.md` gewinnt.
-- Empfehlung: Stem als Legacy-Herkunft mitführen, intern neue UUIDs.
+- All sidecars are coupled to the stem: `_speakers.json.meeting_id` and `person_profiles[].prototypes[].meeting_id` equal the stem. [C]
+- A collision risk is documented in `main.js`: `meeting.wav` and `meeting.m4a` collide. Markdown and JSON summaries for the same stem collapse to one `summaryStemKey`, with Markdown winning. [C]
+- Preserve the stem as legacy provenance while assigning new internal UUIDs.
 
-## 2. recordings/
+## 2. `recordings/`
 
-[C] Abgebrochene Aufnahmen bleiben als partielle Datei ohne Sidecars liegen. Bei `keep_recordings=false` wird Audio nach Verarbeitung gelöscht -> Transkript ohne Audio ist normal.
+[C] Interrupted recordings remain as partial files without sidecars.
+When `keep_recordings=false`, audio is deleted after processing, so a transcript without audio is normal.
 
-## 3. transcripts/<stem>_transcript.txt
+## 3. `transcripts/<stem>_transcript.txt`
 
-[C] Einziger Writer `simple_recorder.py _write_transcript_file`. UTF-8:
+[C] The only writer is `simple_recorder.py _write_transcript_file`.
+Encoding is UTF-8.
 
-```
+```text
 Session: {session_name}
 File: {audio_path.name}
-Date: {YYYY-MM-DD HH:MM:SS}          <- lokale Zeit, KEINE TZ, Verarbeitungszeit
-Language setting: {Klarname}
-Detected language: {Klarname oder "Unknown"}
-Summary output language: {Klarname}
+Date: {YYYY-MM-DD HH:MM:SS}          <- local time, NO time zone, processing time
+Language setting: {display name}
+Detected language: {display name or "Unknown"}
+Summary output language: {display name}
 
-============================================================     <- '='*60
+============================================================
 
 {body}
 ```
 
-Body-Varianten [C]:
-- nicht diarisiert: Absätze (Turns) getrennt durch Leerzeile, ohne Präfixe.
-- diarisiert: `[{MM:SS oder H:MM:SS}] [{speaker}] {text}` je Turn, Turns durch Leerzeile getrennt. Zeitstempel = Sekunden ab Aufnahmestart, nur Sekundenauflösung, nur Turn-Start. Keine Endezeiten, keine Wort-Zeitstempel (ASR-Segmente wurden nie persistiert).
+Body variants [C]:
 
-Sprecher-Labels [C+D]: `You`, `Others`, `Speaker 2/3/4`, `Owner`, sowie durch confirm-speaker eingesetzte Klarnamen.
+- Without diarization: paragraphs or turns separated by blank lines, without prefixes.
+- With diarization: `[{MM:SS or H:MM:SS}] [{speaker}] {text}` per turn, separated by blank lines. Timestamps are whole seconds from recording start and identify only turn start. There are no end times or word timestamps because ASR segments were never persisted.
 
-[D] Waisen real vorhanden: Transkripte ohne Summary und eine Summary ohne Transkript.
+Speaker labels [C+D] include `You`, `Others`, `Speaker 2/3/4`, `Owner`, and clear names inserted through speaker confirmation.
 
-## 4. output/<stem>_summary.md (kanonische Notiz)
+[D] Real orphaned files exist in both directions: transcripts without summaries and one summary without a transcript.
 
-[C] Frontmatter ist KEIN YAML, sondern zeilenbasiert (`key: value`; `"…"`-Unquoting, `[`->JSON.parse, null/true/false, `^-?\d+$`->int). Import muss diese Lesart nachbauen.
+## 4. `output/<stem>_summary.md`: canonical note
 
-Felder: `title` (string), `date` (ISO lokal OHNE TZ = Verarbeitungszeit; Electron-Platzhalter schreibt stattdessen UTC mit `Z`!), `duration_seconds` (int|null), `language`, `configured_language`, `detected_language`, `is_diarised` (bool), `notes_generated` (nur false), `is_live_transcript` (nur true), `processing` (nur true, hängengebliebener Platzhalter), `notes_stale` (bool), `folders` (JSON-Array von Folder-IDs), `transcript_corrected_at`/`summary_generated_at`/`updated_at` (ISO), Fehlerfall: `transcription_failed`, `reprocessable`, `audio_file`, `error`.
+[C] Frontmatter is not YAML.
+It uses a line-based `key: value` parser with quote removal, JSON parsing for values starting with `[`, recognition of null/true/false, and integer parsing for `^-?\d+$`.
+The importer must reproduce this interpretation.
 
-Body-Sektionen (`## ` auf eigener Zeile): Summary, Key Topics (`### {title}` + Freitext je Topic), Key Points (Bullets), Action Items (Bullets), Participants (EINE Zeile, kommasepariert), Transcript (== Body der _transcript.txt, diarisiert bevorzugt, ohne Header), User Notes (immer letzte Sektion).
+Fields are `title`, `date`, `duration_seconds`, `language`, `configured_language`, `detected_language`, `is_diarised`, `notes_generated`, `is_live_transcript`, `processing`, `notes_stale`, `folders`, `transcript_corrected_at`, `summary_generated_at`, and `updated_at`.
+Failure cases add `transcription_failed`, `reprocessable`, `audio_file`, and `error`.
+`date` is normally local ISO without a time zone and represents processing time, but Electron placeholder files use UTC with `Z`.
 
-## 5. output/<stem>_summary.json (Legacy, read-only)
+Body sections use a standalone `## ` heading: Summary, Key Topics with `### {title}` and free text, Key Points as bullets, Action Items as bullets, Participants as one comma-separated line, Transcript using the preferred diarized transcript body without its header, and User Notes always last.
 
-Top-Level: `session_info` (obj mit u. a. `name`, absoluten Pfaden, `processed_at`, `duration_seconds`, Sprachen, `reprocessable`, `updated_at`), `summary` (str), `participants` (array), `discussion_areas` (array {title, analysis}), `key_points`, `action_items`, `transcript` (str), `is_diarised`, `diarised_text` (str), `user_notes` (str|null), `folders`.
-`.md` und `.json` können für denselben Stem koexistieren; `.md` gewinnt. [C]
+## 5. `output/<stem>_summary.json`: legacy read-only format
 
-## 6. output/<stem>_reports.json
+Top-level fields are `session_info`, `summary`, `participants`, `discussion_areas`, `key_points`, `action_items`, `transcript`, `is_diarised`, `diarised_text`, `user_notes`, and `folders`.
+`session_info` includes name, absolute paths, `processed_at`, `duration_seconds`, languages, `reprocessable`, and `updated_at`.
+`discussion_areas` contains `{title, analysis}` objects.
+Markdown and JSON may coexist for one stem; Markdown wins. [C]
+
+## 6. `output/<stem>_reports.json`
 
 ```jsonc
 { "reports": [ { "id": "rep_<12hex>", "template_id": "…", "template_name": "…",
-    "model": "…", "content": "Markdown", "created_at": "ISO lokal" } ],
-  "active_report": "rep_…|null" }   // null/"standard" = Standard-Notiz anzeigen
+    "model": "…", "content": "Markdown", "created_at": "local ISO" } ],
+  "active_report": "rep_…|null" }   // null or "standard" selects the standard note
 ```
 
-[D] Reale template_ids: detailed, kollegen, sales-call, shareable-summary, standard-backup ("Previous version · <Datum>" = automatischer Backup-Snapshot).
-[C] Built-ins (`src/templates.py`): standard, product-demo, sales-call, one-on-one, standup, shareable-summary. `detailed`/`kollegen` kommen aus `custom_templates` in config.json -> Templates mitimportieren, sonst sind Reports namenlos referenziert.
+[D] Observed template identifiers are `detailed`, `kollegen`, `sales-call`, `shareable-summary`, and `standard-backup`.
+`standard-backup` is an automatic snapshot labeled `Previous version · <date>`.
+[C] Built-ins in `src/templates.py` are `standard`, `product-demo`, `sales-call`, `one-on-one`, `standup`, and `shareable-summary`.
+`detailed` and `kollegen` come from `custom_templates` in `config.json`, so templates must be imported or their reports lose their named reference.
 
-## 7. output/<stem>_speakers.json (wertvollstes Alt-Asset)
+## 7. `output/<stem>_speakers.json`: most valuable legacy artifact
 
 ```jsonc
 { "meeting_id": "<stem>",
-  "created_at": 1785862866.9,          // Unix-SEKUNDEN float
-  "channels": { "mic"|"system": {      // nur diese zwei Keys
+  "created_at": 1785862866.9,          // floating-point Unix SECONDS
+  "channels": { "mic"|"system": {      // these are the only two keys
       "recording_type": "in_person"|"remote"|"imported"|"unknown",
-      "clusters": { "SPEAKER_0": {     // je Kanal unabhängig nummeriert!
-          "embedding": [256 floats],   // WeSpeaker-Centroid, Dim 256
+      "clusters": { "SPEAKER_0": {     // numbered independently per channel
+          "embedding": [256 floats],   // WeSpeaker centroid, dimension 256
           "speech_duration_seconds": f, "segment_count": int,
-          "segments": [{"start": f, "end": f}],   // Sekunden ab Start
-          "review_state": "generic",              // optional
-          "contains_multiple_speakers": true } } } },  // optional
-  "transcript_lines": [                // OPTIONAL (8 von 14 Dateien haben es NICHT)
+          "segments": [{"start": f, "end": f}],
+          "review_state": "generic",
+          "contains_multiple_speakers": true } } } },
+  "transcript_lines": [                // OPTIONAL; missing from 8 of 14 files
     { "start": f, "channel": "mic"|"system",
       "diarization_speaker_id": "SPEAKER_n"|null,
-      "original_label": "You|Speaker 2|…" } ] }   // optional, Label VOR Umbenennung
+      "original_label": "You|Speaker 2|…" } ] }
 ```
 
-Kritisch [C]: `transcript_lines` ist 1:1 POSITIONSGLEICH mit den diarisierten Zeilen im Transkript-Body - per Index paaren, nie per Timestamp. `(channel, SPEAKER_n)` ist der Schlüssel. Die Datei trägt die einzige Kopie der Embeddings (nach Audio-Löschung nicht reproduzierbar).
+Critical [C]: `transcript_lines` matches diarized transcript-body lines exactly by position.
+Pair by array index, never by timestamp.
+The key is `(channel, SPEAKER_n)`.
+This file contains the only copy of embeddings, which cannot be reproduced after audio deletion.
 
-## 8. _original.json / _overrides.json (Legacy-Sidecars, Nutzer-Edits)
+## 8. `_original.json` and `_overrides.json`: legacy user-edit sidecars
 
-Vom aktuellen Alt-Code nicht mehr geschrieben. `_original.json`: Snapshot der ursprünglichen Modellausgabe + `edited_fields` (welche Sektionen der Nutzer angefasst hat), `edited_at` UTC mit Z. `_overrides.json`: `{fields: {<feld>: {value, edited_at}}}` - Nutzer-Overrides, beim Import NACH der Summary anwenden.
+Current legacy code no longer writes these files.
+`_original.json` stores the original model-output snapshot, `edited_fields`, and `edited_at` in UTC with `Z`.
+`_overrides.json` stores `{fields: {<field>: {value, edited_at}}}`.
+Apply user overrides after importing the summary.
 
-## 9. <safeSessionStem>_notes.txt
+## 9. `<safeSessionStem>_notes.txt`
 
-An den Session-NAMEN gekoppelt (nicht Stem), wird nach Verarbeitung als `## User Notes` in die .md konsumiert. [D] Keine mehr vorhanden; `## User Notes` reicht.
+This file is coupled to the session name rather than the stem and is consumed into `## User Notes` in the Markdown file after processing.
+[D] None remain in observed data, so importing `## User Notes` is sufficient.
 
-## 10. folders.json
+## 10. `folders.json`
 
-`{folders: [{id: "8hex", name, color, created_at ISO, order, icon?}]}` - flach, keine Verschachtelung. Zuordnung Meeting->Ordner hängt am Meeting-File: Frontmatter `folders: ["<id>"]` (.md) bzw. Top-Level `folders` (.json); Mehrfachzuordnung möglich. [D] Real: 1 Ordner "Arbeit", 1 Meeting zugeordnet. Korrupte Datei wird als `folders.json.corrupt` quarantäniert.
+Shape: `{folders: [{id: "8hex", name, color, created_at ISO, order, icon?}]}`.
+Folders are flat and cannot nest.
+Meeting assignment lives in each meeting file as frontmatter `folders: ["<id>"]` in Markdown or top-level `folders` in JSON, and multiple assignments are possible.
+[D] Observed data contains one folder named `Arbeit` and one assigned meeting.
+A corrupt file is quarantined as `folders.json.corrupt`.
 
-## 11. chat_sessions_v2.json
+## 11. `chat_sessions_v2.json`
 
-`{sessions: [{id: "s-<ms>-<rand>", name, summaryFile: ABSOLUTER Pfad, createdAt/updatedAt: Epoch-MILLISEKUNDEN, messages: [{role, content, ts}]}]}`. Meeting-Bindung über absoluten Pfad -> auf Stem normalisieren. [D] 4 Sessions.
+Shape: `{sessions: [{id: "s-<ms>-<rand>", name, summaryFile: ABSOLUTE path, createdAt/updatedAt: epoch MILLISECONDS, messages: [{role, content, ts}]}]}`.
+Normalize the meeting binding from the absolute path to the stem.
+[D] Four sessions were observed.
 
-## 12. config.json -> person_profiles (Sprecher-Identitäten)
+## 12. `config.json` to `person_profiles`: speaker identities
 
 ```jsonc
-"person_profiles": [ { "person_id": uuid4, "display_name": "UNIQUE (case-insensitiv)",
-  "created_at"/"updated_at": Unix-Sekunden float,
+"person_profiles": [ { "person_id": uuid4, "display_name": "UNIQUE case-insensitively",
+  "created_at"/"updated_at": floating-point Unix seconds,
   "prototypes": [P], "hard_negatives": [P] } ]
 ```
 
-SpeakerPrototype P: `prototype_id` uuid4, `person_id` (redundant), `embedding_mean` float[256], `sample_count` int, `quality_score` float 0..1, `recording_type` (in_person|remote|imported|unknown), `meeting_id` (== Stem!), `diarization_speaker_id` (SPEAKER_n), `channel` (mic|system|null; null = Legacy/Enrollment), `speech_duration_seconds`, `segment_count`, `created_from` (user_confirmed|user_corrected|manual_enrollment), `created_at`.
+SpeakerPrototype `P` contains `prototype_id`, redundant `person_id`, `embedding_mean` as 256 floats, `sample_count`, `quality_score` from 0 to 1, `recording_type`, `meeting_id` equal to the stem, `diarization_speaker_id`, nullable `channel`, `speech_duration_seconds`, `segment_count`, `created_from`, and `created_at`.
+`recording_type` is `in_person`, `remote`, `imported`, or `unknown`.
+`channel` is `mic`, `system`, or null for legacy or enrollment data.
+`created_from` is `user_confirmed`, `user_corrected`, or `manual_enrollment`.
 
-[D] 14 Profile, Dim durchgängig 256, 2 dangling meeting_ids (Meetings existieren nicht mehr) -> dangling tolerieren.
-[C] Kopplung: Beim Löschen einer Person müssen abgeleitete hard_negatives in allen anderen Profilen entfernt werden (Schlüssel meeting_id+channel+sid) - Kopplung beim Import erhalten.
+[D] There are 14 profiles, all embeddings have dimension 256, and two meeting identifiers are dangling because their meetings no longer exist.
+The importer must tolerate dangling identifiers.
+[C] Deleting a person must remove derived hard negatives in all other profiles using the key `meeting_id + channel + speaker id`.
+Preserve this coupling during import.
 
-`voiceprints` (Legacy-Self-Match): [D] leer, nichts zu importieren.
-Weitere relevante Keys: `custom_templates` (Array: id, name, icon, prompt, format, language), `template_overrides`, `language`/`ui_language`, `user_name`, `storage_path`, `keep_recordings`.
+`voiceprints`, used for legacy self-matching, is empty in observed data and needs no import.
+Other relevant keys are `custom_templates`, `template_overrides`, `language`, `ui_language`, `user_name`, `storage_path`, and `keep_recordings`.
 
-## 13. Gelöschte Meetings
+## 13. Deleted meetings
 
-Kein Archiv. 2-Phasen-Löschung über `output/.pending-delete/` (8 s Undo, dann endgültig). Ein Import sollte `.pending-delete/` prüfen (Absturz-Leichen möglich). [D] Aktuell leer/nicht vorhanden.
+There is no archive.
+Deletion uses `output/.pending-delete/` for an eight-second undo window, then becomes permanent.
+An importer should inspect `.pending-delete/` because crash remnants are possible.
+[D] It was empty or absent in observed data.
 
-## 14. Kein Meeting-Index
+## 14. No meeting index
 
-Metadaten leben ausschließlich im Frontmatter der `_summary.md` (bzw. `session_info` der Legacy-.json). Meeting-Liste = Scan von `output/*_summary.md`. Waisen (Transkript ohne Summary, Summary ohne Transkript, Recording ohne beides) kommen real vor.
+Metadata exists only in `_summary.md` frontmatter or `session_info` in legacy JSON.
+The meeting list scans `output/*_summary.md`.
+Real data contains transcript-only, summary-only, and recording-only orphans.
 
-## 15. Zeitstempel-Epochen (gemischt!)
+## 15. Mixed timestamp epochs
 
-- Unix-Sekunden float: `_speakers.json.created_at`, person_profiles/prototypes, voiceprints.
-- Unix-Millisekunden int: chat_sessions, Stem-Zahlteil `sysaudio-<ms>-…` (= Aufnahmestart!).
-- ISO lokal ohne TZ: .md-Frontmatter `date` (= Verarbeitungszeit), reports/folders `created_at`, `session_info.processed_at`.
-- ISO UTC mit Z: Electron-geschriebene Felder (Platzhalter-`date`, `_original.json.edited_at`).
-- Relative Sekunden ab Aufnahmestart: `segments[].start/end`, `transcript_lines[].start`, `[MM:SS]` im Text.
+- Floating-point Unix seconds: `_speakers.json.created_at`, person profiles and prototypes, and voiceprints.
+- Integer Unix milliseconds: chat sessions and the numeric part of `sysaudio-<ms>-…`, which is recording start.
+- Local ISO without time zone: Markdown-frontmatter `date`, report and folder `created_at`, and `session_info.processed_at`.
+- UTC ISO with `Z`: Electron-written fields such as placeholder `date` and `_original.json.edited_at`.
+- Relative seconds from recording start: `segments[].start/end`, `transcript_lines[].start`, and `[MM:SS]` in text.
 
-Wichtigste Alt-Quelldateien: `src/speaker_suggestions.py`, `src/config.py`, `src/report_store.py`, `src/reports.py`, `src/folders.py`, `src/transcriber.py`, `simple_recorder.py`, `app/main.js`, `app/notes-file.js`, `src/templates.py`.
+The most important legacy source files are `src/speaker_suggestions.py`, `src/config.py`, `src/report_store.py`, `src/reports.py`, `src/folders.py`, `src/transcriber.py`, `simple_recorder.py`, `app/main.js`, `app/notes-file.js`, and `src/templates.py`.

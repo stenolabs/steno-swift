@@ -1,141 +1,127 @@
-# Arbeitspaket: Datenklassen und was die Maschine verlassen darf
+# Work package: data classes and what may leave the device
 
-Produktvorschlag 2026-08-06: eine Stelle in den Einstellungen, an der steht, was
-in die Cloud darf und was on-device bleiben muss.
-Architekt-Zweitmeinung (Fable) eingeholt, weil es ein sicherheitsrelevantes
-Design ist.
-Ihre Empfehlung und die Begruendungen sind hier eingearbeitet.
+Product proposal from 6 August 2026: provide one place in Settings that explains what may be sent to the cloud and what must remain on device.
+An independent architecture review by Fable was requested because this is a security-relevant design.
+Its recommendation and reasoning are incorporated here.
 
-## Der Anlass
+## Motivation
 
-Steno ist lokal.
-Inhalt kann die Maschine nur in zwei getrennten, jeweils ausdruecklich bestaetigten Handlungen verlassen: fuer einen Protokolllauf mit einem externen Sprachmodell oder als einzelnes Meeting-Paket ueber die lokale Systemfreigabe.
-Audio ist vom Modellpfad ausgeschlossen und wird nur dann in genau dieses Paket aufgenommen, wenn der Benutzer es fuer diesen einzelnen Transfer lokal einschaltet.
-Audio wird niemals automatisch, fuer Cloud-Sync oder fuer ein Modell uebertragen.
-Das `.stenomeeting`-Paket ist eine unverschluesselte Datei, und die Systemfreigabe fordert zwar zur Auswahl von AirDrop auf, garantiert technisch aber keinen ausschliesslich auf AirDrop begrenzten Transport.
-Im Lauf eines Abends sind fuenf Einzelfallregeln an fuenf Codestellen
-entstanden - jede begruendet, zusammen ohne erkennbare Linie und nirgends
-nachlesbar.
+Steno is local-first.
+Content can leave the device only through two distinct, explicitly confirmed actions: generating minutes with an external language model, or exporting one meeting package through the local system share flow.
+Audio is excluded from the model path.
+It enters a meeting package only when the user explicitly enables audio for that one local transfer.
+Audio is never transmitted automatically, for cloud sync, or to a model.
+A `.stenomeeting` package is unencrypted, and although the system share flow prompts the user to select AirDrop, it cannot technically guarantee an AirDrop-only transport.
 
-## Entscheidung: ein Register, kein Schalterbrett
+Five individually justified rules had accumulated in five code locations without a visible common policy.
+This document defines that policy.
 
-**Ja zu einer Stelle, nein zu Schaltern.** Null globale Toggles.
-Zwei getrennte echte Entscheidungen bleiben dort, wo sie in den jeweiligen Handlungsmoment gehoeren: die Modellwahl pro Protokollerstellung und die lokale Auswahl eines einzelnen Meeting-Pakets samt ausdruecklicher Audiofreigabe fuer genau diesen Transfer.
-Der Modellpfad und der Paketpfad teilen weder einen globalen Schalter noch eine gemeinsame Allowlist.
+## Decision: one registry, not a switchboard
 
-Der Grund ist nicht Bequemlichkeit, sondern dass der Entscheidungsraum fast leer
-ist.
-E-Mail nie, Dokumente Dritter nie, das Transkript extern zu rendern **ist** der
-Zweck der externen Wahl, und Notizen sind der Kontextkanal, ohne den externes
-Rendern schlechter ist als lokales.
-Ein Schalterbrett bestuende aus Schaltern, die entweder nichts entscheiden
-duerfen oder deren Aus-Stellung das Feature entwertet - und jeder waere ein
-Set-and-forget-Versprechen, das im Moment der Uebertragung niemand mehr prueft.
+**Provide one place, with no global toggles.**
+The two real decisions remain at the moment of action: model choice for each report run, and local export of one meeting package with explicit audio inclusion for that transfer.
+The model path and package path share neither a global switch nor an allowlist.
 
-Was der Nutzer braucht, ist Uebersicht, nicht Konfiguration: ein Register, das die
-Regeln zeigt, statt sie zu setzen.
+The reason is not convenience but the narrow decision space.
+Email addresses are never allowed, third-party documents are never allowed, sending a transcript is the purpose of choosing an external model, and notes are the context channel without which external rendering is worse than local rendering.
+A switchboard would contain controls that either must not change the decision or would make the feature useless when disabled.
+Each would also become a set-and-forget promise that nobody rechecks at transmission time.
 
-## Die Klassen
+Users need visibility, not configuration: a registry that displays the rules rather than setting them.
 
-**Verlaesst die Maschine nicht ueber Modell- oder automatische Pfade, nicht verhandelbar:**
+## Data classes
 
-- Audio-Aufnahmen werden on-device transkribiert und nie an ein Modell oder einen Cloud-Sync gesendet.
-  Die einzige Ausnahme ist ein vom Benutzer lokal bestaetigter Einzeltransfer, bei dem Audio fuer genau dieses Meeting ausdruecklich eingeschaltet wurde.
-- E-Mail-Adressen an Personen (bereits hart, mit Test).
-- Beigebrachte Dokumente Dritter: PDF-Volltext und der per Vision-OCR aus
-  eingefuegten Bildern gezogene Text. Dieselbe Klasse, dieselbe Grenze.
-- API-Schluessel (Keychain, existiert).
-- **Alles Nichtdeklarierte: Default-deny.** Eine Klasse, die im Manifest nicht
-  vorkommt, geht nicht raus. Das ist die wichtigste harte Regel, weil sie als
-  einzige zukuenftige Klassen abdeckt.
+**Never leave the device through a model or automatic path, without exception:**
 
-## Lokale Speicherung der Modellendpunkte
+- Audio recordings are transcribed on device and are never sent to a model or cloud sync.
+  The only exception is a user-confirmed local transfer of one meeting package for which audio was explicitly enabled.
+- Email addresses attached to people, already enforced by code and tests.
+- Third-party documents: PDF full text and text extracted by Vision OCR from pasted images.
+  These are one class with one boundary.
+- API keys, stored in Keychain.
+- **Everything undeclared is denied by default.**
+  A class absent from the manifest cannot leave the device.
+  This is the most important hard rule because it covers future classes.
 
-Die Endpunktliste und ihr Wiederherstellungsjournal liegen als secret-freie Registrydatei unter `Application Support/Steno/TextModelEndpoints/registry-state.json`.
-Die Datei enthaelt nur die sichtbare Konfiguration wie Name, URL, Modell-ID, Schluesselanforderung und Konfigurationsrevision.
-API-Schluessel bleiben ausschliesslich in revisionsgebundenen Keychain-Slots und gelangen weder in die Registrydatei noch in UserDefaults, Jobs oder Journale.
-Registrydatei und Verzeichnis sind nur fuer den lokalen Benutzer lesbar, und das Verzeichnis ist vom Systembackup ausgeschlossen.
-Nach einer Wiederherstellung aus einem Geraetebackup muss die oeffentliche Endpunktkonfiguration deshalb gegebenenfalls erneut eingerichtet werden.
-Bestehende UserDefaults-Konfigurationen werden einmalig erst dann entfernt, wenn die atomar geschriebene Registrydatei frisch gelesen und inhaltlich verifiziert wurde.
+## Local storage for model endpoints
 
-**Geht mit, wenn und nur wenn fuer diesen Lauf ein externes Modell gewaehlt ist:**
+The endpoint list and its recovery journal live in a secret-free registry file at `Application Support/Steno/TextModelEndpoints/registry-state.json`.
+It contains only visible configuration such as name, URL, model identifier, whether a key is required, and configuration revision.
+API keys remain exclusively in revision-bound Keychain slots and never enter the registry file, UserDefaults, jobs, or journals.
+The registry file and directory are readable only by the local user, and the directory is excluded from system backup.
+After device-backup restoration, public endpoint configuration may therefore need to be set up again.
+Existing UserDefaults configuration is removed only after the atomically written registry has been read back and verified.
 
-- Transkript samt bestaetigter Sprechernamen.
-- Teilnehmerliste, Namen und Firmen.
-- Die eigenen Notizen zum Meeting.
+**Included if and only if an external model is selected for this run:**
 
-**Geht mit, wenn und nur wenn der Benutzer den lokalen Export genau dieses Meeting-Pakets ausloest:**
+- Transcript with confirmed speaker names.
+- Participant names and companies.
+- The user's meeting notes.
 
-- Die eigenen Notizen samt Zeitmarkern.
-- Das portable Transkript samt bestaetigten sichtbaren Sprechernamen und generischen Sprecherlabels.
-- Audio nur dann, wenn es fuer diesen einzelnen Transfer lokal ausdruecklich eingeschaltet wurde.
+**Included if and only if the user initiates local export of this particular meeting package:**
 
-Teilnehmerliste, Personenbibliothek, E-Mail-Adressen, Embeddings, Review- und Diarisierungslaeufe, Reports und Ordnerzuordnungen gehoeren nicht zur Paket-Allowlist.
+- The user's notes and time markers.
+- The portable transcript with confirmed visible speaker names and generic speaker labels.
+- Audio only when explicitly enabled locally for this one transfer.
 
-Im Modellpfad waeren Firma und Notizen prinzipiell verhandelbar, bleiben aber fest und werden nur ausgewiesen.
-Kommt je ein realer Fall auf, etwa Notizen mit privaten Randbemerkungen, gehoert die Abwahl als Haekchen neben den Uebertragungshinweis in den Moment des Renderns und nie in die Einstellungen.
-Dasselbe gilt, falls PDF-Inhalte je extern gewollt werden: Das waere eine neue
-Entscheidung mit Zustimmung pro Handlung und wuerde die Grenze aus
-PLAN-CONTEXT.md Schritt 4 ausdruecklich aufheben.
+The meeting-package allowlist excludes participant lists, the people library, email addresses, embeddings, review and diarization runs, reports, and folder assignments.
 
-## Wo was hingehoert
+Company and notes could theoretically be optional on the model path, but they remain fixed and disclosed.
+If a real need arises, such as notes containing private asides, the opt-out belongs next to the transmission notice at render time, never in Settings.
+The same applies if PDF content is ever allowed externally: that would be a new per-action consent decision and would explicitly override the boundary in `PLAN-CONTEXT.md` step 4.
 
-**Einstellungen = Register.** Das Register bleibt in den Sprachmodell-Einstellungen ueber der Endpunktliste, weil dort der externe Modellpfad konfiguriert wird und die getrennte Paketregel sichtbar danebenstehen muss.
-Eine eigene Datenschutzseite wuerde uebersehen.
-Zwei Spalten, keine Interaktion.
+## Where each decision belongs
 
-**Moment der Handlung = Entscheidung.** Der Hinweis vor der Protokollerstellung nennt die Klassen, die dieser Modelllauf tatsaechlich enthaelt, und wird nicht von Hand gepflegt, sondern aus derselben Quelle erzeugt wie die Prompt-Zusammenstellung.
-Der Meeting-Export ist eine davon getrennte Handlung mit eigener Paket-Allowlist und eigener ausdruecklicher Audioauswahl fuer genau diesen Transfer.
+**Settings is the registry.**
+Keep the registry in language-model settings above the endpoint list because that is where the external model path is configured, while the distinct package rule must remain visible beside it.
+A separate privacy page would be overlooked.
+Use two columns and no interaction.
 
-Eine Ehrlichkeitsgrenze bleibt: Der Hinweis nennt Klassen zum Anzeigezeitpunkt.
-Wer zwischen Hinweis und Klick noch Notizen tippt, hat beim Klick Notizen im
-Lauf. Das ist vertretbar, weil der Hinweis Klassen ausweist, nicht Inhalte.
+**The moment of action is the decision.**
+Before report generation, show the exact classes included in that model run.
+Do not maintain this notice by hand; derive it from the same source as the prompt payload.
+Meeting export is a separate action with its own package allowlist and an explicit audio choice for that transfer.
 
-## Wie Anzeige und Verhalten zusammengekettet bleiben
+One honesty limit remains: the notice names classes at display time.
+If the user edits notes between seeing the notice and clicking, the run includes the updated notes.
+This is acceptable because the notice describes classes, not their current contents.
 
-Das ist der Kern. Eine Datenschutzanzeige, die luegt, ist schlimmer als keine.
+## Keeping disclosure and behavior coupled
 
-**Struktur: Provider bleiben bibliotheksblind.** `OpenAICompatibleProvider` hat
-keine Library-Referenz und sieht nur, was ihm uebergeben wird. Diese Eigenschaft
-ist der eigentliche Schutzwall und wird als Invariante festgeschrieben: Ein
-externer Provider bekommt nie eine `Library`, ein `LibraryLayout` oder einen
-Store. Damit gibt es fuer den externen Modellpfad genau einen Engpass, an dem ausgehende Daten entstehen:
-`executeTemplateRender` im `PipelineCoordinator`.
-Neue Kontextdaten erreichen den Prompt ausschliesslich als neues Feld von
-`RenderContext`.
+This is the core requirement.
+A privacy notice that lies is worse than no notice.
 
-**Herleitung: die Anzeige ist eine Funktion der Nutzlast, keine zweite
-Buchfuehrung.** Ein `PromptDataClass`-Enum (CaseIterable) ist das Manifest: jede
-Klasse mit Politik und Benutzer-Namen. Eine Funktion
-`OutboundDisclosure.classes(transcript:participants:context:)` liefert die in
-diesem Lauf tatsaechlich vorhandenen ausgehenden Klassen. Der Hinweistext wird
-daraus formatiert.
+**Structure: providers remain blind to the library.**
+`OpenAICompatibleProvider` has no Library reference and sees only its explicit input.
+Treat this as an invariant: an external provider never receives a `Library`, `LibraryLayout`, or store.
+The external model path therefore has exactly one outbound-data choke point, `executeTemplateRender` in `PipelineCoordinator`.
+New context reaches the prompt only as a new field on `RenderContext`.
 
-**Tests, drei Sorten:**
+**Derivation: disclosure is a function of the payload, not a second ledger.**
+A `PromptDataClass` enum conforming to `CaseIterable` is the manifest, with policy and user-facing name for every class.
+`OutboundDisclosure.classes(transcript:participants:context:)` returns the outbound classes actually present in the run.
+The notice is formatted from that result.
 
-1. **Sentinel-Test**, der staerkste: eine Fixture-Bibliothek, in der jede Klasse
-   einen unverwechselbaren Marker traegt. Ein aufzeichnender Mock-Provider
-   empfaengt den kompletten Renderaufruf. Verbotene Sentinels duerfen in nichts
-   vorkommen, was der Provider je gesehen hat; erlaubte muessen vorkommen; und
-   die von `OutboundDisclosure` gemeldete Liste muss exakt den angetroffenen
-   Sentinels entsprechen. Damit ist "die Anzeige luegt" in beide Richtungen
-   getestet: Sie darf weder zu wenig noch zu viel behaupten.
-2. **Mirror-Tripwire**: ein Test, der die gespeicherten Properties von
-   `RenderContext` gegen eine bekannte Liste prueft. Wer ein Feld hinzufuegt,
-   bricht den Test, und dessen Meldung sagt, was zu tun ist. Das faengt den
-   gefaehrlichsten Fehler: das schweigende Hinzufuegen.
-3. **Compiler-Zwang**: `PromptDataClass` ist CaseIterable, Disclosure und
-   Politik sind erschoepfende switches. Ein neuer Fall ohne Entscheidung
-   kompiliert nicht.
+**Three types of tests:**
 
-**Was keine Schicht abfaengt** und deshalb als Regel dasteht: Aus Dokumenten
-Dritter abgeleiteter Text (PDF-Extrakt, Bild-OCR) darf **nie** in ein Feld
-fliessen, dessen Klasse "geht mit" ist - etwa in `userNotes`. Das ist die
-naheliegendste Implementierung des Bild-Features und wuerde die PDF-Grenze durch
-die Hintertuer schleifen. Der zugehoerige Sentinel-Test entsteht am selben Tag
-wie das Bild-Feature.
+1. **Sentinel test, the strongest.**
+   A fixture library gives every class a unique marker.
+   A recording mock provider captures the entire render request.
+   Forbidden sentinels must appear nowhere the provider can observe, allowed sentinels must appear, and `OutboundDisclosure` must report exactly the sentinels found.
+   This tests lying in both directions: the notice may neither omit nor overstate data.
+2. **Mirror tripwire.**
+   Compare the stored properties of `RenderContext` against a known list.
+   Adding a field breaks the test with a message explaining the required review.
+   This catches the most dangerous failure: silent expansion.
+3. **Compiler enforcement.**
+   `PromptDataClass` is `CaseIterable`, while disclosure and policy use exhaustive switches.
+   A new class without a policy decision does not compile.
 
-## Benennung fuer die Oberflaeche
+No layer can prevent text derived from third-party documents, such as PDF extraction or image OCR, from being copied into a field classified as allowed, such as `userNotes`.
+That tempting implementation would bypass the PDF boundary.
+The associated sentinel test must be added with the image feature.
+
+## User-facing language
 
 - "Audio recordings" - "Stay on this device unless you explicitly include them in one meeting transfer."
 - "Transcript with speaker names" - "Sent with the minutes when you choose an external model; a portable transcript with confirmed visible names and generic labels is also included in a meeting package."
@@ -144,18 +130,12 @@ wie das Bild-Feature.
 - "Email addresses" - "Never included, they only organize your speaker library."
 - "Documents and pasted images" - "Used on this Mac to improve recognition, never sent."
 
-Bewusst vermieden: Codebegriffe wie "RenderContext" oder "Prompt", und
-Sammelbegriffe wie "Metadaten", unter denen sich niemand etwas vorstellt.
-Jede Zeile benennt ein Ding, das der Benutzer selbst angefasst hat.
+Avoid implementation terms such as `RenderContext` and "prompt", as well as vague labels such as "metadata".
+Each row names something the user has handled directly.
 
-## Stand
+## Status
 
-Erledigt: Der Hinweis vor dem Erzeugen nennt nicht mehr nur das Transkript,
-sondern auch Teilnehmerliste und Notizen, sofern vorhanden, und benennt was
-bleibt.
-Das war der dringendste Einzelbefund - die Anzeige war seit dem Einbau von
-Notizen und Firmen schlicht unwahr.
+Done: the pre-generation notice now names participant lists and notes when present, not just the transcript, and states what stays local.
+This was the most urgent issue because the notice became inaccurate after notes and companies were added.
 
-Offen: das Manifest (`PromptDataClass`), `OutboundDisclosure` als gemeinsame
-Quelle fuer Anzeige und Zusammenstellung, das Register in den Einstellungen,
-und die drei Testsorten.
+Open: implement the `PromptDataClass` manifest, derive `OutboundDisclosure` from the shared source used for payload construction, add the Settings registry, and add all three test types.

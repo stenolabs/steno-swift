@@ -123,7 +123,7 @@ targets:
         # Anything set in Xcode's Signing tab would be lost on the next
         # xcodegen run.
         CODE_SIGN_STYLE: Automatic
-        PRODUCT_BUNDLE_IDENTIFIER: org.steno.Steno
+        PRODUCT_BUNDLE_IDENTIFIER: "$(STENO_BUNDLE_IDENTIFIER)"
   StenoTests:
     type: bundle.unit-test
     platform: iOS

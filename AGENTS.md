@@ -1,142 +1,210 @@
-# Arbeiten in diesem Repository
+# Working in this repository
 
-Steno nimmt Besprechungen auf, transkribiert und diarisiert sie lokal und erzeugt daraus Protokolle.
-Alles laeuft auf dem Geraet; nur ein ausdruecklich gewaehltes Sprachmodell fuer die Protokollerstellung darf nach aussen gehen.
+Steno records meetings, transcribes and diarizes them locally, and produces meeting minutes.
+Everything runs on the device.
+Only a text model explicitly selected for report generation may receive meeting content externally.
 
-Dieses Repository enthaelt **beide** Apps und den gemeinsamen Kern.
-Der Name `steno-macos` ist historisch.
+This repository contains both apps and their shared core.
+The name `steno-macos` is historical.
 
-## Plattformziel
+## Platform target
 
-Steno wird ausschliesslich fuer Apple Silicon gebaut und getestet.
-Die macOS-App, die iOS-/iPadOS-App und eigene Build- oder Fixture-Helfer sind arm64-only.
-Intel, x86_64, Rosetta und Universal Binaries werden nicht unterstuetzt und erhalten keine Kompatibilitaetsarbeit.
-`universal` in einem Asset Catalog bezeichnet dagegen die Apple-Geraeteklasse und keine Prozessorarchitektur.
+Steno is built and tested exclusively for Apple Silicon.
+The macOS app, the iOS and iPadOS app, and custom build or fixture helpers are ARM64-only.
+Intel, x86_64, Rosetta, and Universal Binaries are unsupported and receive no compatibility work.
+In an Asset Catalog, `universal` refers to the Apple device class, not a processor architecture.
 
-## Aufbau
+## Repository layout
 
-| Pfad | Inhalt |
+| Path | Contents |
 |---|---|
-| `StenoKit/` | Der gemeinsame Kern, ein SwiftPM-Paket mit zehn Bibliotheks-Targets. Beide Apps haengen daran. |
-| `App/` | Die macOS-App. |
-| `iOS/App/`, `iOS/StenoiOSKit/` | Die iOS- und iPadOS-App. `StenoiOSKit` ist ein eigenes Paket und bewusst kein StenoKit-Target: es haengt am `AVAudioSession`-Lebenszyklus, den es auf dem Mac nicht gibt. |
-| `docs/` | Plaene, Messprotokolle. `ARCHITECTURE.md` (an der Wurzel) und `docs/PLAN-IOS.md` zuerst lesen. |
-| `scripts/` | `build-app.sh` (macOS), `build-ios.sh` (iOS/iPadOS), `generate-model-checksums.sh` (Pruefsummen-Manifest fuer Modelle). |
+| `StenoKit/` | The shared core, a SwiftPM package with ten library targets. Both apps depend on it. |
+| `App/` | The macOS app. |
+| `iOS/App/`, `iOS/StenoiOSKit/` | The iOS and iPadOS app. `StenoiOSKit` is a separate package rather than a StenoKit target because it depends on the `AVAudioSession` lifecycle, which does not exist on macOS. |
+| `docs/` | Plans and measurement records. Read the root `ARCHITECTURE.md` and `docs/PLAN-IOS.md` first. |
+| `scripts/` | `build-app.sh` for macOS, `build-ios.sh` for iOS and iPadOS, and `generate-model-checksums.sh` for the model checksum manifest. |
 
-Welche Teile plattformgebunden sind, entscheidet die Target-Zugehoerigkeit:
+Target membership determines which code is platform-specific:
 
-- `StenoAudioCore` ist portabel und enthaelt alles, was eine Aufnahme vertrauenswuerdig macht: `TrackWriter`, `CaptureRecovery`, `DiskSpaceChecker`, `RecordingSession`.
-  **Beide** Plattformen nehmen damit auf. Nichts davon nachbauen.
-- `StenoMacAudio` ist macOS-only: die Mikrofonaufnahme des Mac (`MicRecorder`, `MicrophoneDiscovery`, `CoreAudioInputDevice`), der CoreAudio-Process-Tap fuer Systemaudio (`SystemAudioRecorder`), die Berechtigungspruefung und der Ruhezustandsschutz.
-  Wird fuer iOS nie gebaut; das Gegenstueck dort ist `StenoiOSAudio` in `StenoiOSKit`.
+- `StenoAudioCore` is portable and contains everything that makes a recording trustworthy: `TrackWriter`, `CaptureRecovery`, `DiskSpaceChecker`, and `RecordingSession`.
+  Both platforms record through this target.
+  Do not rebuild any of it elsewhere.
+- `StenoMacAudio` is macOS-only.
+  It contains Mac microphone capture through `MicRecorder`, `MicrophoneDiscovery`, and `CoreAudioInputDevice`; the CoreAudio process tap for system audio through `SystemAudioRecorder`; permission checks; and sleep prevention.
+  It is never built for iOS.
+  Its iOS counterpart is `StenoiOSAudio` in `StenoiOSKit`.
 
-## Bauen und testen
+## Building and testing
 
+```sh
+swift test --package-path StenoKit      # shared core
+scripts/build-app.sh [--run]            # macOS app
+scripts/build-ios.sh                    # iOS, build only
+scripts/build-ios.sh --simulator [UDID] # booted simulator, or the first one without a UDID
+scripts/build-ios.sh --ipad-simulator   # boot or create an iPad simulator
+scripts/build-ios.sh --device [UUID]    # first iPhone or iPad when no UUID is supplied
 ```
-swift test --package-path StenoKit     # der Kern, derzeit 813 Tests
-scripts/build-app.sh [--run]           # macOS-App
-scripts/build-ios.sh                   # iOS, nur bauen
-scripts/build-ios.sh --simulator [UDID] # in den gebooteten Simulator, ohne UDID den ersten
-scripts/build-ios.sh --ipad-simulator  # in ein iPad, bootet oder erzeugt eines bei Bedarf
-scripts/build-ios.sh --device [UUID]   # aufs Geraet, ohne UUID das erste iPhone/iPad
-```
 
-**Es gibt vier Testsuiten, nicht eine.** Die drei uebrigen laufen ueber xcodebuild und rufen `xcodegen` **nicht** von selbst auf - nach einem Branch-Wechsel also erst `xcodegen generate`, sonst kommt `cannot find type ...`:
+There are four test suites, not one.
+The other three use Xcodebuild and do not run `xcodegen` automatically.
+After switching branches, run `xcodegen generate` first or the build may fail with `cannot find type ...` because the generated project is stale.
 
-```
+```sh
 xcodebuild -project Steno.xcodeproj -scheme Steno \
-  -destination 'platform=macOS' test                     # macOS-App, derzeit 193 Tests
+  -destination 'platform=macOS' test                     # macOS app
 
 cd iOS && xcodebuild -project StenoiOS.xcodeproj -scheme Steno \
   -destination 'platform=iOS Simulator,name=iPhone 17' \
-  -derivedDataPath build/DerivedData test                # iOS-App, derzeit 253 Tests
+  -derivedDataPath build/DerivedData test                # iOS app
 
 cd iOS/StenoiOSKit && xcodebuild -scheme StenoiOSKit \
-  -destination 'platform=iOS Simulator,name=iPhone 17' test   # derzeit 35 Tests
+  -destination 'platform=iOS Simulator,name=iPhone 17' test   # iOS audio package
 ```
 
-Die Zahlen veralten; sie stehen da, damit ein stiller Rueckgang auffaellt.
+Record test counts during final verification so that a silent drop is noticeable.
 
-Getestet wird mit Swift Testing. Zwei Fallen, die schon zugeschlagen haben:
+Tests use Swift Testing.
+Two failure modes have already caused problems:
 
-- `#expect` verpackt seinen Ausdruck in eine Closure mit unveraenderlichem Empfaenger. Der Aufruf einer **mutierenden** Methode darin uebersetzt nicht ("cannot use mutating member on immutable value"). Die Mutation davor ziehen und nur das Ergebnis pruefen.
-- Wer in einem Test einen Haltepunkt in produktiven async-Code einschleust und dort synchron wartet, blockiert einen Thread des Cooperative Pools. Genug davon gleichzeitig, und der ganze Lauf steht. Die vorhandenen Helfer in `TestSupport.swift` (`withBlockingTestExecutor`, `blockingTestTask`) legen solche Waits auf eine eigene DispatchQueue - benutze sie, statt neue zu bauen.
+- `#expect` wraps its expression in a closure with an immutable receiver.
+  Calling a mutating method inside it does not compile with `cannot use mutating member on immutable value`.
+  Perform the mutation first and assert only the result.
+- A test that inserts a breakpoint into production async code and then waits synchronously blocks a cooperative-pool thread.
+  Enough concurrent waits can stall the complete run.
+  Use `withBlockingTestExecutor` and `blockingTestTask` from `TestSupport.swift`, which place these waits on a dedicated dispatch queue.
 
-**Beide Xcode-Projekte sind Generate aus ihrer `project.yml` und stehen in `.gitignore`.**
-Nach jedem Branch-Wechsel, Merge oder Rebase erst `xcodegen generate` laufen lassen, sonst fehlen neue Quelldateien im alten Projekt und der Build bricht mit `cannot find type ...` ab.
-Das sieht wie ein Codefehler aus und ist keiner.
-Die Skripte tun das von selbst.
+Both Xcode projects are generated from their `project.yml` and ignored by Git.
+After every branch switch, merge, or rebase, run `xcodegen generate` before diagnosing missing types.
+The build scripts do this automatically.
 
-Einstellungen gehoeren in die `project.yml`, nie in Xcodes Oberflaeche: der naechste `xcodegen`-Lauf wirft sie sonst weg.
-Das gilt besonders fuer Signieren, Bundle-ID und Info.plist-Schluessel.
-`App/Info.plist` und `iOS/App/Info.plist` sind selbst Erzeugnisse aus dem `info:`-Block und stehen in `.gitignore` - wer sie direkt bearbeitet, verliert die Aenderung kommentarlos.
+Settings belong in `project.yml`, never in Xcode's interface, because the next XcodeGen run discards interface-only changes.
+This is especially important for signing, bundle identifiers, and Info.plist keys.
+`App/Info.plist` and `iOS/App/Info.plist` are generated from the `info:` block and ignored by Git.
+Direct edits disappear without warning.
 
-## Regeln, die nicht verhandelbar sind
+## Repository language
 
-- **Die Aufnahme ist das einzige unersetzliche Artefakt.**
-  Transkription, Diarisierung und Protokolle lassen sich wiederholen, eine verlorene Aufnahme nicht.
-  Deshalb darf ein fehlendes Sprachmodell, eine nicht unterstuetzte Sprache oder ein Transkriptionsfehler die Aufnahme nie beenden.
-  Beide Apps trennen das in getrennte Tasks; wer daran arbeitet, muss diese Trennung erhalten.
-- **Originale sind unveraenderlich.**
-  Sie werden geschrieben, nie ueberschrieben. Korrekturen entstehen als neue Revision (`ARCHITECTURE.md` Abschnitt 4).
-- **Nichts raten, was der Nutzer als Tatsache liest.**
-  Ein unbestaetigter Sprechercluster bleibt ein generischer Sprecher, eine Vermutung wird als Vermutung angezeigt, und ein Cluster mit mehreren Stimmen bekommt keinen Namen.
-- **Der System-Locale ist nicht die gesprochene Sprache.**
-  Ein englisch eingestelltes Geraet in Deutschland meldet `en_DE` und wuerde deutsche Rede als Englisch transkribieren, ohne Fehlermeldung und mit plausibel aussehendem Ergebnis.
-  Beide Apps fuehren deshalb eine ausdrueckliche, gespeicherte Transkriptionssprache. `Locale.current` gehoert nicht in den Transkriptionspfad.
-- **Modelle laden nicht von selbst.**
-  Seit der Onboarding-Arbeit laeuft jede Installation ueber `ModelInstallationCoordinator` mit Zustimmung und Pruefsummen. Die Provider laden nicht mehr eigenstaendig.
-- **Stimm-Evidenz wird ausgenommen, nie geloescht.**
-  Prototypen und Hard Negatives tragen `excludedAt`, und jede Auswertung filtert ueber `isActive`. Wer Eintraege entfernt statt sie auszunehmen, hebelt Ausschluss und Widerruf aus, und der Verlust ist unsichtbar: spaeter bleibt nur eine Erkennung ohne erkennbaren Grund aus.
-- **Lauf- und Revisions-Provenienz sind tragend.**
-  Eine Hoerprobe stammt aus genau der Spur, die dieser Lauf diarisiert hat, nicht aus irgendeiner desselben Typs; und eine Korrektur setzt auf der aktuellen Revision auf, sonst weist der `RevisionStore` sie als Konflikt ab. Bei Mehrdeutigkeit lieber nichts liefern als das Falsche.
+English is the repository's default and normative language.
+Write all new documentation, source comments, test names, script output, commit messages, and default user-interface strings in English.
+When editing an actively maintained German document or comment, translate the relevant surrounding section rather than adding more mixed-language prose.
 
-## Wenn du den Kern anfasst
+German remains valid only where the language itself is part of the product or test contract:
 
-Eine Aenderung in `StenoKit` trifft beide Apps.
-Genau dafuer liegen sie in einem Repository: ein Bruch faellt beim Bauen auf und nicht Tage spaeter.
-Damit das funktioniert, gehoert nach jeder Kernaenderung die volle Kette dazu:
+- translated values in localization catalogs;
+- speech, transcript, and named-term fixtures for German-language tests;
+- the bundled synthetic German demo meetings; and
+- quoted titles or source material whose original wording matters.
 
-```
+Historical development records may remain German when they are clearly marked as non-normative and are not linked as current guidance.
+Do not rename historical files merely to translate their path unless every reference is updated in the same change.
+
+## Local model and resource safety
+
+Do not download, install, or execute a local language, translation, transcription, embedding, or other machine-learning model for repository maintenance unless Ben explicitly authorizes that exact model and run after seeing the estimated download size, peak memory, disk use, and expected duration.
+The fact that inference stays local is not permission to consume machine resources.
+Prefer the current agent's own capabilities or an already authorized service over ad hoc local inference.
+
+Apple MPS uses unified system memory.
+GPU offload is therefore not a memory limit and can exhaust the RAM needed by every other application.
+A checkpoint's file size is not a valid estimate of peak memory because weights, caches, activations, framework copies, and generated output may coexist.
+
+If Ben explicitly authorizes a local model run, all of the following are mandatory:
+
+1. Record a baseline using `memory_pressure`, `sysctl vm.swapusage`, available disk space, and the largest current process groups.
+2. Calculate a conservative peak-memory estimate before downloading or loading the model.
+3. Use a hard per-process resource limit or an independent watchdog that measures physical footprint and can terminate the entire task-owned process tree.
+   If neither can be enforced, do not run the model.
+4. Start with one tiny representative input.
+   Do not start a corpus, repository-wide, or multi-file run until that sample has completed and its measured peak is safe.
+5. Abort immediately when physical footprint exceeds 4 GiB, swap grows by more than 1 GiB from baseline, memory pressure turns yellow or red, or usage grows without a stable bound.
+6. Run only one local model process at a time and never overlap it with a full build or test suite.
+7. After stopping, verify the parent and all children are gone before deleting files.
+   Recheck memory pressure and swap, then remove every task-owned model, environment, cache, and session artifact.
+
+Never repeat a local model attempt with a larger model after a smaller model produces poor output.
+Report the quality limitation and use a different workflow.
+
+## Non-negotiable rules
+
+- The recording is the only irreplaceable artifact.
+  Transcription, diarization, and reports can be repeated, but a lost recording cannot.
+  A missing speech model, unsupported language, or transcription failure must therefore never stop recording.
+  Both apps keep recording and processing in separate tasks, and that separation must remain intact.
+- Originals are immutable.
+  They are written once and never overwritten.
+  Corrections create a new revision as described in section 4 of `ARCHITECTURE.md`.
+- Never guess anything the user will read as fact.
+  An unconfirmed speaker cluster remains generic, an inference is labeled as an inference, and a cluster containing multiple voices receives no name.
+- The system locale is not the spoken language.
+  A device configured in English while located in Germany may report `en_DE`, which could silently transcribe German speech as plausible English text.
+  Both apps therefore maintain an explicit persisted transcription language.
+  `Locale.current` does not belong in the transcription path.
+- Models do not download themselves.
+  Since the onboarding work, every installation passes through `ModelInstallationCoordinator` with consent and checksums.
+  Providers no longer download models independently.
+- Voice evidence is excluded, never deleted.
+  Prototypes and hard negatives carry `excludedAt`, and every evaluation filters through `isActive`.
+  Removing entries instead of excluding them bypasses exclusion and revocation, and the loss becomes invisible when recognition later fails without an apparent reason.
+- Run and revision provenance are foundational.
+  A listening sample comes from the exact track diarized by that run, not merely another track of the same type.
+  A correction is based on the current revision or `RevisionStore` rejects it as a conflict.
+  When provenance is ambiguous, return nothing rather than the wrong result.
+
+## Changes to the shared core
+
+A change in `StenoKit` affects both apps.
+That is why both applications live in one repository: breakage should surface during the build rather than days later.
+Every core change requires the complete build chain:
+
+```sh
 xcodegen generate && scripts/build-app.sh && scripts/build-ios.sh && swift test --package-path StenoKit
 ```
 
-Bauen allein genuegt nicht: wer Verhalten im Kern aendert, laesst auch die beiden App-Suiten laufen (oben).
-Sie finden Brueche, die der Compiler nicht sieht.
+Building alone is insufficient when core behavior changes.
+Run both app suites listed above as well, because they catch failures that the compiler does not.
 
-Zwei Brueche am 08.08.2026 waren fuer git unsichtbar, weil beide Seiten andere Zeilen anfassten, und fielen nur so auf:
-eine neue View benutzte einen Typ, der gerade das Modul gewechselt hatte, und die iOS-App rief Provider-Initializer auf, die ihre Parameter verloren hatten.
+Two regressions on 8 August 2026 were invisible to Git because both sides changed different lines and surfaced only through this chain.
+One new view used a type that had just moved modules, while the iOS app still called provider initializers whose parameters had been removed.
 
-## Parallel arbeiten
+## Parallel work
 
-Fuer mehrere gleichzeitige Aufgaben Arbeitsbaeume nutzen, `.worktrees/` ist dafuer vorgesehen und ignoriert:
+Use worktrees for concurrent tasks.
+The ignored `.worktrees/` directory is reserved for them:
 
-```
+```sh
 git worktree add .worktrees/<name> -b <branch>
 ```
 
-Was Arbeitsbaeume **nicht** loesen:
+Worktrees do not solve every conflict:
 
-- Semantische Kollisionen im Kern. Sie trennen Dateien, nicht Bedeutung. Gegenmittel sind kurze Branches, frueh auf `main` rebasen und danach die Kette oben.
-- Die Mac-Bibliothek unter `~/Library/Application Support/Steno/Library` gehoert allen Mac-Builds gemeinsam.
-  Fuer alle Tests, die keine nutzereigenen Aufnahmen anfassen sollen, `STENO_LIBRARY_DIR` und `STENO_MODEL_DIR` auf ein Wegwerfverzeichnis setzen.
-- Auf einem Geraet gibt es die Bundle-ID `org.steno.Steno` nur einmal. Zwei Arbeitsbaeume, die beide installieren, ueberschreiben sich gegenseitig.
+- They isolate files, not semantic changes in the shared core.
+  Keep branches short, rebase on `main` early, and run the complete chain afterward.
+- Every Mac build shares the library under `~/Library/Application Support/Steno/Library`.
+  Set `STENO_LIBRARY_DIR` and `STENO_MODEL_DIR` to disposable directories for every test that must not touch user recordings.
+- A device can contain bundle identifier `org.steno.Steno` only once.
+  Two worktrees installing to the same device overwrite one another.
 
-`iOS/StenoiOSKit/Package.resolved` ist bewusst unversioniert: der einzige externe Pin lebt in `StenoKit/Package.resolved`, zwei Dateien fuer denselben Pin liefen auseinander.
+`iOS/StenoiOSKit/Package.resolved` is intentionally unversioned.
+The sole external pin lives in `StenoKit/Package.resolved`; keeping two pins for the same dependency caused drift.
 
-## Praktisches zu iOS
+## Practical iOS notes
 
-- Signiert wird automatisch ueber `DEVELOPMENT_TEAM` in der ignorierten lokalen `.steno-signing.xcconfig`.
-  Als Vorlage dient `.steno-signing.xcconfig.example`.
-  Mit einem kostenlosen Apple-Konto startet die App nach sieben Tagen nicht mehr und muss neu installiert werden. Das ist kein Fehler.
-- Das Geraet haengt nach dem ersten Pairing per Kabel danach ueber das lokale Netz (`transportType: localNetwork`). Entsperrt und im selben Netz genuegt.
-- Der Simulator kann kein `SpeechTranscriber`: er meldet null unterstuetzte Sprachen.
-  Live-Transkript, Sprachwahl und Modellinstallation lassen sich nur am Geraet pruefen.
-- Den Simulator nicht per `cliclick` fernsteuern. Mehrere Anlaeufe am 07.08.2026 trafen die Bedienelemente nicht; ein Mensch tippt schneller.
-  Fuer Screenshots `xcrun simctl io <udid> screenshot` verwenden, nie `screencapture`: das nimmt den ganzen Bildschirm auf, samt fremder Fenster.
+- Automatic signing uses `DEVELOPMENT_TEAM` from the ignored local `.steno-signing.xcconfig`.
+  Copy `.steno-signing.xcconfig.example` as a template.
+  With a free Apple account, the app stops launching after seven days and must be reinstalled.
+  This is expected behavior.
+- After its first wired pairing, a device connects over the local network with `transportType: localNetwork`.
+  Being unlocked and on the same network is sufficient.
+- The simulator cannot provide `SpeechTranscriber` and reports no supported languages.
+  Live transcription, language selection, and model installation can be tested only on a physical device.
+- Do not control the simulator with `cliclick`.
+  Several attempts on 7 August 2026 missed their intended controls.
+  Use `xcrun simctl io <udid> screenshot` for screenshots, never `screencapture`, which captures the entire desktop and unrelated windows.
 
 ## Handoffs
 
-`HANDOFF.md`, `HANDOFF-*.md` und `UEBERGABE*.md` sind Sitzungsartefakte, stehen in `.gitignore` und werden nie committet.
-Wer unfertige Arbeit hinterlaesst, schreibt einen: Branch, Stand, offene Punkte, bekannte Sackgassen.
-Ein Handoff gehoert der Aufgabe, die ihn geschrieben hat; fremde nicht ueberschreiben.
+`HANDOFF.md`, `HANDOFF-*.md`, and `UEBERGABE*.md` are session artifacts.
+They are ignored by Git and never committed.
+When leaving unfinished work, write a handoff containing the branch, current state, open work, and known dead ends.
+A handoff belongs to the task that created it.
+Never overwrite another task's handoff.

@@ -1,120 +1,97 @@
-# Testmaterial fuer Entwicklung und Benchmarks
+# Test material for development and benchmarks
 
-Steno arbeitet im Alltag mit echten Besprechungen. Fuer Entwicklung, Screenshots
-und Messungen ist das ungeeignet: Sie enthalten personenbezogene Daten Dritter
-und duerfen die Maschine nicht verlassen.
-Dieses Dokument haelt fest, welches oeffentliche Material stattdessen dient,
-wo es liegt und - wichtiger - wofuer es taugt und wofuer nicht.
+Steno processes real meetings in everyday use.
+Those recordings are unsuitable for development, screenshots, and measurements because they contain third-party personal data and must not leave the machine.
+This document records which public material is used instead, where it lives, and, most importantly, what it can and cannot support.
 
-Die Audiodateien selbst liegen bewusst ausserhalb des Repositorys unter
-`~/Dev/sandbox/steno-ccc-fixtures`.
-Sie sind jederzeit ueber die unten genannten Quellen reproduzierbar.
+The audio files deliberately remain outside the repository under `~/Dev/sandbox/steno-ccc-fixtures`.
+They can be reproduced at any time from the sources listed below.
 
-## Die Aufnahmen
+## Recordings
 
-Beide Talks stammen von media.ccc.de und waren schon im Vorgaengerprojekt die
-Grundlage des Sprecher-Wiedererkennungstests.
+Both talks come from media.ccc.de and already served as the basis for cross-recording speaker-recognition tests in the predecessor project.
 
-| Datei | Talk | Vortragende laut Metadaten | Dauer |
+| File | Talk | Speakers according to metadata | Duration |
 |---|---|---|---|
 | `37c3-xandr-deu` | 37C3, "Die Akte Xandr" | Grace Hopper, Ingo Dachwitz | 42 min |
 | `38c3-databroker-deu` | 38C3, "Databroker Files" | Grace Hopper, Ingo Dachwitz, Katharina Brunner, Rebecca Ciesielski | 39 min |
 
-Je Talk liegen drei Fassungen vor: das Original als Ogg/Opus, eine Wandlung nach
-16 kHz mono (Ogg/Opus kann macOS nicht oeffnen - dieselbe Huerde wie beim
-WebM-Altimport), und ein Zehnminutenfenster ab Minute 5 fuer schnelle Durchlaeufe.
+Three variants exist for each talk: the original Ogg/Opus file, a conversion to 16 kHz mono, and a ten-minute window beginning at minute five for fast runs.
+macOS cannot open Ogg/Opus directly, which is the same obstacle encountered by the legacy WebM importer.
 
-**Korrektur einer Annahme aus dem Vorgaengerprojekt:** Dessen Vorhersagedokument
-fuehrt den 38C3-Talk als "dieselben zwei" Vortragenden.
-Die Metadaten nennen vier.
-Zwei davon sind mit dem 37C3-Talk identisch, der Wiedererkennungstest bleibt also
-tragfaehig - aber die Erwartung "zwei dominante Cluster" stimmt nicht.
+**Correction to an assumption in the predecessor project:** its prediction document describes the 38C3 talk as having the same two speakers.
+The metadata names four.
+Two of them also appear in the 37C3 talk, so the recognition test remains valid, but the expectation of two dominant clusters does not.
 
-## Wofuer das Material taugt
+## Appropriate uses
 
-**Sprecher-Wiedererkennung ueber Aufnahmen hinweg: gut geeignet.**
-Zwei Aufnahmen, dieselben zwei Menschen, ein Jahr und ein Saalwechsel dazwischen.
-Dafuer braucht es keine Textreferenz, nur die Frage, ob dieselbe Person
-wiedererkannt wird - und einen Kontrolltalk mit fremden Stimmen, in dem kein
-Vorschlag fallen darf.
-Der Aufbau des Vorgaengerprojekts ist reproduzierbar; dessen Vorhersagen wurden
-vor dem Lauf schriftlich festgeschrieben, was die richtige Vorgehensweise bleibt.
+**Cross-recording speaker recognition: suitable.**
+The material contains two recordings with the same two people, separated by one year and a venue change.
+This test needs no text reference, only the question of whether the same person is recognized again and a control talk containing unfamiliar voices for which no suggestion may appear.
+The predecessor project's setup is reproducible, and its predictions were recorded before the run, which remains the correct method.
 
-**Entwicklung, Screenshots, Oberflaechenpruefung: gut geeignet.**
-Oeffentliches Material, das geteilt werden darf, statt echter Besprechungen.
+**Development, screenshots, and interface review: suitable subject to the license caveat below.**
+Public material is preferable to real meetings when content must be shared or inspected.
+The bundled synthetic demo library is the default for repository screenshots because its redistribution terms and provenance are explicit.
 
-**Wortfehlerrate: nicht ohne eigene Referenz.**
-Die Untertitel von media.ccc.de sind fuer diese Talks maschinell erzeugt.
-Die 37C3-Datei sagt es in ihrer ersten Zeile selbst: automatisch von YouTube
-generiert und "dementsprechend (sehr) fehlerhaft".
-Dagegen zu messen hiesse, die eigene Erkennung an den Fehlern einer fremden
-Erkennung zu messen.
-Die in der API hinterlegte Untertitelspur des 38C3-Talks ist ausserdem nicht
-abrufbar (404).
-Fuer belastbare WER- und DER-Zahlen bleibt AMI die Referenz (siehe
-docs/BENCH-M2-ASR.md), weil es gepruefte Referenzen mitliefert.
-Wer WER auf CCC-Material messen will, braucht eine selbst korrigierte Referenz -
-im Vorgaengerprojekt waren das rund 60 Minuten Handarbeit fuer sechs
-Zehnminutenfenster.
+**Word error rate: unsuitable without a new reference.**
+The media.ccc.de subtitles for these talks were generated automatically.
+The first line of the 37C3 subtitle file explicitly says it was generated by YouTube and is therefore very inaccurate.
+Scoring against it would measure Steno against another recognizer's errors.
+The subtitle track registered in the API for the 38C3 talk also returns HTTP 404.
+AMI remains the reference for defensible WER and DER measurements as documented in `docs/BENCH-M2-ASR.md`, because it provides checked references.
+Measuring WER on the CCC material requires a manually corrected reference.
+The predecessor project needed roughly 60 minutes of manual work for six ten-minute windows.
 
-## Deutscher Referenzkorpus
+## German reference corpus
 
-Das neue Manifest unter `benchmarks/local-speech/manifest.json` trennt registrierte Quellen von wirklich benchmarkfaehigen Ausschnitten.
-Es pinnt DOI, Lizenz, Quelldatei und veroeffentlichte Pruefsumme, waehrend Audio und Referenzkopien ausserhalb von Git bleiben.
+The manifest in `benchmarks/local-speech/manifest.json` separates registered sources from excerpts that are actually ready for benchmarking.
+It pins DOI, license, source file, and published checksum while audio and reference copies remain outside Git.
 
-Das `Kölner Korpus des Kiezdeutschen` ist als CC-BY-4.0-Stresstest registriert.
-Sein manuelles GAT2-Transkript unterscheidet Sprecher und markiert Ueberlappungen, besitzt im PDF aber keine direkt auswertbaren Zeitstempel pro Zeile.
-Vor einer Zahl muss ein exakter Ausschnitt zeitlich ausgerichtet und danach manuell geprueft werden.
+The Kölner Korpus des Kiezdeutschen is registered as a CC BY 4.0 stress case.
+Its manual GAT2 transcript distinguishes speakers and marks overlaps, but the PDF has no directly scorable timestamps for individual lines.
+An exact excerpt must be aligned in time and then checked manually before any score is published.
 
-Das `Open Oldenburg Conversation Corpus` ist als standardnaeher deutscher Hauptkandidat registriert.
-Es enthaelt manuell korrigierte Zeitstempel, ist laut mitgelieferter Lizenz aber CC BY-NC-ND 4.0.
-Es eignet sich fuer lokale nichtkommerzielle Forschung, ersetzt jedoch keine frei nutzbare Produktreferenz.
-Die Auswahl des Standarddeutsch-Hauptausschnitts bleibt deshalb offen.
+The Open Oldenburg Conversation Corpus is registered as the main candidate for standard German.
+It contains manually corrected timestamps, but its bundled license is CC BY-NC-ND 4.0.
+It is appropriate for local non-commercial research but does not replace a freely usable product reference.
+The main standard-German excerpt therefore remains undecided.
 
-## Lizenz - ungeklaert, bewusst so notiert
+## License status
 
-Das Vorgaengerprojekt fuehrt das Material als "CC-lizenziert, oeffentlich
-nachvollziehbar".
-Belegen laesst sich das derzeit nicht: Die media.ccc.de-API liefert fuer beide
-Talks und fuer die Konferenz `license: None`, und die Talkseite gibt ohne
-JavaScript keine Lizenzangabe her.
+The predecessor project describes the CCC material as Creative Commons licensed and publicly traceable.
+That description is not currently substantiated: the media.ccc.de API returns `license: None` for both talks and their conferences, while the talk pages expose no license statement without JavaScript.
 
-Fuer die hiesige Nutzung ist das unkritisch - das Material wird lokal
-verarbeitet und nicht weiterverbreitet.
-Vor einer Veroeffentlichung von Ausschnitten, Screenshots mit erkennbarem
-Inhalt oder abgeleiteten Transkripten muss die Lizenz je Talk geprueft werden.
+This is acceptable for the current local analysis because the material is processed locally and not redistributed.
+Before publishing excerpts, screenshots with recognizable content, or derived transcripts, verify the license for each talk.
 
-## Reproduktion
+## Reproduction
 
-Die Talks lassen sich ueber die oeffentliche API finden und laden:
+Find and download the talks through the public API:
 
 ```sh
 curl -s "https://api.media.ccc.de/public/events/search?q=Akte%20Xandr"
-# im Ergebnis: recordings -> Eintrag mit mime_type audio/opus und language deu
+# In the result, select the recording with mime_type audio/opus and language deu.
 ```
 
-Danach wandeln, wie oben beschrieben:
+Then convert the files as described above:
 
 ```sh
 ffmpeg -i <talk>.opus -ac 1 -ar 16000 <talk>-16k.wav
 ffmpeg -ss 300 -t 600 -i <talk>-16k.wav <talk>-10min.wav
 ```
 
-## Getrennte Bibliothek fuer die Entwicklung
+## Separate development library
 
-`STENO_LIBRARY_DIR` uebersteuert den Bibliothekspfad
-(`AppModel.libraryURL()`).
-Die Entwicklung laeuft damit gegen eine eigene Bibliothek, und die echte
-Bibliothek unter `~/Library/Application Support/Steno/Library` wird nicht
-einmal geoeffnet:
+`STENO_LIBRARY_DIR` overrides the library path through `AppModel.libraryURL()`.
+Development can therefore use a dedicated library without opening the real library under `~/Library/Application Support/Steno/Library`.
 
-`open` reicht keine Umgebungsvariablen an die App weiter - die Binary muss
-direkt gestartet werden:
+The `open` command does not pass environment variables to the app, so launch the executable directly:
 
 ```sh
 STENO_LIBRARY_DIR="$HOME/Library/Application Support/StenoTestLibrary" \
   .build/DerivedData/Build/Products/Debug/Steno.app/Contents/MacOS/Steno &
 
-# Material ohne Oberflaeche einspielen (importiert und transkribiert):
+# Import and transcribe material without the interface:
 StenoKit/.build/release/steno-smoke "$STENO_LIBRARY_DIR" <audio>.wav
 ```

@@ -1,5 +1,7 @@
 # Arbeitspaket: Notizen, Kontextdokumente, E-Mail-Adressen
 
+> Historical, non-normative work package retained in German. New context and privacy work must be documented in English.
+
 Auftrag vom 2026-08-06: Notizen pro Meeting wie in der alten App, PDF als Kontextquelle, E-Mail an Teilnehmern - damit Eigennamen, Firmennamen und Kontext besser erkannt werden.
 Architekt-Zweitmeinung (Fable) eingeholt; ihre Kernpunkte sind hier eingearbeitet und wo abgewichen wird, steht es dabei.
 

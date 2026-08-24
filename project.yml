@@ -74,6 +74,7 @@ targets:
       base:
         ARCHS: arm64
         PRODUCT_NAME: steno-macos
+        PRODUCT_BUNDLE_IDENTIFIER: "$(STENO_BUNDLE_IDENTIFIER)"
         # Dasselbe Motiv wie die iOS-App: eine App, ein Zeichen.
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         STRING_CATALOG_GENERATE_SYMBOLS: true

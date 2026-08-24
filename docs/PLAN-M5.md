@@ -1,5 +1,7 @@
 # Meilenstein 5: Optionale externe LLM-Provider
 
+> Historical, non-normative milestone record retained in German. Use `ARCHITECTURE.md` and `FEATURE-PARITY.md` for current status.
+
 Umsetzungsplan zu `ARCHITECTURE.md` Abschnitt 10, Meilenstein 5.
 Akzeptanz laut Architektur: LM Studio und eigenes Ollama über einen OpenAI-kompatiblen Vertrag, nie automatisch kontaktiert, Provider sichtbar am Ergebnis.
 Reihenfolge verbindlich; jeder Schritt endet mit grünem `swift test` und einem Commit.

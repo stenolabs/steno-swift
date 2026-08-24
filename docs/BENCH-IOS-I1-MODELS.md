@@ -1,30 +1,30 @@
-# iOS i1 - Modellinstallation und Live-Revision
+# iOS i1 - Model installation and live revision
 
-Stand: 2026-08-09.
-Geraet und iOS-Version: iPhone 15 Pro mit iOS 26.5.2.
-Build-Commit: `cb4569c`.
+Status: 9 August 2026.
+Device and OS: iPhone 15 Pro running iOS 26.5.2.
+Build commit: `cb4569c`.
 
-## Installiertes Modell
+## Installed model
 
-- Gewaehlte Sprache: German (Germany).
-- Live-Text vor Stop sichtbar: Ja, bei der kurzen Messung nach ungefaehr 15 Sekunden.
-- Provisorische Revision nach Stop sichtbar: Ja.
-- Revision nach Neustart sichtbar: Ja, danach durch den segmentierten finalen ASR-Lauf ersetzt.
-- Anzahl Final-ASR-Jobs fuer das Meeting: Genau ein Job.
+- Selected language: German (Germany).
+- Live text visible before stopping: yes, after about 15 seconds in this short run.
+- Provisional revision visible after stopping: yes.
+- Revision visible after relaunch: yes, then replaced by the segmented final ASR run.
+- Number of final ASR jobs for the meeting: exactly one.
 
-## Fehlendes Modell
+## Missing model
 
-- Gewaehlte Sprache: French (France).
-- Download vor Zustimmung beobachtet: Nein.
-- Audio ohne Modell erhalten: Ja, eine CAF-Datei mit 1,7 MB und die zugehoerigen Metadaten.
-- Angezeigte Quelle und Groesse: Apple, 142,6 MB.
-- Modellbedingt gescheiterter Job erneut verarbeitet: Ja, derselbe Final-ASR-Job endete nach zwei Versuchen mit Status `finished`.
-- Diarisierungsdownload beobachtet: Nein.
+- Selected language: French (France).
+- Download observed before consent: no.
+- Audio retained without a model: yes, a 1.7 MB CAF file and its metadata.
+- Displayed source and size: Apple, 142.6 MB.
+- Model-blocked job processed again: yes, the same final ASR job finished after two attempts.
+- Diarization download observed: no.
 
-## Grenzen
+## Limits
 
-Nur die oben genannten kurzen Ablaeufe wurden auf echter Hardware geprueft.
-Die ungefaehr 15 Sekunden bis zum deutschen Live-Text sind eine Einzelbeobachtung und kein belastbarer Leistungswert.
-Eine lange Aufnahme, Thermik, Akku, Hintergrundbetrieb und Unterbrechungen waren nicht Teil dieser Messung.
-Der Diarisierungsjob wurde eingereiht und scheiterte erwartungsgemaess an den noch fehlenden Modellen Sortformer, pyannote und WeSpeaker.
-Es wurde kein automatischer Diarisierungsdownload beobachtet.
+Only the short flows above were verified on real hardware.
+The roughly 15 seconds before German live text appeared is a single observation, not a reliable performance measurement.
+Long recording, thermal behavior, battery use, background operation, and interruptions were outside this run.
+The diarization job was enqueued and failed as expected because the Sortformer, pyannote, and WeSpeaker models were not yet installed.
+No automatic diarization download was observed.

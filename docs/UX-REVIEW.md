@@ -1,5 +1,7 @@
 # UX-Durchsicht und Modernisierungskonzept (Fable, 2026-08-06)
 
+> Historical, non-normative UX review retained in German. Current UI behavior and acceptance status live in `FEATURE-PARITY.md` and `docs/benchmarks/2026-08-24-cross-platform-ui-qa.md`.
+
 Auftrag: intensive UX-Durchsicht des Oberflaechencodes plus Farb- und Modernisierungskonzept.
 Grundlage war die vollstaendige Lektuere aller 13 Dateien unter `App/Sources/` plus `ARCHITECTURE.md` und `HANDOFF-main.md`, Stand Commit 17979d6.
 Alle Zeilenangaben beziehen sich auf diesen Stand.
