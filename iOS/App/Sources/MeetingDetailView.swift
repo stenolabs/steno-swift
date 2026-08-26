@@ -502,6 +502,9 @@ struct MeetingDetailView: View {
             diarizationModelsReady: {
                 app.diarizationModels.isReady(for: app.language.locale)
             },
+            diarizationState: {
+                await app.meetingDiarizationState(for: token.value)
+            },
             jobs: { await app.meetingJobs(for: token.value) }
         )
         let loadedPublication = await app.loadMeetingReviewPublication(for: token.value)
@@ -597,6 +600,9 @@ struct MeetingDetailView: View {
                 },
                 diarizationModelsReady: {
                     app.diarizationModels.isReady(for: app.language.locale)
+                },
+                diarizationState: {
+                    await app.meetingDiarizationState(for: token.value)
                 },
                 jobs: { await app.meetingJobs(for: token.value) }
             )
@@ -926,11 +932,19 @@ struct MeetingDiarizationSnapshot<Revision> {
 
 /// The inexpensive identity of content that can change while a detail view
 /// remains open. It reads only the revision pointer, in-memory model readiness,
-/// and job documents. Full transcript decoding remains in `load(_:)`, which
-/// runs only after one of these identities changes. Every transcription,
-/// diarization, and speaker-matching job remains in the fingerprint through
-/// its terminal state, so a short job that starts and finishes between two
-/// polls is still observable.
+/// job documents, and the derived speaker-separation status. Full transcript
+/// decoding remains in `load(_:)`, which runs only after one of these
+/// identities changes. Every transcription, diarization, and speaker-matching
+/// job remains in the fingerprint through its terminal state, so a short job
+/// that starts and finishes between two polls is still observable.
+///
+/// The derived status must be part of this identity: `.unavailable`,
+/// `.ready`, and `.modelsRequired` also depend on inputs the pointer, the
+/// readiness flag, and the job fingerprint do not capture (the revision's
+/// final-ASR provenance chain, the finished run metadata, and the meeting's
+/// processing generation). Without it, a status that flips from
+/// `.unavailable` to `.ready` or `.modelsRequired` while pointer and jobs
+/// stay unchanged would never trigger a reload.
 struct MeetingContentObservation: Equatable {
     struct JobFingerprint: Equatable {
         let id: JobID
@@ -943,15 +957,18 @@ struct MeetingContentObservation: Equatable {
 
     let currentRevisionPointer: CurrentRevisionPointer?
     let diarizationModelsReady: Bool?
+    let diarizationState: MeetingDiarizationJobState
     let jobFingerprint: [JobFingerprint]
 
     init(
         currentRevisionPointer: CurrentRevisionPointer?,
         diarizationModelsReady: Bool?,
-        jobs: [Job]
+        jobs: [Job],
+        diarizationState: MeetingDiarizationJobState = .unavailable
     ) {
         self.currentRevisionPointer = currentRevisionPointer
         self.diarizationModelsReady = diarizationModelsReady
+        self.diarizationState = diarizationState
         jobFingerprint = jobs
             .filter {
                 $0.kind == .finalASR
@@ -975,15 +992,18 @@ struct MeetingContentObservation: Equatable {
     static func load(
         currentRevisionPointer: () async -> CurrentRevisionPointer?,
         diarizationModelsReady: () async -> Bool?,
+        diarizationState: () async -> MeetingDiarizationJobState,
         jobs: () async -> [Job]
     ) async -> Self {
         let revisionPointer = await currentRevisionPointer()
         let modelsReady = await diarizationModelsReady()
+        let state = await diarizationState()
         let jobs = await jobs()
         return Self(
             currentRevisionPointer: revisionPointer,
             diarizationModelsReady: modelsReady,
-            jobs: jobs
+            jobs: jobs,
+            diarizationState: state
         )
     }
 

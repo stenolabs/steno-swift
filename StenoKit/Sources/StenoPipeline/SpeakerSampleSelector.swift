@@ -1,4 +1,5 @@
 import Foundation
+import StenoDiarization
 import StenoDomain
 import StenoIdentity
 
@@ -129,5 +130,47 @@ public enum SpeakerSampleSelector {
         // der Rest chronologisch, damit er den Gesprächsverlauf abbildet.
         let remainder = chosen.dropFirst().sorted { $0.turnStart < $1.turnStart }
         return [best] + remainder
+    }
+}
+
+/// Computes a voiceprint for manual enrollment from a recorded or imported
+/// audio clip.
+///
+/// It runs the SAME diarization provider over the clip that meeting
+/// processing uses, then takes the voice with the most total speaking time -
+/// legacy parity: a clean solo clip diarizes as effectively one speaker. The
+/// selection rules themselves live in `VoiceEnrollmentSelector` (StenoIdentity)
+/// and are tested there; this type only bridges DiarizationOutput onto them.
+public struct EnrollmentVoiceprintExtractor: Sendable {
+    private let provider: any DiarizationProvider
+
+    /// The public surface deliberately names no StenoDiarization type: app
+    /// targets that never import StenoDiarization must still be able to call
+    /// this. Within the package, tests and benchmarks can inject a provider.
+    public init() {
+        self.provider = FluidSortformerProvider()
+    }
+
+    init(provider: any DiarizationProvider) {
+        self.provider = provider
+    }
+
+    public func extract(from audioURL: URL) async throws -> VoiceEnrollmentCandidate {
+        let output = try await provider.diarize(audioURL, hints: DiarizationHints())
+        var durations: [String: TimeInterval] = [:]
+        var segmentCounts: [String: Int] = [:]
+        for segment in output.segments {
+            durations[segment.clusterID, default: 0] += max(0, segment.end - segment.start)
+            segmentCounts[segment.clusterID, default: 0] += 1
+        }
+        let candidates = output.embeddings.map { clusterID, embedding in
+            VoiceEnrollmentCandidate(
+                clusterID: clusterID,
+                embedding: embedding,
+                speechDurationSeconds: durations[clusterID] ?? 0,
+                segmentCount: segmentCounts[clusterID] ?? 0
+            )
+        }
+        return try VoiceEnrollmentSelector.dominant(candidates)
     }
 }

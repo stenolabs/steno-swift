@@ -63,6 +63,54 @@ extension AppModel {
         }
     }
 
+    /// Sets or clears a folder's sidebar color token.
+    @discardableResult
+    func setFolderColor(
+        _ colorToken: FolderColorToken?,
+        of folderID: FolderID
+    ) async -> Bool {
+        guard let operation = beginFolderOperation() else { return false }
+        defer { endFolderOperation(operation) }
+        let snapshot: RuntimeFolderSnapshot
+        do { snapshot = try folderOperationSnapshot() }
+        catch { reportFolderFailure("The folder color could not be changed.", error); return false }
+        guard let store = snapshot.folderStore else { return false }
+        do {
+            _ = try await store.setColorToken(colorToken, of: folderID)
+            guard isCurrent(snapshot, operation: operation) else { return false }
+            return await reloadMeetings(for: snapshot, operation: operation) == .published
+        } catch {
+            guard isCurrent(snapshot, operation: operation) else { return false }
+            _ = await reloadMeetings(for: snapshot, operation: operation)
+            reportFolderFailure("The folder color could not be changed.", error)
+            return false
+        }
+    }
+
+    /// Sets or clears a folder's sidebar SF Symbol icon.
+    @discardableResult
+    func setFolderIcon(
+        _ icon: FolderIcon?,
+        of folderID: FolderID
+    ) async -> Bool {
+        guard let operation = beginFolderOperation() else { return false }
+        defer { endFolderOperation(operation) }
+        let snapshot: RuntimeFolderSnapshot
+        do { snapshot = try folderOperationSnapshot() }
+        catch { reportFolderFailure("The folder icon could not be changed.", error); return false }
+        guard let store = snapshot.folderStore else { return false }
+        do {
+            _ = try await store.setIcon(icon, of: folderID)
+            guard isCurrent(snapshot, operation: operation) else { return false }
+            return await reloadMeetings(for: snapshot, operation: operation) == .published
+        } catch {
+            guard isCurrent(snapshot, operation: operation) else { return false }
+            _ = await reloadMeetings(for: snapshot, operation: operation)
+            reportFolderFailure("The folder icon could not be changed.", error)
+            return false
+        }
+    }
+
     @discardableResult
     func deleteFolder(_ folderID: FolderID) async -> Bool {
         guard let operation = beginFolderOperation() else { return false }

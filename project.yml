@@ -50,7 +50,15 @@ targets:
         CFBundleDisplayName: steno-macos
         NSMicrophoneUsageDescription: Steno records your microphone so it can transcribe conversations locally on this Mac.
         NSAudioCaptureUsageDescription: Steno records system audio so it can transcribe the people you talk to in calls, locally on this Mac.
+        # EventKit read-only access (macOS 14+ semantics). Local-only:
+        # events never leave the device, per docs/PLAN-PRIVACY.md.
+        NSCalendarsFullAccessUsageDescription: Steno reads your calendar locally to remind you shortly before a meeting starts. Event details stay on this Mac.
         LSApplicationCategoryType: public.app-category.productivity
+        CFBundleURLTypes:
+          - CFBundleURLName: org.steno.Steno.record
+            CFBundleURLSchemes:
+              - steno
+              - stenoai
         UTExportedTypeDeclarations:
           - UTTypeIdentifier: org.steno.sidebar-item
             UTTypeDescription: Steno Sidebar Item

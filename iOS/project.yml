@@ -69,9 +69,11 @@ targets:
         NSLocalNetworkUsageDescription: Steno connects to a language model server only when you test it or explicitly generate minutes with it.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
-        # Recording continues while the screen is locked or the app is not in
-        # the foreground. Post-processing does not use a background mode: it
-        # runs as a user-started BGContinuedProcessingTask instead.
+        # Recording continues while the screen is locked or the app is not
+        # in the foreground. Post-processing uses best-effort background
+        # time (UIApplication beginBackgroundTask) plus an honest deferral
+        # notice when iOS expires that window; there is no guaranteed
+        # completion API on iOS for this workload.
         UIBackgroundModes:
           - audio
         # The library lives in Documents and stays reachable from the Files

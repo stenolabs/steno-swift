@@ -48,4 +48,44 @@ extension RecordingSession {
             writerFactory: writerFactory
         )
     }
+
+    /// Starts the two-track recording, optionally armed with automatic
+    /// silence-triggered stopping.
+    ///
+    /// Passing `nil` or a config with `isEnabled == false` records exactly as
+    /// `start()` does. When enabled, a `SilenceAutoStopMonitor` is fed from
+    /// the session's existing level metering (the per-buffer RMS/peak
+    /// measurements surfaced through `levels(for:)`); once every tracked
+    /// track has stayed below the threshold for the configured interval the
+    /// monitor stops the session through the same `stop()` path a manual
+    /// stop uses.
+    ///
+    /// The parameter defaults to `nil` so every existing call site keeps its
+    /// behavior and compiles unchanged.
+    public func start(silenceAutoStop: SilenceAutoStopConfig? = nil) async throws {
+        // Deliberately off unless explicitly enabled: see
+        // `SilenceAutoStopConfig` for why this diverges from stenoai's
+        // default-on setting.
+        guard let config = silenceAutoStop, config.isEnabled else {
+            try await start()
+            return
+        }
+        let monitor = SilenceAutoStopMonitor(config: config) { [weak self] in
+            _ = try? await self?.stop()
+        }
+        try await start()
+        Task { [weak self] in
+            // Exits on its own once the session leaves `.recording`, so no
+            // cancellation wiring is needed beyond the state check.
+            while await self?.state == .recording {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard await self?.state == .recording else { return }
+                let levelsByTrack: [AudioTrack: AudioLevels] = [
+                    .microphone: await self?.levels(for: .microphone) ?? .silence,
+                    .system: await self?.levels(for: .system) ?? .silence,
+                ]
+                await monitor.ingest(levelsByTrack, at: .now)
+            }
+        }
+    }
 }

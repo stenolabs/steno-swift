@@ -1,6 +1,7 @@
 import AVFAudio
 import AVFoundation
 import Foundation
+import os
 import Observation
 import Speech
 import StenoDomain
@@ -373,6 +374,16 @@ final class AppModel {
     private(set) var isRecording = false
     private(set) var recordingMeetingID: MeetingID?
     private(set) var recordingStartedAt: Date?
+    /// One-shot report template choice for the recording dock. Nil pin =
+    /// global default flow, identical to before the pinning feature.
+    @ObservationIgnored
+    private(set) var recordingTemplateChoice = RecordingTemplateChoice()
+    var recordingPinnedTemplateID: String? {
+        recordingTemplateChoice.pinnedTemplateID
+    }
+    var recordingContinuesExistingMeeting: Bool {
+        recordingTemplateChoice.continuesExistingMeeting
+    }
     private var liveTranscriptFeed = LiveTranscriptFeed()
     private(set) var liveTranscriptRows: [LiveTranscriptFeed.Row] = []
     private(set) var levels: [AudioTrack: AudioLevels] = [:]
@@ -470,6 +481,86 @@ final class AppModel {
         wantsAudioImport = true
     }
 
+    // MARK: - Shell UX: command palette and undo-delete toast
+
+    /// The Cmd-K menu command flips this; the palette itself renders as a
+    /// ContentView overlay while it is set.
+    var isCommandPalettePresented = false
+
+    /// Focused-window command contexts, snapshotted when the Cmd-K menu
+    /// command fires. The palette's search field owns keyboard focus while
+    /// it is open, so @FocusedValue would resolve to nil inside the
+    /// overlay - the contexts must be captured before it appears.
+    @ObservationIgnored
+    var commandPaletteContexts: CommandPaletteContexts?
+
+    private(set) var pendingTrashUndo: UndoDeleteToastWindow?
+
+    /// Opens (or restarts) the 8-second undo window after a meeting moved
+    /// to Trash. A second delete replaces the pending toast: exactly one
+    /// toast exists at any time, and its timer starts fresh.
+    func beginTrashUndoWindow(
+        meetingID: MeetingID,
+        title: String,
+        trashedURL: URL?,
+        now: Date = Date()
+    ) {
+        pendingTrashUndo = UndoDeleteToastPolicy.begin(
+            previous: pendingTrashUndo,
+            meetingID: meetingID,
+            title: title,
+            trashedURL: trashedURL,
+            now: now
+        )
+    }
+
+    /// Drops the pending toast once its window has elapsed. The toast view
+    /// calls this from its expiry task; safe to call at any time.
+    func expireTrashUndoIfElapsed(now: Date = Date()) {
+        pendingTrashUndo = UndoDeleteToastPolicy.resolved(
+            pendingTrashUndo,
+            now: now
+        )
+    }
+
+    /// Undoes the trash move: moves the meeting folder back out of the
+    /// Finder trash into the library under the same exclusive lock every
+    /// other library mutation uses, then selects the restored meeting so
+    /// the user lands where they were before the mis-grab.
+    func restoreTrashedMeeting() async {
+        guard let window = pendingTrashUndo else { return }
+        pendingTrashUndo = nil
+        guard let runtime else {
+            report("The meeting could not be restored.")
+            return
+        }
+        guard let trashedURL = window.trashedURL else {
+            report(
+                "\(window.title) was moved to the Trash. Restore it manually from the Finder."
+            )
+            return
+        }
+        do {
+            let layout = runtime.library.layout
+            let destination = layout.meetingDirectory(window.meetingID)
+            try LibraryMutationCoordination.withExclusiveAccess(layout: layout) {
+                guard !FileManager.default.fileExists(atPath: destination.path) else {
+                    throw CocoaError(.fileWriteFileExists)
+                }
+                try FileManager.default.moveItem(at: trashedURL, to: destination)
+            }
+            await refreshMeetings()
+            selectedMeetingID = window.meetingID
+            report("\(window.title) was restored.", isError: false)
+        } catch let error as CocoaError where error.code == .fileWriteFileExists {
+            report(
+                "A folder already occupies the original location. \(window.title) is still in the Trash."
+            )
+        } catch {
+            report(AppModel.message("The meeting could not be restored.", error))
+        }
+    }
+
     /// Rohe Swift-Fehlerbeschreibungen gehören nicht in die Oberfläche.
     /// Der Klartext sagt, was nicht ging; das technische Detail hängt hinten
     /// dran, damit ein Fehlerbericht noch etwas hergibt.
@@ -565,8 +656,48 @@ final class AppModel {
     private var liveTasks = RecordingLiveTaskSet()
     private var levelTask: Task<Void, Never>?
     private var recordingStopTask: Task<Void, Never>?
+    /// App-level logger for degraded-but-nonfatal library conveniences.
+    private static let searchIndexLogger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "app.steno",
+        category: "library"
+    )
+
     private var meetingChangesTask: Task<Void, Never>?
+    /// Derived full-text index; rebuildable at any time (ARCHITECTURE s11).
+    @ObservationIgnored
+    private var searchIndex: MeetingSearchIndex?
     private var recordingStartState = RecordingStartState()
+    /// Sprache, mit der die Live-Lanes aktuell transkribieren. Weicht nur
+    /// dann vom Aufnahme-Startwert ab, wenn die automatische Erkennung
+    /// entschieden hat und die Lanes genau einmal neu gestartet wurden (F8).
+    private var activeLiveLaneLocale: Locale?
+    /// Hysterese-Zustand der automatischen Spracherkennung waehrend einer
+    /// Aufnahme; nil bei expliziter Sprachwahl.
+    private var languageDetectionSession: LanguageDetectionSession?
+    private var hasRestartedLiveLanesForDetectedLanguage = false
+    private var recordingLanguageStartLocaleIdentifier: String?
+    private(set) var recordingDetectedLocaleIdentifier: String?
+    /// F11: locale identifier of the LAST language decision for the current
+    /// recording - either a decisive automatic detection or a mid-recording
+    /// manual pick. The stop path reads it to pin the final ASR job's
+    /// locale; pre-switch text was recognized in its original language and
+    /// stays as the live transcript captured it (Transcribe Again re-runs).
+    private var recordingLastSelectedLocaleIdentifier: String?
+    /// F11: locale identifier of a mid-recording MANUAL pick, if any. It
+    /// outranks every detection result for the rest of the recording.
+    private(set) var recordingManualLocaleIdentifier: String?
+    // Platform integration state; lifecycle logic lives in
+    // AppModel+PlatformIntegration.swift. Extensions cannot add stored
+    // properties, so the instances are kept here (untracked: no view
+    // renders them).
+    @ObservationIgnored
+    var menuBarController: MenuBarController?
+    @ObservationIgnored
+    var globalRecordHotkey: GlobalRecordHotkey?
+    @ObservationIgnored
+    var microphoneActivityMonitor: MicrophoneActivityMonitor?
+    @ObservationIgnored
+    var meetingDetectionController: MeetingDetectionController?
 
     var isStartingRecording: Bool { recordingStartState.isStarting }
 
@@ -1240,14 +1371,9 @@ final class AppModel {
     }
 
     static func libraryURL() -> URL {
-        if let override = ProcessInfo.processInfo.environment["STENO_LIBRARY_DIR"] {
-            return URL(fileURLWithPath: override, isDirectory: true)
-        }
-        let base = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        )[0]
-        return base.appendingPathComponent("Steno/Library", isDirectory: true)
+        // Precedence contract lives in StorageLocation: env override keeps
+        // dev/test isolation, then the user's custom path from Settings.
+        StorageLocation.effectiveLibraryDirectory(defaults: .standard)
     }
 
     /// Nur fuer Tests des Erstlaufs: lenkt Download und Provider auf ein
@@ -1291,8 +1417,17 @@ final class AppModel {
         var fatalFailure: MacStartupFailure?
         var replacementStartupWarnings: [MacStartupWarning] = []
         do {
+            // Encryption beta: a crash between the activation renames leaves
+            // the root missing with a complete backup next to it; restore
+            // deterministically BEFORE anything opens the library.
+            let encryptionRoot = resolvedLibraryURL
+            if LibraryEncryptionCoordinator.recoverInterruptedSwitch(root: encryptionRoot) {
+                replacementStartupWarnings.append(.pipeline(
+                    "An interrupted library encryption switch was rolled back. Your library was restored from its backup."
+                ))
+            }
             let request = MacPipelineStartRequest(
-                libraryURL: resolvedLibraryURL,
+                libraryURL: encryptionRoot,
                 // Der Provider wird je Job aufgeloest, nicht fest verdrahtet:
                 // ein finalASR-Job traegt seinen gepinnten Provider aus
                 // `meeting.transcriptionPlan`, und die Ausfuehrungsgrenze
@@ -1340,7 +1475,40 @@ final class AppModel {
                 for await meetingID in meetingChanges {
                     guard !Task.isCancelled else { return }
                     await self?.refreshMeeting(meetingID)
+                    // Keep the derived search index in delta step with the
+                    // library; fingerprint checks make repeats no-ops.
+                    if let library = self?.runtime?.library {
+                        try? await self?.searchIndex?.update(
+                            meetingID: meetingID,
+                            library: library
+                        )
+                    }
                 }
+            }
+            // First-record latency: pre-touch planned engines off the
+            // critical path (never downloads, never consent prompts).
+            if runtime != nil {
+                let plan = currentTranscriptionPlan()
+                Task { [transcriptionRegistry, locale] in
+                    await TranscriptionWarmup.preTouch(
+                        plan: currentTranscriptionPlan(),
+                        registry: transcriptionRegistry,
+                        locale: locale
+                    )
+                }
+            }
+            // Full-text search: heal/rebuild the derived index once per
+            // launch, off the critical path.
+            do {
+                let index = try MeetingSearchIndex(layout: runtime.library.layout)
+                searchIndex = index
+                Task { [library = runtime.library] in
+                    try? await index.rebuild(library: library)
+                }
+            } catch {
+                // The index is derived data: a failure to open it only
+                // degrades search, never the library itself.
+                Self.searchIndexLogger.error("Search index unavailable: \(error.localizedDescription, privacy: .public)")
             }
             // Nach dem Sweep: gestrandete Capture-Dateien harter Abstürze
             // als Originalspuren adoptieren und die Finalisierung einreihen.
@@ -1437,8 +1605,11 @@ final class AppModel {
             resolvedFallback: nil
         )
         // Nur eine von Speech angebotene konkrete Locale kann der Nutzer als
-        // Tatsache bestaetigen. "auto" und fremde Kennungen bleiben Ableitung.
-        guard requestedSelection.canBeConfirmed(in: availableLocales) else {
+        // Tatsache bestaetigen. Die Automatic-Option ist die eine Ausnahme:
+        // Der Sentinel ist selbst die ausdrueckliche Entscheidung (Opt-in),
+        // auch ohne Speech-Bestaetigung. Fremde Kennungen bleiben Ableitung.
+        guard requestedSelection.selectsAutomatic
+            || requestedSelection.canBeConfirmed(in: availableLocales) else {
             return
         }
         guard meetingTransferImportState == nil else {
@@ -1981,8 +2152,68 @@ final class AppModel {
             )
         }
     }
+    func startRecording(title overrideTitle: String? = nil) async {
+        await beginRecording(.newMeeting(title: overrideTitle))
+    }
 
-    func startRecording() async {
+    /// "Continue recording" (F7): nimmt WEITERE unveränderliche Spuren in
+    /// ein bestehendes Meeting auf. Angehangene Spuren laufen auf der
+    /// Meeting-Zeitachse nach der laengsten bestehenden Aufnahme weiter;
+    /// der Final-ASR-Lauf verschiebt sie in absolute Meeting-Zeit. Eine
+    /// hart abgestuerzte angehangene Aufnahme wird von Recovery genau wie
+    /// eine frische adoptiert.
+    func continueRecording(in meetingID: MeetingID) async {
+        await beginRecording(.existingMeeting(meetingID))
+    }
+
+    // MARK: - Recording-time template pinning (per-recording choice)
+
+    /// Catalog entries offered by the recording dock's template picker.
+    var recordingTemplateOptions: [ResolvedTemplateEntry] {
+        TemplateCatalogStore().load().resolvedEntries()
+    }
+
+    /// The global default's NAME, shown when nothing is pinned.
+    var recordingDefaultTemplateName: String {
+        TemplateCatalogStore().load().resolvedDefault().name
+    }
+
+    /// Name shown in the strip: pinned choice if any, else the default.
+    var recordingActiveTemplateName: String {
+        guard let id = recordingPinnedTemplateID,
+              let template = TemplateRenderRequest.template(for: id) else {
+            return recordingDefaultTemplateName
+        }
+        return template.name
+    }
+
+    /// Dock choice, also applied live while a NEW-meeting recording runs
+    /// (mid-recording switch): the pin on the created meeting updates so
+    /// subsequent report runs use the latest choice. Continue/append
+    /// recordings never write a pin.
+    func selectRecordingTemplate(_ templateID: String?) async {
+        guard !recordingContinuesExistingMeeting else { return }
+        recordingTemplateChoice.choose(templateID)
+        guard isRecording,
+              let meetingID = recordingMeetingID,
+              let runtime else { return }
+        do {
+            _ = try await runtime.library.setPinnedTemplate(
+                templateID,
+                for: meetingID
+            )
+            await refreshMeetings()
+        } catch {
+            report(AppModel.message("The template could not be pinned.", error))
+        }
+    }
+
+    private enum RecordingTarget {
+        case newMeeting(title: String?)
+        case existingMeeting(MeetingID)
+    }
+
+    private func beginRecording(_ target: RecordingTarget) async {
         guard canStartRecording,
               let runtime,
               recordingStartState.begin() else { return }
@@ -1993,6 +2224,7 @@ final class AppModel {
         // `canChangeTranscriptionModels`) darf diesen Lauf nicht mehr treffen.
         let plan = currentTranscriptionPlan()
         dismissNotice()
+        recordingTemplateChoice.beginNewMeeting()
 
         let micStatus = await recordingPermissionClient.requestMicrophone()
         recordingPermissions = RecordingAudioPermissionState(
@@ -2005,7 +2237,6 @@ final class AppModel {
             report("No microphone access. Allow it in System Settings under Privacy & Security.")
             return
         }
-
         do {
             let discovery = await refreshMicrophoneDiscovery()
             // Pin exactly the selected input when the user clicks Record.
@@ -2016,13 +2247,53 @@ final class AppModel {
                 mode: recordingMicrophoneMode,
                 discovery: discovery
             )
-            let title = Self.defaultMeetingTitle()
-            let meeting = try await runtime.library.createMeeting(
-                title: title,
-                status: .recording,
-                sourceLocale: try languageSelection.meetingSourceLocale(),
-                transcriptionPlan: plan
-            )
+            let appendedTimelineOffset: TimeInterval
+            let meeting: Meeting
+            switch target {
+            case let .newMeeting(titleOverride):
+                let title = titleOverride ?? Self.defaultMeetingTitle()
+                meeting = try await runtime.library.createMeeting(
+                    title: title,
+                    status: .recording,
+                    sourceLocale: try languageSelection.meetingSourceLocale(),
+                    transcriptionPlan: plan
+                )
+                // Template pinning is a NEW-meeting concept: the dock
+                // choice lands on the freshly created meeting. Not
+                // choosing leaves metadata untouched (identical flow as
+                // before the feature).
+                if let pinnedID = recordingPinnedTemplateID {
+                    _ = try? await runtime.library.setPinnedTemplate(
+                        pinnedID,
+                        for: meeting.id
+                    )
+                }
+                appendedTimelineOffset = 0
+            case let .existingMeeting(meetingID):
+                let existing = try await runtime.library.loadMeeting(meetingID)
+                // Continue/append NEVER overrides an existing note's
+                // template pin; the dock merely shows it.
+                recordingTemplateChoice.beginExistingMeeting(
+                    pinnedTemplateID: existing.metadata?.pinnedTemplateID
+                )
+                guard existing.status != .recording else {
+                    report("This meeting is already recording.")
+                    _ = recordingStartState.fail()
+                    return
+                }
+                // Die angehangene Aufnahme beginnt nach dem laengsten
+                // bestehenden Ende; Live-Zeilen und Final-ASR landen auf
+                // dieser absoluten Meeting-Zeit.
+                appendedTimelineOffset = AppendedTimeline.timelineEnd(
+                    of: try await runtime.library.listMediaAssets(
+                        meetingID: meetingID
+                    )
+                )
+                meeting = try await runtime.library.updateMeetingStatus(
+                    meetingID,
+                    to: .recording
+                )
+            }
             recordingStartState.didCreateMeeting(meeting.id)
             // Capture INNERHALB des Meeting-Ordners: nach kill -9 liegen die
             // Spuren in der Bibliothek und werden beim nächsten Start
@@ -2038,7 +2309,9 @@ final class AppModel {
                 ),
                 systemAudioSource: SystemAudioRecorder()
             )
-            try await session.start()
+            try await session.start(
+                silenceAutoStop: PlatformPreferences.silenceAutoStopConfig()
+            )
 
             recordingPermissions = RecordingAudioPermissionState(
                 microphone: micStatus,
@@ -2054,8 +2327,38 @@ final class AppModel {
             selectedMeetingID = meeting.id
             recordingStartedAt = Date()
             isRecording = true
+
+            // External-capture polling is pointless while we record; an
+            // episode fired now would be suppressed anyway.
+            pauseMeetingDetectionMonitor()
             liveTranscriptFeed = LiveTranscriptFeed()
             liveTranscriptRows = []
+
+            // F8: Bei Automatic startet die Live-Lane mit der zuletzt
+            // ausdruecklich gewaehlten Sprache (bzw. dem deterministischen
+            // Speech-Fallback). Der Detektor entscheidet einmalig und
+            // startet die Lanes neu; manuelle Wechsel waehrend der
+            // Aufnahme greifen ueber activeLiveLaneLocale.
+            let liveLaneLocale = Self.startLocale(
+                for: languageSelection,
+                lastUsedExplicitIdentifier: languagePreferences.lastUsedExplicitIdentifier,
+                availableLocales: availableLocales
+            )
+            activeLiveLaneLocale = liveLaneLocale
+            recordingLanguageStartLocaleIdentifier = liveLaneLocale.identifier
+            recordingDetectedLocaleIdentifier = nil
+            hasRestartedLiveLanesForDetectedLanguage = false
+            recordingLastSelectedLocaleIdentifier = nil
+            recordingManualLocaleIdentifier = nil
+            languageDetectionSession = languageSelection.selectsAutomatic
+                ? LanguageDetectionSession(
+                    startLocaleIdentifier: liveLaneLocale.identifier,
+                    isSupported: Self.detectedLanguageSupportPredicate(
+                        availableLocales
+                    ),
+                    now: recordingStartedAt ?? Date()
+                )
+                : nil
 
             for track in AudioTrack.allCases {
                 let stream = try await session.liveAudioEvents(for: track)
@@ -2067,7 +2370,9 @@ final class AppModel {
                     liveTasks.append(makeLiveTask(
                         track: track,
                         stream: stream,
-                        provider: provider
+                        provider: provider,
+                        locale: liveLaneLocale,
+                        timelineBaseOffset: appendedTimelineOffset
                     ))
                 } catch {
                     // Live-Transkription ist ein Komfortpfad: ein nicht
@@ -2170,11 +2475,26 @@ final class AppModel {
                 to: status
             )
         }
+        // F8: Ein entschiedenes Erkennungsergebnis wird mit dem Final-ASR-
+        // Job gepinnt (Start- und erkannte Sprache; die erkannte bleibt
+        // eine Schätzung mit origin .estimated, nie eine Nutzerwahl).
+        let languageDetectionPin = recordingDetectedLocaleIdentifier.map {
+            TranscriptionLanguageDetectionPin(
+                startLocaleIdentifier: recordingLanguageStartLocaleIdentifier
+                    ?? $0,
+                detectedLocaleIdentifier: $0
+            )
+        }
         for kind in followUp.jobKinds {
             do {
                 let meeting = try await runtime.library.loadMeeting(meetingID)
                 let job = kind == .finalASR
-                    ? Job.finalASR(for: meeting)
+                    ? Self.finalASRJob(
+                        for: meeting,
+                        languageDetection: languageDetectionPin,
+                        lastSelectedLocaleIdentifier:
+                            recordingLastSelectedLocaleIdentifier
+                    )
                     : Job(
                         kind: kind,
                         meetingID: meetingID,
@@ -2183,7 +2503,10 @@ final class AppModel {
                 try await runtime.jobStore.enqueue(job)
                 noteJobEnqueued(for: meetingID)
             } catch {
-                report(Self.message("Transcription could not be scheduled.", error))
+                // Ein fehlgeschlagener Folgelauf darf die Aufnahme nicht
+                // als gescheitert markieren: der Fehler wird gemeldet und
+                // der naechste Lauf versucht es erneut.
+                report(Self.message("A follow-up run could not be scheduled.", error))
             }
         }
         self.session = nil
@@ -2193,7 +2516,19 @@ final class AppModel {
         microphoneStatus = nil
         liveTranscriptFeed.clearVolatile()
         liveTranscriptRows = liveTranscriptFeed.rows
+        activeLiveLaneLocale = nil
+        languageDetectionSession = nil
+        hasRestartedLiveLanesForDetectedLanguage = false
+        recordingLastSelectedLocaleIdentifier = nil
+        recordingManualLocaleIdentifier = nil
+        // One-shot semantics: the dock choice applies to exactly one
+        // recording and returns to the global default afterwards.
+        recordingTemplateChoice.resetAfterStop()
         await refreshMeetings()
+
+        // Recording is over: external-capture detection becomes
+        // actionable again.
+        resumeMeetingDetectionMonitor()
     }
 
     private func abortRecordingCleanup() async {
@@ -2206,6 +2541,16 @@ final class AppModel {
         recordingMeetingID = nil
         recordingStartedAt = nil
         microphoneStatus = nil
+        activeLiveLaneLocale = nil
+        languageDetectionSession = nil
+        hasRestartedLiveLanesForDetectedLanguage = false
+        recordingLastSelectedLocaleIdentifier = nil
+        recordingManualLocaleIdentifier = nil
+        recordingTemplateChoice.resetAfterStop()
+
+        // Recording is over: external-capture detection becomes
+        // actionable again.
+        resumeMeetingDetectionMonitor()
     }
 
     func setMicrophonePaused(_ paused: Bool) async {
@@ -2217,12 +2562,21 @@ final class AppModel {
     /// Verbindet den Live-Audiostrom einer Spur mit einer SpeechAnalyzer-
     /// Sitzung. Die Sitzung entsteht erst mit dem ersten Puffer, weil erst
     /// dieser das tatsächliche Format kennt.
+    ///
+    /// - Parameters:
+    ///   - locale: Start-Sprache der Lane (bei Automatic die letzte
+    ///     ausdrückliche Wahl bzw. der deterministische Fallback).
+    ///   - timelineBaseOffset: Absoluter Meeting-Zeitpunkt des Aufnahme-
+    ///     starts; bei angehangenen Aufnahmen nach dem bestehenden Ende.
+    ///     Jedes Ereignis und jede Finalausgabe landet auf
+    ///     Basis-Offset + lokaler Segmentzeit.
     private func makeLiveTask(
         track: AudioTrack,
         stream: LiveAudioEventStream,
-        provider: any TranscriptionProvider
+        provider: any TranscriptionProvider,
+        locale: Locale,
+        timelineBaseOffset: TimeInterval = 0
     ) -> Task<TranscriptOutput?, Never> {
-        let locale = self.locale
         // Detached: der Puffer-Konsum darf nicht die MainActor-Isolation des
         // Aufrufers erben, sonst läuft die Audioverarbeitung über den Main
         // Thread.
@@ -2230,18 +2584,40 @@ final class AppModel {
             var liveSession: (any LiveTranscriptionSession)?
             var eventTask: Task<Void, Never>?
             var segmentOffset: TimeInterval = 0
+            var activeLocale = locale
             var outputs: [TranscriptOutput] = []
             do {
                 for await audioEvent in stream.stream {
                     switch audioEvent {
                     case let .buffer(owned):
                         let buffer = owned.buffer
+                        // F8-Restart-Hook: Hat die automatische Erkennung
+                        // entschieden, meldet das Modell den Wunsch-Locale;
+                        // weicht er ab, endet die laufende Sitzung sauber
+                        // (wie bei einem Capture-Gap) und der nächste
+                        // Puffer erzeugt eine neue mit dem erkannten Locale.
+                        if let desired = await self?.desiredLiveLaneLocale(),
+                           desired != activeLocale {
+                            if let liveSession {
+                                let output = try await liveSession.finish()
+                                await eventTask?.value
+                                outputs.append(
+                                    output.shifted(
+                                        by: timelineBaseOffset + segmentOffset
+                                    )
+                                )
+                            }
+                            liveSession = nil
+                            eventTask = nil
+                            activeLocale = desired
+                            await self?.clearLiveVolatileText(for: track)
+                        }
                         if liveSession == nil {
                             let created = try await provider.liveSession(
                                 format: AudioFormat(buffer.format),
-                                locale: locale
+                                locale: activeLocale
                             )
-                            let offset = segmentOffset
+                            let offset = timelineBaseOffset + segmentOffset
                             liveSession = created
                             eventTask = Task { [weak self] in
                                 for await event in created.events {
@@ -2257,7 +2633,7 @@ final class AppModel {
                         if let liveSession {
                             let output = try await liveSession.finish()
                             await eventTask?.value
-                            outputs.append(output.shifted(by: segmentOffset))
+                            outputs.append(output.shifted(by: timelineBaseOffset + segmentOffset))
                         }
                         liveSession = nil
                         eventTask = nil
@@ -2269,7 +2645,7 @@ final class AppModel {
                 if let liveSession {
                     let output = try await liveSession.finish()
                     await eventTask?.value
-                    outputs.append(output.shifted(by: segmentOffset))
+                    outputs.append(output.shifted(by: timelineBaseOffset + segmentOffset))
                 }
                 guard !outputs.isEmpty else { return nil }
                 return TranscriptOutput(
@@ -2286,6 +2662,7 @@ final class AppModel {
 
     private func clearLiveVolatileText(for track: AudioTrack) {
         liveTranscriptFeed.clearVolatile(for: Self.channel(for: track))
+        languageDetectionSession?.clearVolatile()
         liveTranscriptRows = liveTranscriptFeed.rows
     }
 
@@ -2297,8 +2674,151 @@ final class AppModel {
     }
 
     func applyLiveEvent(_ event: TranscriptionEvent, track: AudioTrack) {
+        consumeEventForLanguageDetection(event)
         liveTranscriptFeed.apply(event, for: Self.channel(for: track))
         liveTranscriptRows = liveTranscriptFeed.rows
+    }
+
+    /// Sprache, mit der die Live-Lanes gerade transkribieren sollen. Die
+    /// detached Live-Tasks fragen sie pro Puffer ab; eine Aenderung durch
+    /// die erkannte Sprache startet ihre Sitzungen beim nächsten Puffer neu.
+    func desiredLiveLaneLocale() -> Locale {
+        activeLiveLaneLocale ?? locale
+    }
+
+    /// Fuettert finalisierten und vorlaeufigen Live-Text in den automatischen
+    /// Sprachdetektor. Eine entschiedene, von der Start-Sprache abweichende
+    /// Erkennung startet die Lanes GENAU EINMAL mit der erkannten Sprache;
+    /// alles Unklare behält die Start-Sprache stillschweigend. Text wird nur
+    /// gezaehlt (Funktionswort-Profile), niemals geloggt.
+    private func consumeEventForLanguageDetection(
+        _ event: TranscriptionEvent
+    ) {
+        guard !hasRestartedLiveLanesForDetectedLanguage,
+              var session = languageDetectionSession else { return }
+        let outcome: LanguageDetectionSession.Outcome
+        switch event {
+        case let .final(output):
+            outcome = session.appendFinalized(
+                output.blocks.map(\.text).joined(separator: "\n")
+            )
+        case let .volatile(output):
+            outcome = session.replaceVolatile(
+                output.blocks.map(\.text).joined(separator: "\n")
+            )
+        }
+        languageDetectionSession = session
+        guard case let .detected(code) = outcome else { return }
+        restartLiveLanesForDetectedLanguage(code)
+    }
+
+    private func restartLiveLanesForDetectedLanguage(_ code: String) {
+        hasRestartedLiveLanesForDetectedLanguage = true
+        // Der Detektor liefert einen Sprachcode ("de"); erst die Auswahl
+        // gegen Speechs Angebot mappt ihn auf eine konkrete Locale.
+        let resolved = LocaleResolver.select(
+            requested: Locale(identifier: code),
+            supported: availableLocales
+        )
+        recordingDetectedLocaleIdentifier = resolved?.identifier ?? code
+        recordingLastSelectedLocaleIdentifier = resolved?.identifier ?? code
+        if let resolved, resolved != desiredLiveLaneLocale() {
+            activeLiveLaneLocale = resolved
+        }
+    }
+
+    /// Start-Sprache einer Aufnahme: Bei Automatic die zuletzt ausdruecklich
+    /// gewaehlte Sprache, solange Speech sie noch anbietet, sonst Speechs
+    /// deterministischer Fallback. Ohne Automatic bleibt die gewaehlte
+    /// (aufgeloeste) Sprache.
+    static func startLocale(
+        for selection: TranscriptionLanguageSelection,
+        lastUsedExplicitIdentifier: String?,
+        availableLocales: [Locale]
+    ) -> Locale {
+        let fallback = selection.locale
+        guard selection.selectsAutomatic else { return fallback }
+        guard let identifier = AutomaticStartLanguageResolver
+            .startLocaleIdentifier(
+                lastUsedExplicit: lastUsedExplicitIdentifier,
+                supported: availableLocales
+            )
+        else { return fallback }
+        return Locale(identifier: identifier)
+    }
+
+    /// Unterstuetzungspraedikat fuer erkannte Sprachcodes: Nur Sprachen,
+    /// die Speech auch transkribieren kann, loesen einen Lane-Restart aus.
+    static func detectedLanguageSupportPredicate(
+        _ locales: [Locale]
+    ) -> @Sendable (String) -> Bool {
+        let supportedLanguageCodes = Set(locales.compactMap {
+            $0.language.languageCode?.identifier.lowercased()
+        })
+        return { code in
+            supportedLanguageCodes.contains(code.lowercased())
+        }
+    }
+
+    // MARK: - Mid-recording language switch (F11)
+
+    /// Whether the RecordingStrip language picker may act right now.
+    var canChangeRecordingLanguage: Bool {
+        isRecording && !isStartingRecording
+    }
+
+    /// What the mid-recording picker shows as the current selection: the
+    /// latest manual pick wins over a decisive detection, otherwise the
+    /// locale the live lanes actually run with (the detected-so-far state
+    /// while Automatic is selected).
+    var recordingLanguageSelectionID: String {
+        recordingManualLocaleIdentifier
+            ?? recordingDetectedLocaleIdentifier
+            ?? desiredLiveLaneLocale().identifier
+    }
+
+    /// Menu label for the picker. Under Automatic it names the current best
+    /// guess until the user overrides manually.
+    var recordingLanguagePickerTitle: String {
+        let name = localizedLanguageName(
+            Locale(identifier: recordingLanguageSelectionID)
+        )
+        guard transcriptionLanguageSelection.selectsAutomatic,
+              recordingManualLocaleIdentifier == nil else { return name }
+        return name + " (" + String(localized: "automatic") + ")"
+    }
+
+    /// Manual language switch DURING a recording (F11). Unlimited by design:
+    /// unlike automatic detection, manual picks never pass a restart-once
+    /// guard. The choice becomes the desired live-lane locale, so each lane's
+    /// next buffer drains its volatile content and restarts with the new
+    /// locale; already finalized rows keep their original language.
+    ///
+    /// Pending automatic detection is cancelled for the rest of this
+    /// recording (`languageDetectionSession = nil`), so detection and manual
+    /// override cannot fight: an undecided detector stays silent (keptStart)
+    /// and the manual choice drives both live lanes and the final ASR job.
+    /// The app-wide persisted preference is deliberately untouched; the
+    /// switch applies to this recording only.
+    func selectRecordingLanguage(_ identifier: String) {
+        guard canChangeRecordingLanguage else { return }
+        let requested = Locale(identifier: identifier)
+        guard !LocaleResolver.identifiersAreEquivalent(
+            requested,
+            .transcriptionAutomatic
+        ) else { return }
+        // Resolve against Speech's offer exactly like a detected code would
+        // be; an unsupported identifier cannot drive a live session.
+        guard let resolved = LocaleResolver.select(
+            requested: requested,
+            supported: availableLocales
+        ) else { return }
+        recordingManualLocaleIdentifier = resolved.identifier
+        recordingLastSelectedLocaleIdentifier = resolved.identifier
+        if resolved != desiredLiveLaneLocale() {
+            activeLiveLaneLocale = resolved
+        }
+        languageDetectionSession = nil
     }
 
     private func reportLiveError(_ error: any Error, track: AudioTrack) {
@@ -2428,14 +2948,17 @@ final class AppModel {
         ))
     }
 
-    /// Laengste Originalspur des Meetings. Mikro und System laufen parallel,
-    /// deshalb das Maximum und nicht die Summe.
+    /// Ende der Meeting-Zeitachse. Mikro und System laufen innerhalb einer
+    /// Aufnahme parallel (das Maximum der Sitzung), angehangene Aufnahmen
+    /// verlaengern die Zeitachse dagegen additiv - deshalb das Timeline-
+    /// Ende und nicht die laengste Einzelspur.
     func duration(for meetingID: MeetingID) async -> TimeInterval? {
         guard let runtime else { return nil }
         let assets = (try? await runtime.library.listMediaAssets(
             meetingID: meetingID
         )) ?? []
-        return assets.map(\.duration).max()
+        guard !assets.isEmpty else { return nil }
+        return AppendedTimeline.timelineEnd(of: assets)
     }
 
     func jobs(for meetingID: MeetingID) async -> [StenoDomain.Job] {
@@ -2455,5 +2978,41 @@ final class AppModel {
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
         return String(localized: "Recording \(formatter.string(from: Date()))")
+    }
+
+    /// Final-ASR job for a finished recording. Precedence for the pinned
+    /// locale (F11): the LAST mid-recording language decision - a manual
+    /// RecordingStrip pick or a decisive automatic detection. Text spoken
+    /// before a switch was recognized in its ORIGINAL language; like the
+    /// legacy behaviour, the final run re-transcribes in one language and
+    /// users can Transcribe Again afterwards. The detection pin (start plus
+    /// estimated locale) is still carried when present so a rerun can
+    /// reproduce the decision context; without any mid-recording decision,
+    /// only an explicitly chosen meeting source locale pins.
+    static func finalASRJob(
+        for meeting: Meeting,
+        languageDetection: TranscriptionLanguageDetectionPin?,
+        lastSelectedLocaleIdentifier: String?
+    ) -> Job {
+        if let lastSelectedLocaleIdentifier {
+            return .finalASR(
+                meetingID: meeting.id,
+                providerID: meeting.transcriptionPlan?.finalProviderID ?? .apple,
+                localeIdentifier: lastSelectedLocaleIdentifier,
+                processingGenerationID: meeting.processingGenerationID,
+                languageDetection: languageDetection
+            )
+        }
+        if let languageDetection,
+           let detected = languageDetection.detectedLocaleIdentifier {
+            return .finalASR(
+                meetingID: meeting.id,
+                providerID: meeting.transcriptionPlan?.finalProviderID ?? .apple,
+                localeIdentifier: detected,
+                processingGenerationID: meeting.processingGenerationID,
+                languageDetection: languageDetection
+            )
+        }
+        return .finalASR(for: meeting)
     }
 }

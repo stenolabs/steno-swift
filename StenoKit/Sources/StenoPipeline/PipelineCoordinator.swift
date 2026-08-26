@@ -111,6 +111,11 @@ public actor PipelineCoordinator {
     private var stopping = false
     private var activePhase: ActivePhase?
     private var runtimeFailure: PipelineError?
+    /// Set while a final-ASR job's transcription stage fails with something
+    /// other than cancellation or model-missing. Read and reset by the
+    /// failure handler to decide the automatic one-shot fallback; jobs run
+    /// one at a time on this actor, so a single flag is sufficient.
+    private var lastFinalASREngineRunFailed = false
 
     private enum ActivePhase {
         case processing
@@ -628,7 +633,7 @@ public actor PipelineCoordinator {
 
     private func executeFinalASR(_ job: Job) async throws {
         try await setMeetingStatus(.processing, for: job)
-        let effectiveLocale = job.localeIdentifier.map(Locale.init(identifier:)) ?? locale
+        let effectiveLocale = Self.finalASRLocale(for: job, fallback: locale)
         let providerID = job.transcriptionProviderID ?? .apple
 
         if let committed = try withCurrentMeetingGeneration(for: job, { transaction in
@@ -652,6 +657,10 @@ public actor PipelineCoordinator {
             return
         }
 
+        // Fallback provenance for this job's run, if this job was created by
+        // the automatic fallback. Computed outside the mutation closure so
+        // the closure stays synchronous.
+        let fallbackProvenance = await fallbackSourceRunID(for: job)
         let prepared = try withCurrentMeetingGeneration(for: job) { transaction in
             let assets = try library.listMediaAssets(
                 meetingID: job.meetingID,
@@ -664,7 +673,12 @@ public actor PipelineCoordinator {
             guard !processableAssets.isEmpty else {
                 throw PipelineError.noAudioSamples(job.meetingID)
             }
-            let selectedProviders = try processableAssets.map { asset in
+            // Angehangene Aufnahmen ("continue recording") laufen in
+            // chronologischer Reihenfolge und landen auf der absoluten
+            // Meeting-Zeitachse: jede Spur erhaelt den Offset ihrer Sitzung.
+            let orderedAssets = AppendedTimeline.processingOrder(processableAssets)
+            let trackOffsets = AppendedTimeline.offsets(for: orderedAssets)
+            let selectedProviders = try orderedAssets.map { asset in
                 try transcriptionProviderResolver(providerID, asset.kind)
             }
             let descriptor = selectedProviders[0].descriptor
@@ -672,7 +686,7 @@ public actor PipelineCoordinator {
                 throw PipelineError.inconsistentEngineDescriptors
             }
             let binding = try PipelineMediaBinder.bind(
-                assets: processableAssets,
+                assets: orderedAssets,
                 meetingID: job.meetingID,
                 layout: library.layout,
                 transaction: transaction,
@@ -687,9 +701,11 @@ public actor PipelineCoordinator {
                 kind: .finalASR,
                 engine: descriptor,
                 localeIdentifier: effectiveLocale.identifier,
+                languageDetection: job.languageDetection,
                 status: .running,
                 createdAt: job.createdAt,
-                startedAt: Date()
+                startedAt: Date(),
+                originalRunID: fallbackProvenance
             )
             do {
                 try runStore.prepare(run, for: job, transaction: transaction)
@@ -698,11 +714,17 @@ public actor PipelineCoordinator {
                 try binding.close(transaction: transaction)
                 throw operationError
             }
-            return (run: run, trackProviders: trackProviders, binding: binding)
+            return (
+                run: run,
+                trackProviders: trackProviders,
+                binding: binding,
+                trackOffsets: trackOffsets
+            )
         }
         var run = prepared.run
         let trackProviders = prepared.trackProviders
         let binding = prepared.binding
+        let trackOffsets = prepared.trackOffsets
 
         var tracks: [FinalASRTrackResult] = []
         var inferenceError: (any Error)?
@@ -718,22 +740,37 @@ public actor PipelineCoordinator {
                 tracks.append(FinalASRTrackResult(
                     assetID: input.asset.id,
                     assetKind: input.asset.kind,
-                    output: output
+                    output: Self.shiftedToMeetingTime(
+                        output,
+                        offset: trackOffsets[input.asset.id] ?? 0
+                    )
                 ))
+                // Cancellation must surface between tracks even when a
+                // provider blocks without honoring task cancellation.
+                try Task.checkCancellation()
             }
-            try Task.checkCancellation()
         } catch {
             inferenceError = error
         }
         try binding.close()
-        if let inferenceError { throw inferenceError }
+        if let inferenceError {
+            lastFinalASREngineRunFailed =
+                FinalASRFallback.isEngineProviderError(inferenceError)
+            throw inferenceError
+        }
 
         run.status = .finished
         run.finishedAt = Date()
+        let encodedOffsets = trackOffsets.isEmpty ? nil : Dictionary(
+            uniqueKeysWithValues: trackOffsets.map {
+                ($0.key.description, $0.value)
+            }
+        )
         let artifact = FinalASRArtifact(
             jobID: job.id,
             revisionID: StablePipelineIdentifiers.revisionID(for: job),
-            tracks: tracks
+            tracks: tracks,
+            trackOffsets: encodedOffsets
         )
         activePhase = .committing
         try withCurrentMeetingGeneration(for: job) { transaction in
@@ -749,6 +786,30 @@ public actor PipelineCoordinator {
             for: job,
             committed: CommittedRun(run: run, artifact: artifact)
         )
+    }
+
+    /// Shifts a provider result onto the absolute meeting timeline. A zero
+    /// offset keeps the output untouched so single-session meetings behave
+    /// exactly as before append-to-meeting existed.
+    private static func shiftedToMeetingTime(
+        _ output: TranscriptOutput,
+        offset: TimeInterval
+    ) -> TranscriptOutput {
+        guard offset != 0 else { return output }
+        return output.shifted(by: offset)
+    }
+
+    /// Sprache eines Final-ASR-Laufs: eine entschiedene automatische
+    /// Erkennung gewinnt, danach der gepinnte Job-Wert, sonst der
+    /// Koordinator-Fallback.
+    static func finalASRLocale(
+        for job: Job,
+        fallback: Locale
+    ) -> Locale {
+        if let detected = job.languageDetection?.detectedLocaleIdentifier {
+            return Locale(identifier: detected)
+        }
+        return job.localeIdentifier.map(Locale.init(identifier:)) ?? fallback
     }
 
     private func commitFinalASRRevision(
@@ -977,11 +1038,16 @@ public actor PipelineCoordinator {
             guard let diarization = diarizationByAsset[sourceTrack.assetID] else {
                 throw PipelineError.missingDiarizationTrack(sourceTrack.assetID)
             }
+            // Der ASR-Lauf schreibt absolute Meeting-Zeiten (angehangene
+            // Aufnahmen inklusive). Die Diarisierung rechnet pro Spur mit
+            // lokaler Zeit null; derselbe Offset vor der Ausrichtung
+            // bringt beide in dieselbe Zeitachse.
+            let offset = source.trackOffsets?[sourceTrack.assetID.description] ?? 0
             let segments = diarization.segments.map {
                 DiarizationAlignmentSegment(
                     clusterID: $0.clusterID,
-                    start: $0.start,
-                    end: $0.end
+                    start: $0.start + offset,
+                    end: $0.end + offset
                 )
             }
             let turns = TranscriptDiarizationAligner.align(
@@ -1297,10 +1363,21 @@ public actor PipelineCoordinator {
             }
             return
         }
-        await persistFailure(error, for: job)
+        // Automatic one-shot engine fallback for final ASR. Engaged before
+        // the failure is persisted so the queued replacement keeps the
+        // meeting in `.processing` and the failed run records provenance.
+        var fallback: FinalASRFallback.Engagement?
+        if job.kind == .finalASR, lastFinalASREngineRunFailed {
+            fallback = await engageFinalASRFallback(for: job, error: error)
+        }
+        await persistFailure(error, for: job, fallback: fallback)
     }
 
-    private func persistFailure(_ error: any Error, for job: Job) async {
+    private func persistFailure(
+        _ error: any Error,
+        for job: Job,
+        fallback: FinalASRFallback.Engagement? = nil
+    ) async {
         do {
             guard try importedGenerationIsCurrent(job) else {
                 await cancelJobForGenerationChange(job)
@@ -1310,8 +1387,13 @@ public actor PipelineCoordinator {
             runtimeFailure = .persistenceFailure(String(describing: error))
             return
         }
-        let message = (error as? LocalizedError)?.errorDescription
+        var message = (error as? LocalizedError)?.errorDescription
             ?? String(describing: error)
+        if let fallback {
+            // Distinct message for the job-failure notice channel: the user
+            // sees that a fallback run is already on its way.
+            message = fallback.noticeMessage
+        }
         let runID = runStore.runID(for: job)
         var failedRun = ProcessingRun(
             id: runID,
@@ -1327,7 +1409,8 @@ public actor PipelineCoordinator {
             finishedAt: Date(),
             errorMessage: message,
             textModelDiagnostic: (error as? any TextModelDiagnosticProviding)?
-                .textModelDiagnostic
+                .textModelDiagnostic,
+            supersededBy: fallback?.fallbackRunID
         )
         if let data = try? Data(contentsOf: runStore.temporaryDirectory(for: job)
             .appendingPathComponent("run.json")),
@@ -1336,6 +1419,9 @@ public actor PipelineCoordinator {
             failedRun.status = .failed
             failedRun.finishedAt = Date()
             failedRun.errorMessage = message
+            if let fallback {
+                failedRun.supersededBy = fallback.fallbackRunID
+            }
             failedRun.textModelDiagnostic = (error as? any TextModelDiagnosticProviding)?
                 .textModelDiagnostic
         }
@@ -1402,6 +1488,70 @@ public actor PipelineCoordinator {
         if !persistenceErrors.isEmpty {
             runtimeFailure = .persistenceFailure(persistenceErrors.joined(separator: "; "))
         }
+    }
+
+    /// Run of the failed original job when `job` was created by the
+    /// automatic fallback, else nil. Detected by the deterministic fallback
+    /// ID relation against the current store listing.
+    private func fallbackSourceRunID(for job: Job) async -> RunID? {
+        let jobs = (try? await jobStore.list()) ?? []
+        guard let source = jobs.first(where: {
+            $0.id != job.id && FinalASRFallback.fallbackJobID(after: $0) == job.id
+        }) else { return nil }
+        return runStore.runID(for: source)
+    }
+
+    /// Decides and performs the automatic one-shot engine fallback for a
+    /// failed final-ASR job. Returns the engagement for failure provenance,
+    /// or nil when the job must remain plainly failed (model-missing errors,
+    /// cancellation handled earlier, Parakeet failures, an unready
+    /// alternative, or an already spent fallback for this generation).
+    private func engageFinalASRFallback(
+        for job: Job,
+        error: any Error
+    ) async -> FinalASRFallback.Engagement? {
+        guard !stopping else { return nil }
+        let jobs = (try? await jobStore.list()) ?? []
+        var alternativeReady = false
+        if let alternative = FinalASRFallback.alternativeProvider(
+            for: job.transcriptionProviderID
+        ) {
+            // Resolution success is the pipeline's own notion of
+            // "installed and ready": the same gate the execution path uses.
+            alternativeReady = [MediaAsset.Kind.micTrack, .systemTrack, .imported]
+                .allSatisfy { assetKind in
+                    (try? transcriptionProviderResolver(alternative, assetKind)) != nil
+                }
+        }
+        guard case .eligible(let alternative) = FinalASRFallback.eligibility(
+            error: error,
+            job: job,
+            jobs: jobs,
+            alternativeProviderIsReady: alternativeReady,
+            layout: library.layout
+        ) else { return nil }
+        let fallbackJob = FinalASRFallback.makeFallbackJob(
+            for: job,
+            alternative: alternative
+        )
+        do {
+            try await jobStore.ensureEnqueued(fallbackJob)
+        } catch {
+            // Without the replacement the original failure stands as-is;
+            // this is not a pipeline-fatal persistence problem.
+            return nil
+        }
+        return FinalASRFallback.Engagement(
+            originalRunID: runStore.runID(for: job),
+            fallbackRunID: StablePipelineIdentifiers.runID(
+                for: fallbackJob.id,
+                kind: .finalASR
+            ),
+            noticeMessage: FinalASRFallback.noticeMessage(
+                originalEngineName: defaultEngineDescriptor(for: job).name,
+                alternative: alternative
+            )
+        )
     }
 
     private func failureReason(

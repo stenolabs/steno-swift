@@ -211,7 +211,15 @@ enum MediaAssetRecovery {
                 kind: kind,
                 sampleRate: sampleRate,
                 duration: Double(audioFile.length) / sampleRate,
-                provenanceKey: "\(meetingID)/\(kind.rawValue)",
+                provenanceKey: RecordedTrackProvenanceKey.make(
+                    meetingID: meetingID,
+                    kind: kind,
+                    sequence: RecordedTrackProvenanceKey.nextSequence(
+                        for: meetingID,
+                        kind: kind,
+                        in: existingAssets
+                    )
+                ),
                 fileName: candidate.url.lastPathComponent
             )
             let metadataURL = layout.mediaMetadata(meetingID, assetID: assetID)
@@ -243,13 +251,18 @@ enum MediaAssetRecovery {
         let recordingIDs = Set(recordingAssets.map(\.id))
         let recordingKinds = Set(recordingAssets.map(\.kind))
         let recordingFileNames = Set(recordingAssets.map(\.fileName))
+        // Angehangene Aufnahmen besitzen mehrere Spuren je Typ; nur IDs und
+        // Dateinamen muessen eindeutig bleiben.
         guard recordingIDs.count == recordingAssets.count,
-              recordingKinds.count == recordingAssets.count,
               recordingFileNames.count == recordingAssets.count
         else { return nil }
         guard recordingAssets.allSatisfy({ asset in
             asset.meetingID == meetingID
-                && asset.provenanceKey == "\(meetingID)/\(asset.kind.rawValue)"
+                && RecordedTrackProvenanceKey.sequence(
+                    of: asset.provenanceKey,
+                    meetingID: meetingID,
+                    kind: asset.kind
+                ) != nil
                 && isRegularBackingFile(
                     for: asset,
                     meetingID: meetingID,
@@ -257,8 +270,13 @@ enum MediaAssetRecovery {
                 )
         }) else { return nil }
         if let encodedKind {
-            return recordingKinds.contains(encodedKind) ? nil : encodedKind
+            // Selbstbeschreibende Kandidaten tragen ihren Typ im
+            // Dateinamen; dass es den Typ schon gibt, ist bei angehangenen
+            // Aufnahmen normal und kein Grund zur Verweigerung.
+            return encodedKind
         }
+        // Namenslose Alt-Dateien gab es hoechstens einmal je Typ; die
+        // Herleitung gilt nur, solange genau ein Typ uebrig bleibt.
         let remainingKinds = Set([MediaAsset.Kind.micTrack, .systemTrack])
             .subtracting(recordingKinds)
         return remainingKinds.count == 1 ? remainingKinds.first : nil

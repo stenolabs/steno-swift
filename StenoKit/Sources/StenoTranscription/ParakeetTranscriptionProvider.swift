@@ -63,6 +63,10 @@ public struct ParakeetTranscriptionProvider: TranscriptionProvider {
         experimentalFeatures = .production
     }
 
+    /// Directory the launch-time warmup verifies and loads from; `nil` for
+    /// the engine-injected test double, which keeps no files on disk.
+    var warmupModelDirectory: URL? { modelDirectory }
+
     public var descriptor: EngineDescriptor {
         EngineDescriptor(
             name: "FluidAudio Parakeet TDT",

@@ -276,7 +276,7 @@ struct MeetingPresentationTests {
 
     @Test("content observation uses only lightweight change identities")
     @MainActor
-    func contentObservationLoadsPointerModelsAndJobs() async {
+    func contentObservationLoadsPointerModelsStatusAndJobs() async {
         actor Probe {
             var revisionWasRead = false
 
@@ -288,17 +288,58 @@ struct MeetingPresentationTests {
             func readModelsReady() -> Bool? {
                 revisionWasRead ? true : nil
             }
+
+            func readState() -> MeetingDiarizationJobState {
+                .ready
+            }
         }
         let probe = Probe()
 
         let observation = await MeetingContentObservation.load(
             currentRevisionPointer: { await probe.readRevisionPointer() },
             diarizationModelsReady: { await probe.readModelsReady() },
+            diarizationState: { await probe.readState() },
             jobs: { [] }
         )
 
         #expect(observation.currentRevisionPointer != nil)
         #expect(observation.diarizationModelsReady == true)
+        #expect(observation.diarizationState == .ready)
+    }
+
+    @Test("content observation reloads when an existing status leaves unavailable")
+    func contentObservationReloadsUnavailableToReadyAndModelsRequired() {
+        let pointer = CurrentRevisionPointer(currentRevisionID: RevisionID())
+        let initial = MeetingContentObservation(
+            currentRevisionPointer: pointer,
+            diarizationModelsReady: true,
+            jobs: [],
+            diarizationState: .unavailable
+        )
+
+        // Without any other change, the same observation must not spin the
+        // reload loop.
+        #expect(!initial.requiresReload(after: initial))
+
+        // A status that flips while pointer, readiness, and jobs stay
+        // identical must still trigger the same full reload a fresh meeting
+        // open performs - this is the missed .unavailable -> (.ready |
+        // .modelsRequired) transition.
+        let ready = MeetingContentObservation(
+            currentRevisionPointer: pointer,
+            diarizationModelsReady: true,
+            jobs: [],
+            diarizationState: .ready
+        )
+        #expect(ready.requiresReload(after: initial))
+
+        let modelsRequired = MeetingContentObservation(
+            currentRevisionPointer: pointer,
+            diarizationModelsReady: true,
+            jobs: [],
+            diarizationState: .modelsRequired
+        )
+        #expect(modelsRequired.requiresReload(after: initial))
     }
 
     @Test("speaker separation action routes missing models to audio readiness")

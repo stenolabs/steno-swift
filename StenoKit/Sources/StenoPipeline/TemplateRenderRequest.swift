@@ -1,3 +1,4 @@
+import Foundation
 import StenoDomain
 import StenoLibrary
 
@@ -102,12 +103,75 @@ public enum TemplateRenderRequest {
         }
     }
 
-    static func template(for id: String) -> Template? {
-        switch id {
-        case Template.meetingMinutes.id:
-            .meetingMinutes
-        default:
-            nil
+    /// Resolves the renderable definition for a template id: locked
+    /// built-ins (with a user override applied where one exists) and
+    /// user-defined custom templates from the catalog. The catalog lives in
+    /// UserDefaults so both enqueue-time validation here and run-time
+    /// resolution in the coordinator see the same definitions without any
+    public static func template(
+        for id: String,
+        defaults: UserDefaults = .standard
+    ) -> Template? {
+        TemplateCatalogStore(defaults: defaults).load().resolve(id: id)
+    }
+
+    /// Report-run template precedence for a single meeting:
+    /// explicit per-run picker choice > meeting pin (recording-time
+    /// choice) > catalog default > Meeting Minutes. A pinned id that no
+    /// longer resolves (deleted custom template) falls through to the
+    /// catalog default instead of failing the run.
+    public static func resolveReportTemplateID(
+        explicit: String?,
+        pinned: String?,
+        defaults: UserDefaults = .standard
+    ) -> String {
+        let catalog = TemplateCatalogStore(defaults: defaults).load()
+        if let explicit, catalog.resolve(id: explicit) != nil {
+            return explicit
         }
+        if let pinned, catalog.resolve(id: pinned) != nil {
+            return pinned
+        }
+        return catalog.resolvedDefault().id
+    }
+}
+
+/// One-shot per-recording template choice for the recording dock:
+///
+/// - `choose` records the dock selection (nil = global default flow,
+///   byte-identical behavior to before pinning existed).
+/// - A NEW-meeting recording carries the choice onto the created meeting;
+///   a mid-recording switch re-pins live via another `choose`.
+/// - Continue/append recordings adopt the note's EXISTING pin for display
+///   but never override it (`choose` becomes a no-op).
+/// - `resetAfterStop` implements the one-shot semantics: the choice
+///   applies to exactly one recording, then falls back to the default.
+public struct RecordingTemplateChoice: Equatable, Sendable {
+    public private(set) var pinnedTemplateID: String?
+    public private(set) var continuesExistingMeeting = false
+
+    public init() {}
+
+    /// Dock selection; ignored entirely for continue/append recordings.
+    public mutating func choose(_ templateID: String?) {
+        guard !continuesExistingMeeting else { return }
+        pinnedTemplateID = templateID
+    }
+
+    /// Start of a fresh recording: any earlier leftover choice applies.
+    public mutating func beginNewMeeting() {
+        continuesExistingMeeting = false
+    }
+
+    /// Continue/append: show the note's existing pin, never override it.
+    public mutating func beginExistingMeeting(pinnedTemplateID: String?) {
+        continuesExistingMeeting = true
+        self.pinnedTemplateID = pinnedTemplateID
+    }
+
+    /// Stop (or abort): the choice was consumed by this one recording.
+    public mutating func resetAfterStop() {
+        pinnedTemplateID = nil
+        continuesExistingMeeting = false
     }
 }

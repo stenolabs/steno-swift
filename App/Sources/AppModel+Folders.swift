@@ -35,6 +35,34 @@ extension AppModel {
         }
     }
 
+    /// Sets or clears a folder's sidebar color token.
+    func setFolderColor(
+        _ colorToken: FolderColorToken?,
+        of folderID: FolderID
+    ) async {
+        guard let folderStore else { return }
+        do {
+            _ = try await folderStore.setColorToken(colorToken, of: folderID)
+            await refreshMeetings()
+        } catch {
+            report(AppModel.message("The folder color could not be changed.", error))
+        }
+    }
+
+    /// Sets or clears a folder's sidebar SF Symbol icon.
+    func setFolderIcon(
+        _ icon: FolderIcon?,
+        of folderID: FolderID
+    ) async {
+        guard let folderStore else { return }
+        do {
+            _ = try await folderStore.setIcon(icon, of: folderID)
+            await refreshMeetings()
+        } catch {
+            report(AppModel.message("The folder icon could not be changed.", error))
+        }
+    }
+
     /// Loescht den Ordner und raeumt die Zuordnung an seinen Meetings ab.
     /// Die Meetings selbst bleiben - ein Ordner ist eine Ablage, kein
     /// Behaelter, dessen Verschwinden Inhalt mitnimmt.

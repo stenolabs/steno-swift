@@ -1,5 +1,6 @@
 import StenoDomain
 import StenoIdentity
+import StenoLibrary
 import StenoPipeline
 import SwiftUI
 
@@ -31,6 +32,7 @@ enum SpeakerReviewPresentation {
 /// Vorschlag samt Status, Aktionen. Nichts wird automatisch benannt.
 struct SpeakerReviewSection: View {
     @Environment(AppModel.self) private var model
+    @Environment(OperatorProfile.self) private var operatorProfile
     let meetingID: MeetingID
     let revision: TranscriptRevision?
     @Binding var review: MeetingReviewData?
@@ -38,6 +40,7 @@ struct SpeakerReviewSection: View {
 
     @State private var newPersonName = ""
     @State private var newPersonCluster: IdentityCluster?
+    @State private var isBindingSelf = false
 
     var body: some View {
         if let review {
@@ -187,6 +190,15 @@ struct SpeakerReviewSection: View {
             EmptyView()
         } else {
             HStack(spacing: 6) {
+                if !isConfirmed(cluster), isSelfChannel(cluster.channel), !isBindingSelf {
+                    Button("This was me") {
+                        performThisWasMe(cluster, review: review)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(isDemo)
+                    .help("Bind this microphone voice to your own person profile")
+                }
                 // Ein bestätigter Cluster zeigt seinen Zustand und behält das
                 // Menü: Wer im Routinetempo danebenklickt, braucht einen
                 // sichtbaren Rückweg, und die Fehlzuordnung hängt Prototypen
@@ -224,6 +236,52 @@ struct SpeakerReviewSection: View {
         }
     }
 
+    /// Das Mikrofon hoert zuerst den Operator. Der Knopf bindet einen
+    /// Mikrofon-Cluster an die dedizierte Ich-Person - automatisch aus dem
+    /// Betreiberprofil erzeugt, falls es sie noch nicht gibt.
+    private func isSelfChannel(_ channel: String) -> Bool {
+        channel == MediaAsset.Kind.micTrack.rawValue
+    }
+
+    private func performThisWasMe(
+        _ cluster: IdentityCluster,
+        review current: MeetingReviewData?
+    ) {
+        guard let current else { return }
+        Task {
+            isBindingSelf = true
+            defer { isBindingSelf = false }
+            guard let runtime = model.runtime else { return }
+            do {
+                let store = try IdentityStore(layout: await runtime.library.layout)
+                let snapshot = try await store.snapshot()
+                // Erst die Ich-Person sicher in die Bibliothek schreiben,
+                // dann ganz normal bestätigen: derselbe Pfad wie im Meeting.
+                let resolution = try SelfVoiceprint.resolveOrCreate(
+                    persons: snapshot.persons,
+                    operatorName: operatorProfile.name,
+                    store: DefaultSelfVoiceprintStore()
+                )
+                if resolution.mutated {
+                    _ = try await store.replacePersons(
+                        resolution.persons,
+                        expectedRevision: snapshot.revision
+                    )
+                }
+                if let updated = await model.performReview(
+                    .confirm(personID: resolution.selfPerson.id),
+                    on: cluster,
+                    data: current,
+                    meetingID: meetingID
+                ) {
+                    review = updated
+                }
+            } catch {
+                model.reviewError =
+                    "Binding this voice to your profile failed: \(error.localizedDescription)"
+            }
+        }
+    }
     /// Sicherer Vorschlag betont, unsicherer schlicht - beide mit einem Klick.
     @ViewBuilder
     private func confirmButton(

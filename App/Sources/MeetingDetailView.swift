@@ -75,6 +75,12 @@ struct MeetingDetailView: View {
     @State private var isWorkingOnTransfer = false
     @State private var observationState = MeetingDetailObservationState()
     @State private var showMeetingTransferExport = false
+    @State private var showContinueRecordingConfirmation = false
+    /// Kurzer Bestaetigungsblitz nach dem Kopieren der Notizen: das Icon im
+    /// Werkzeugkasten zeigt fuer einen Moment den Haken statt der Aktion.
+    @State private var showsCopyNotesFlash = false
+    /// Turn a citation button jumped to; highlighted briefly, then cleared.
+    @State private var citedTurnIndex: Int?
 
     var body: some View {
         Group {
@@ -149,21 +155,62 @@ struct MeetingDetailView: View {
                     in: .meetingDetail
                 )
             )
-            if MeetingPresentation.canShareMeeting(status: meeting?.status) {
+            ToolbarItem(
+                id: MacToolbarItemID.shareMeeting.rawValue,
+                placement: .primaryAction
+            ) {
+                Menu {
+                    Button("Copy Notes") {
+                        Task {
+                            if await model.copyNotesToPasteboard(for: meetingID) != nil {
+                                showsCopyNotesFlash = true
+                            }
+                        }
+                    }
+                    .disabled(meeting == nil)
+                    Button("Share as PDF…") {
+                        Task { await model.shareNotesAsPDF(for: meetingID) }
+                    }
+                    .disabled(meeting == nil)
+                    Divider()
+                    Button("Export Meeting as Markdown…") {
+                        let action = MacFocusedAsyncAction(target: meetingID) {
+                            await model.exportMeetingToFile($0)
+                        }
+                        Task { await action() }
+                    }
+                    Button("Export to Obsidian Vault") {
+                        Task { await model.exportMeetingToObsidianVault(meetingID) }
+                    }
+                } label: {
+                    Label(
+                        "Share Notes",
+                        systemImage: showsCopyNotesFlash ? "checkmark" : "square.and.arrow.up"
+                    )
+                }
+                .help("Copy the notes, share them as a PDF or export the meeting")
+            }
+            .defaultCustomization(
+                MacToolbarPresentation.defaultCustomization(
+                    for: .shareMeeting,
+                    in: .meetingDetail
+                )
+            )
+            if showsContinueRecording {
                 ToolbarItem(
-                    id: MacToolbarItemID.shareMeeting.rawValue,
+                    id: MacToolbarItemID.continueRecording.rawValue,
                     placement: .primaryAction
                 ) {
                     Button {
-                        showMeetingTransferExport = true
+                        showContinueRecordingConfirmation = true
                     } label: {
-                        Label("Share meeting", systemImage: "square.and.arrow.up")
+                        Label("Continue Recording", systemImage: "record.circle")
                     }
-                    .help("Share this meeting through AirDrop")
+                    .help("Record additional audio into this meeting")
                 }
                 .defaultCustomization(
                     MacToolbarPresentation.defaultCustomization(
-                        for: .shareMeeting,
+                        for: .continueRecording,
                         in: .meetingDetail
                     )
                 )
@@ -188,6 +235,62 @@ struct MeetingDetailView: View {
         // Benutzer haette bis dahin in ein totes Feld getippt.
         .onChange(of: transcriptQuery) { editingTurn = nil }
         .onChange(of: revision?.id) { editingTurn = nil }
+        // Citation buttons in the minutes post this; scroll the cited turn
+        // into view and let the highlight decay below.
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: TranscriptCitations.citeTranscriptLineNotification
+            )
+        ) { note in
+            guard let index = TranscriptCitations.citedLineIndex(from: note),
+                  let revision,
+                  revision.turns.indices.contains(index)
+            else { return }
+            citedTurnIndex = index
+        }
+        .task(id: citedTurnIndex) {
+            guard citedTurnIndex != nil else { return }
+            try? await Task.sleep(for: .seconds(2.5))
+            citedTurnIndex = nil
+        }
+        // Der Kopierblitz loescht sich selbst: kurz sichtbar, dann zurueck
+        // zum Aktions-Icon, ohne dass ein zweiter Timer irgendwo laeuft.
+        .task(id: showsCopyNotesFlash) {
+            guard showsCopyNotesFlash else { return }
+            try? await Task.sleep(for: .seconds(1.6))
+            showsCopyNotesFlash = false
+        }
+        .confirmationDialog(
+            continueRecordingTitle,
+            isPresented: $showContinueRecordingConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Continue Recording") {
+                Task { await model.continueRecording(in: meetingID) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(
+                "New audio is appended after the existing recordings and transcribed into the same meeting."
+            )
+        }
+    }
+
+    /// Der Anhang-Knopf gehoert zu ruhenden Meetings: versteckt, solange
+    /// irgendeine Aufnahme laeuft oder startet, waehrend ein Meeting in der
+    /// Pipeline verarbeitet wird, und im Demo-Bestand ganz. Ein Entwurf ist
+    /// ebenfalls ein Ziel - dort landet die erste Aufnahme im bestehenden
+    /// Meeting statt in einem neuen.
+    var showsContinueRecording: Bool {
+        guard !model.isRecording,
+              !model.isStartingRecording,
+              meeting?.isDemo != true,
+              let status = meeting?.status else { return false }
+        return status != .recording && status != .processing
+    }
+
+    var continueRecordingTitle: String {
+        "Continue recording in \u{201C}\(meeting?.title ?? "")\u{201D}?"
     }
 
     private var detailCommandContext: MacMeetingDetailCommandContext {
@@ -533,36 +636,59 @@ struct MeetingDetailView: View {
             in: revision,
             query: transcriptQuery
         )
-        return ScrollView {
-            LazyVStack(alignment: .leading, spacing: Steno.Space.m) {
-                originNote(revision.origin)
-                ReportsSection(meetingID: meetingID, review: review)
-                Divider()
-                if isSearchingTranscript {
-                    Text(hits.isEmpty
-                        ? "No line contains \u{201C}\(transcriptQuery)\u{201D}."
-                        : "\(hits.count) of \(revision.turns.count) lines")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+        return ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: Steno.Space.m) {
+                    originNote(revision.origin)
+                    if let meeting {
+                        TitleSuggestionSection(
+                            meetingID: meetingID,
+                            revision: revision,
+                            meeting: meeting
+                        )
+                    }
+                    ReportsSection(meetingID: meetingID, review: review)
+                    Divider()
+                    if isSearchingTranscript {
+                        Text(hits.isEmpty
+                            ? "No line contains \u{201C}\(transcriptQuery)\u{201D}."
+                            : "\(hits.count) of \(revision.turns.count) lines")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(hits, id: \.self) { index in
+                        let turn = revision.turns[index]
+                        TranscriptTurnRow(
+                            turn: turn,
+                            review: review,
+                            presentationContext: speakerPresentationContext,
+                            meetingID: meetingID,
+                            isEditing: editingTurn == index,
+                            beginEditing: { editingTurn = index },
+                            cancelEditing: { editingTurn = nil },
+                            endEditing: { text in
+                                await save(text, at: index, in: revision)
+                            }
+                        )
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(
+                                    citedTurnIndex == index
+                                        ? Color.accentColor.opacity(0.16)
+                                        : .clear
+                                )
+                        )
+                        .id(index)
+                    }
                 }
-                ForEach(hits, id: \.self) { index in
-                    let turn = revision.turns[index]
-                    TranscriptTurnRow(
-                        turn: turn,
-                        review: review,
-                        presentationContext: speakerPresentationContext,
-                        meetingID: meetingID,
-                        isEditing: editingTurn == index,
-                        beginEditing: { editingTurn = index },
-                        cancelEditing: { editingTurn = nil },
-                        endEditing: { text in
-                            await save(text, at: index, in: revision)
-                        }
-                    )
-                }
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding()
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // The jump target exists only after a citation button fires.
+            .onChange(of: citedTurnIndex) { _, newIndex in
+                guard let newIndex else { return }
+                proxy.scrollTo(newIndex, anchor: .top)
+            }
         }
     }
 

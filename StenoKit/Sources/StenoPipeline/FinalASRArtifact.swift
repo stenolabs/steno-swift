@@ -25,16 +25,26 @@ public struct FinalASRArtifact: Codable, Equatable, Sendable {
     public let jobID: JobID
     public let revisionID: RevisionID
     public let tracks: [FinalASRTrackResult]
+    /// Absolute meeting-time offset for every track's ASR times, keyed by
+    /// asset ID. Tracks recorded later into the same meeting ("continue
+    /// recording") keep local time zero in `output`; this map carries the
+    /// shift applied when the artifact was written so downstream jobs
+    /// (diarization alignment) land on the same absolute timeline.
+    /// Artifacts written before append-to-meeting existed decode as nil;
+    /// missing entries mean offset zero.
+    public let trackOffsets: [String: TimeInterval]?
 
     public init(
         schemaVersion: Int = Self.currentSchemaVersion,
         jobID: JobID,
         revisionID: RevisionID,
-        tracks: [FinalASRTrackResult]
+        tracks: [FinalASRTrackResult],
+        trackOffsets: [String: TimeInterval]? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.jobID = jobID
         self.revisionID = revisionID
         self.tracks = tracks
+        self.trackOffsets = trackOffsets
     }
 }

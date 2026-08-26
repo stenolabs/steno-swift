@@ -46,6 +46,10 @@ public struct Job: Codable, Equatable, Sendable {
     /// Machine-readable reason for the narrow failures that have a deliberate
     /// recovery action. Older jobs decode this optional field as `nil`.
     public var failureReason: FailureReason?
+    /// Pinnt bei finalASR das Ergebnis der automatischen Spracherkennung:
+    /// Start-Sprache der Live-Lane plus entschiedene Erkennung. Aeltere Jobs
+    /// und ausdrueckliche Sprachwahlen decodieren dieses Feld als `nil`.
+    public let languageDetection: TranscriptionLanguageDetectionPin?
 
     public init(
         schemaVersion: Int = Self.currentSchemaVersion,
@@ -65,7 +69,8 @@ public struct Job: Codable, Equatable, Sendable {
         attemptCount: Int = 0,
         createdAt: Date = Date(),
         errorMessage: String? = nil,
-        failureReason: FailureReason? = nil
+        failureReason: FailureReason? = nil,
+        languageDetection: TranscriptionLanguageDetectionPin? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.id = id
@@ -85,6 +90,7 @@ public struct Job: Codable, Equatable, Sendable {
         self.createdAt = createdAt
         self.errorMessage = errorMessage
         self.failureReason = failureReason
+        self.languageDetection = languageDetection
     }
 
     public enum Kind: String, Codable, Equatable, Sendable {
@@ -134,19 +140,23 @@ public extension Job {
 
     /// Für bewusste Wiederholungsläufe mit ausdrücklich angegebenem Provider
     /// und ausdrücklich angegebener Sprache, unabhängig vom gepinnten Plan
-    /// des Meetings.
+    /// des Meetings. Ein übergebener Erkennungs-Pin dokumentiert, dass die
+    /// Sprache automatisch geschätzt (niemals ausdrücklich gewählt) wurde,
+    /// und bewahrt Start- und erkannte Sprache für den Lauf.
     static func finalASR(
         meetingID: MeetingID,
         providerID: TranscriptionProviderID,
         localeIdentifier: String,
-        processingGenerationID: MeetingTransferGenerationID? = nil
+        processingGenerationID: MeetingTransferGenerationID? = nil,
+        languageDetection: TranscriptionLanguageDetectionPin? = nil
     ) -> Job {
         Job(
             kind: .finalASR,
             meetingID: meetingID,
             localeIdentifier: localeIdentifier,
             importGenerationID: processingGenerationID,
-            transcriptionProviderID: providerID
+            transcriptionProviderID: providerID,
+            languageDetection: languageDetection
         )
     }
 }

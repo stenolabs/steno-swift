@@ -159,6 +159,8 @@ struct StenoCommandTests {
             .findTranscript: StenoCommandShortcut("f", modifiers: [.command]),
             .toggleInspector: StenoCommandShortcut("i", modifiers: [.command, .control]),
             .moveToTrash: StenoCommandShortcut(.delete, modifiers: [.command]),
+            .toggleAskBar: StenoCommandShortcut("a", modifiers: [.command, .shift]),
+            .commandPalette: StenoCommandShortcut("k", modifiers: [.command]),
         ])
     }
 

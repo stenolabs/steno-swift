@@ -142,6 +142,9 @@ public enum MeetingMarkdown {
     private static func dateLine(_ date: Date, calendar: Calendar) -> String {
         let formatter = DateFormatter()
         formatter.calendar = calendar
+        // `formatter.calendar` alone does not pin the zone: without this,
+        // exports render in the machine timezone and shift by locale.
+        formatter.timeZone = calendar.timeZone
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd HH:mm"
         return "*\(formatter.string(from: date))*"
@@ -163,6 +166,7 @@ public enum MeetingMarkdown {
     public static func fileName(for meeting: Meeting, calendar: Calendar = .current) -> String {
         let formatter = DateFormatter()
         formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd"
         let forbidden = CharacterSet(charactersIn: "/\\:*?\"<>|\n\r\t")

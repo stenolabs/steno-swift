@@ -1,4 +1,5 @@
 import StenoDomain
+import StenoLibrary
 import SwiftUI
 
 struct MeetingSidebarView: View {
@@ -14,6 +15,10 @@ struct MeetingSidebarView: View {
     @State private var isCreatingFolder = false
     @State private var newFolderParentID: FolderID?
     @State private var query = ""
+    @State private var searchScope: MeetingSidebarSearchScope = .titles
+    @State private var contentHits: [MeetingSidebarContentHit] = []
+    @State private var contentSearchTask: Task<Void, Never>?
+    @State private var contentIndexStore: MeetingSidebarContentIndexStore?
     @State private var retranscribeTarget: Meeting?
     @State private var audioExportRequest: AudioExportDialogRequest?
     @State private var audioExportLoadRequestID: UUID?
@@ -21,6 +26,15 @@ struct MeetingSidebarView: View {
     @State private var targetedFolderID: FolderID?
     @State private var isFolderHeadingTargeted = false
     @State private var isMovingMeetings = false
+    @State private var appearanceFolderID: FolderID?
+    @State private var appearancePickerKind: FolderAppearancePickerKind?
+
+    private var appearancePopoverIsPresented: Binding<Bool> {
+        Binding(
+            get: { appearancePickerKind != nil && appearanceFolderID != nil },
+            set: { if !$0 { appearancePickerKind = nil } }
+        )
+    }
 
     private let disclosureStore = FolderDisclosureStore()
 
@@ -81,12 +95,18 @@ struct MeetingSidebarView: View {
 
     private var list: some View {
         List(selection: $selection) {
-            folderHeading
-            ForEach(tree.folderNodes) { node in
-                rootFolder(node)
-            }
-            ForEach(tree.unfiledSections) { section in
-                dateSection(section)
+            if showsContentResults {
+                ForEach(renderableContentHits, id: \.meetingID) { hit in
+                    contentHitRow(hit)
+                }
+            } else {
+                folderHeading
+                ForEach(tree.folderNodes) { node in
+                    rootFolder(node)
+                }
+                ForEach(tree.unfiledSections) { section in
+                    dateSection(section)
+                }
             }
         }
         .listStyle(.sidebar)
@@ -123,8 +143,19 @@ struct MeetingSidebarView: View {
         .searchable(
             text: $query,
             placement: .sidebar,
-            prompt: "Search titles"
+            prompt: searchScope == .titles ? "Search Titles" : "Search All Content"
         )
+        .safeAreaInset(edge: .top, spacing: 0) {
+            Picker("Search scope", selection: $searchScope) {
+                Text("Titles").tag(MeetingSidebarSearchScope.titles)
+                Text("All Content").tag(MeetingSidebarSearchScope.allContent)
+            }
+            .pickerStyle(.segmented)
+            .controlSize(.small)
+            .labelsHidden()
+            .padding(.horizontal, Steno.Space.s)
+            .padding(.top, Steno.Space.xs)
+        }
         .overlay {
             if model.meetings.isEmpty, model.folders.isEmpty {
                 ContentUnavailableView(
@@ -132,12 +163,24 @@ struct MeetingSidebarView: View {
                     systemImage: "tray",
                     description: Text("Recordings and imports appear here.")
                 )
-            } else if allTreeMeetingIDs.isEmpty, isSearching {
+            } else if showsContentResults,
+                      renderableContentHits.isEmpty {
+                ContentUnavailableView.search(text: query)
+            } else if !showsContentResults,
+                      allTreeMeetingIDs.isEmpty, isSearching {
                 ContentUnavailableView.search(text: query)
             }
         }
         .onChange(of: query) { _, _ in
+            scheduleContentSearch()
             pruneSelection()
+        }
+        .onChange(of: searchScope) { _, _ in
+            scheduleContentSearch()
+            pruneSelection()
+        }
+        .onDisappear {
+            contentSearchTask?.cancel()
         }
         .onChange(of: model.meetings) { _, _ in
             if !isMovingMeetings {
@@ -237,7 +280,7 @@ struct MeetingSidebarView: View {
             Label {
                 Text(node.folder.name)
             } icon: {
-                Image(systemName: MeetingSidebarDropPresentation.symbolName)
+                folderIcon(node.folder)
             }
             Spacer(minLength: Steno.Space.xs)
         }
@@ -251,6 +294,15 @@ struct MeetingSidebarView: View {
             .contentShape(Rectangle())
             .contextMenu {
                 folderMenu(folderCommandContext(node))
+                Divider()
+                Button("Change Color…") {
+                    appearanceFolderID = node.folder.id
+                    appearancePickerKind = .color
+                }
+                Button("Change Icon…") {
+                    appearanceFolderID = node.folder.id
+                    appearancePickerKind = .icon
+                }
             }
             .focusable()
             .focusedValue(
@@ -263,8 +315,14 @@ struct MeetingSidebarView: View {
             .draggable(SidebarDragPayload(folderID: node.id)) {
                 SidebarDragPreview(
                     title: node.folder.name,
-                    systemImage: "folder"
+                    systemImage: node.folder.icon?.rawValue ?? "folder"
                 )
+            }
+            .popover(
+                isPresented: appearancePopoverIsPresented,
+                arrowEdge: .leading
+            ) {
+                folderAppearancePopover
             }
             .dragConfiguration(MeetingSidebarDragContract.sourceConfiguration)
             .dropDestination(for: SidebarDragPayload.self) { payloads, _ in
@@ -298,6 +356,36 @@ struct MeetingSidebarView: View {
                 in: RoundedRectangle(cornerRadius: 5)
             )
             .animation(.easeOut(duration: 0.12), value: isTargeted)
+    }
+
+    /// Renders the folder's chosen symbol tinted with its color token. A
+    /// folder without an explicit icon or color keeps the default look.
+    private func folderIcon(_ folder: Folder) -> some View {
+        let symbol = folder.icon?.rawValue ?? MeetingSidebarDropPresentation.symbolName
+        return Image(systemName: symbol)
+            .foregroundStyle(folder.colorToken?.sidebarColor ?? Color.primary)
+    }
+
+    @ViewBuilder
+    private var folderAppearancePopover: some View {
+        switch appearancePickerKind {
+        case .color:
+            if let folder = currentAppearanceFolder {
+                FolderColorPickerPopover(folder: folder)
+            }
+        case .icon:
+            if let folder = currentAppearanceFolder {
+                FolderIconPickerPopover(folder: folder)
+            }
+        case nil:
+            EmptyView()
+        }
+    }
+
+    private var currentAppearanceFolder: Folder? {
+        appearanceFolderID.flatMap { folderID in
+            model.folders.first { $0.id == folderID }
+        }
     }
 
     private var emptyFolderRow: some View {
@@ -613,6 +701,86 @@ struct MeetingSidebarView: View {
         )
     }
 
+    /// True while the "all content" scope renders cross-meeting hit rows
+    /// instead of the folder/meeting tree.
+    private var showsContentResults: Bool {
+        searchScope == .allContent && isSearching
+    }
+
+    /// Hits whose meeting still exists; the derived index can lag behind
+    /// deletions until its next incremental update.
+    private var renderableContentHits: [MeetingSidebarContentHit] {
+        let known = Set(model.meetings.map(\.id))
+        return contentHits.filter { known.contains($0.meetingID) }
+    }
+
+    private func title(for meetingID: MeetingID) -> String {
+        model.meetings.first { $0.id == meetingID }?.title ?? ""
+    }
+
+    /// One sidebar row per meeting hit: title plus emphasized snippet.
+    /// Tagging with the meeting ID makes tapping select the meeting just
+    /// like a title result row.
+    private func contentHitRow(_ hit: MeetingSidebarContentHit) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title(for: hit.meetingID))
+                .lineLimit(1)
+            Text(MeetingSnippetEmphasis.attributed(
+                snippet: hit.snippet,
+                query: query
+            ))
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+        }
+        .padding(.vertical, 2)
+        .tag(hit.meetingID)
+    }
+
+    /// Debounces "all content" searches: rapid keystrokes coalesce for
+    /// 150 ms before a single `MeetingSearchIndex.search` runs. The FTS5
+    /// work executes on the index actor, never the main thread; only the
+    /// routed hit assignment hops back. The index opens the SAME SQLite
+    /// database AppModel already rebuilt at startup, through its own WAL
+    /// reader connection, created lazily on the first content search.
+    private func scheduleContentSearch() {
+        contentSearchTask?.cancel()
+        guard searchScope == .allContent, isSearching else {
+            contentHits = []
+            return
+        }
+        let trimmedQuery = query.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard !trimmedQuery.isEmpty else {
+            contentHits = []
+            return
+        }
+        if contentIndexStore == nil,
+           let layout = model.runtime?.library.layout {
+            contentIndexStore = MeetingSidebarContentIndexStore(layout: layout)
+        }
+        guard let indexStore = contentIndexStore else { return }
+        contentSearchTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { return }
+            guard let index = indexStore.currentIndex() else { return }
+            do {
+                let groups = try await index.search(trimmedQuery, limit: 50)
+                guard !Task.isCancelled else { return }
+                contentHits = MeetingSidebarSearchRouter.results(
+                    query: trimmedQuery,
+                    scope: .allContent,
+                    meetings: model.meetings,
+                    contentGroups: groups
+                )
+            } catch {
+                // Derived index hiccup: keep the previous hits instead of
+                // flashing an empty result list.
+            }
+        }
+    }
+
     private var effectiveExpandedFolderIDs: Set<FolderID> {
         MeetingSidebarVisibility.effectiveExpandedFolderIDs(
             in: tree,
@@ -653,11 +821,21 @@ struct MeetingSidebarView: View {
     }
 
     private func pruneSelection() {
-        selection = MeetingSidebarVisibility.prunedSelection(
+        var pruned = MeetingSidebarVisibility.prunedSelection(
             selection,
             in: tree,
             expandedFolderIDs: effectiveExpandedFolderIDs
         )
+        if showsContentResults {
+            // Content hit rows live outside the title tree; keep selected
+            // meetings that are still rendered as content hits.
+            pruned.formUnion(
+                selection.intersection(
+                    Set(renderableContentHits.map(\.meetingID))
+                )
+            )
+        }
+        selection = pruned
     }
 
     private func beginCreatingFolder(parentFolderID: FolderID?) {
@@ -766,6 +944,67 @@ struct MeetingSidebarView: View {
         )
         configuration.acceptedItemCount = 1
         return configuration
+    }
+}
+
+/// Renders a search snippet with every occurrence of a query term
+/// emphasized, using the same case-, diacritic- and width-insensitive
+/// comparison as the search itself (`MeetingSearch.normalized`).
+private enum MeetingSnippetEmphasis {
+    static func attributed(snippet: String, query: String) -> AttributedString {
+        let terms = query
+            .split(whereSeparator: \.isWhitespace)
+            .map(String.init)
+            .filter { !MeetingSearch.normalized($0).isEmpty }
+        var result = AttributedString()
+        var cursor = snippet.startIndex
+        for range in mergedMatchRanges(of: terms, in: snippet) {
+            result += AttributedString(snippet[cursor..<range.lowerBound])
+            var emphasized = AttributedString(snippet[range])
+            emphasized.font = .caption.weight(.semibold)
+            emphasized.foregroundColor = .primary
+            result += emphasized
+            cursor = range.upperBound
+        }
+        result += AttributedString(snippet[cursor...])
+        return result
+    }
+
+    private static func mergedMatchRanges(
+        of terms: [String],
+        in snippet: String
+    ) -> [Range<String.Index>] {
+        var ranges: [Range<String.Index>] = []
+        for term in terms {
+            var searchStart = snippet.startIndex
+            while let range = snippet.range(
+                of: term,
+                options: [
+                    .caseInsensitive,
+                    .diacriticInsensitive,
+                    .widthInsensitive,
+                ],
+                range: searchStart..<snippet.endIndex
+            ) {
+                guard !range.isEmpty else { break }
+                ranges.append(range)
+                searchStart = range.upperBound
+            }
+        }
+        guard !ranges.isEmpty else { return [] }
+        ranges.sort { $0.lowerBound < $1.lowerBound }
+        var merged = [ranges[0]]
+        for range in ranges.dropFirst() {
+            let last = merged[merged.count - 1]
+            if range.lowerBound <= last.upperBound {
+                merged[merged.count - 1] =
+                    min(last.lowerBound, range.lowerBound)
+                    ..< max(last.upperBound, range.upperBound)
+            } else {
+                merged.append(range)
+            }
+        }
+        return merged
     }
 }
 
@@ -1014,5 +1253,129 @@ private struct StatusBadge: View {
         case .processing: Steno.Colors.running
         case .ready: Steno.Colors.confirmed
         }
+    }
+}
+
+/// Which appearance sheet is anchored to a folder row.
+private enum FolderAppearancePickerKind {
+    case color
+    case icon
+}
+
+extension FolderColorToken {
+    /// The fixed sidebar tint for the token. Deliberately not derived from
+    /// system accent colors so every folder keeps a recognizable hue.
+    fileprivate var sidebarColor: Color {
+        switch self {
+        case .blue: .blue
+        case .purple: .purple
+        case .pink: .pink
+        case .red: .red
+        case .orange: .orange
+        case .yellow: .yellow
+        case .green: .green
+        case .teal: .teal
+        }
+    }
+}
+
+/// Popover listing the fixed eight-color palette plus a reset entry.
+private struct FolderColorPickerPopover: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+
+    let folder: Folder
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Steno.Space.s) {
+            Text("Folder Color")
+                .font(.headline)
+            LazyVGrid(
+                columns: Array(repeating: GridItem(.fixed(28)), count: 4),
+                spacing: Steno.Space.s
+            ) {
+                ForEach(FolderColorToken.allCases, id: \.self) { token in
+                    Button {
+                        select(token)
+                    } label: {
+                        Circle()
+                            .fill(token.sidebarColor)
+                            .frame(width: 22, height: 22)
+                            .overlay {
+                                if folder.colorToken == token {
+                                    Circle()
+                                        .strokeBorder(Color.primary, lineWidth: 2)
+                                }
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Color \(token.rawValue)")
+                }
+            }
+            Button("None") {
+                Task {
+                    await model.setFolderColor(nil, of: folder.id)
+                }
+                dismiss()
+            }
+        }
+        .padding()
+    }
+
+    private func select(_ token: FolderColorToken) {
+        Task {
+            await model.setFolderColor(token, of: folder.id)
+        }
+        dismiss()
+    }
+}
+
+/// Popover listing the curated SF Symbol allowlist plus a reset entry.
+private struct FolderIconPickerPopover: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+
+    let folder: Folder
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Steno.Space.s) {
+            Text("Folder Icon")
+                .font(.headline)
+            LazyVGrid(
+                columns: Array(repeating: GridItem(.fixed(32)), count: 4),
+                spacing: Steno.Space.s
+            ) {
+                ForEach(FolderIcon.allCases, id: \.self) { icon in
+                    Button {
+                        select(icon)
+                    } label: {
+                        Image(systemName: icon.rawValue)
+                            .frame(width: 28, height: 28)
+                            .overlay {
+                                if folder.icon == icon {
+                                    RoundedRectangle(cornerRadius: 5)
+                                        .strokeBorder(Color.primary, lineWidth: 2)
+                                }
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Icon \(icon.rawValue)")
+                }
+            }
+            Button("Default") {
+                Task {
+                    await model.setFolderIcon(nil, of: folder.id)
+                }
+                dismiss()
+            }
+        }
+        .padding()
+    }
+
+    private func select(_ icon: FolderIcon) {
+        Task {
+            await model.setFolderIcon(icon, of: folder.id)
+        }
+        dismiss()
     }
 }

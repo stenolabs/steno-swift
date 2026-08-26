@@ -528,6 +528,37 @@ public actor Library {
         }
     }
 
+    /// Pinnt die fuer dieses Meeting gewaehlte Report-Vorlage atomar
+    /// (nil hebt die Pinning auf). Das globale Default greift nur, wenn
+    /// hier nichts gepinnt ist.
+    @discardableResult
+    public func setPinnedTemplate(
+        _ templateID: String?,
+        for meetingID: MeetingID
+    ) throws -> Meeting {
+        try withMeetingMutation { transaction in
+            let meeting = try loadMeeting(meetingID, transaction: transaction)
+            // `metadata` is a let property, so the pinned copy is
+            // reconstructed through the memberwise init.
+            let updated = Meeting(
+                schemaVersion: meeting.schemaVersion,
+                id: meeting.id,
+                title: meeting.title,
+                createdAt: meeting.createdAt,
+                status: meeting.status,
+                participantIDs: meeting.participantIDs,
+                additionalParticipantIDs: meeting.additionalParticipantIDs,
+                folderID: meeting.folderID,
+                metadata: (meeting.metadata ?? MeetingMetadata())
+                    .withPinnedTemplateID(templateID),
+                sourceLocale: meeting.sourceLocale,
+                transcriptionPlan: meeting.transcriptionPlan
+            )
+            try writeMeeting(updated, transaction: transaction)
+            return updated
+        }
+    }
+
     /// Verschiebt den kompletten Meeting-Ordner in den Papierkorb statt hart
     /// zu löschen: Originale sind besonders geschützt, ein Fehlgriff bleibt
     /// über den Papierkorb wiederherstellbar. Liefert den Papierkorb-Ort.
@@ -654,10 +685,29 @@ public actor Library {
         if kind == .imported {
             provenanceKey = try sha256(of: sourceURL)
         } else {
-            provenanceKey = "\(meetingID)/\(kind.rawValue)"
+            // Angehaengte Aufnahmen ("Continue recording") registrieren
+            // weitere Spuren desselben Typs im selben Meeting. Die
+            // fortlaufende Nummer im Schluessel haelt sie auseinander,
+            // waehrend die erste Spur den historischen Schluessel behaelt.
+            let sequence = RecordedTrackProvenanceKey.nextSequence(
+                for: meetingID,
+                kind: kind,
+                in: try Self.listMediaAssets(
+                    meetingID: meetingID,
+                    layout: layout
+                )
+            )
+            provenanceKey = RecordedTrackProvenanceKey.make(
+                meetingID: meetingID,
+                kind: kind,
+                sequence: sequence
+            )
         }
 
-        if let duplicate = try findMediaAsset(provenanceKey: provenanceKey) {
+        // Nur importierte Schluessel sind global eindeutig; aufgezeichnete
+        // Schluessel tragen die Meeting-ID und kollidieren nie ueber Meetings.
+        if kind == .imported,
+           let duplicate = try findMediaAsset(provenanceKey: provenanceKey) {
             throw LibraryError.duplicateProvenance(
                 key: provenanceKey,
                 existingMeetingID: duplicate.meetingID

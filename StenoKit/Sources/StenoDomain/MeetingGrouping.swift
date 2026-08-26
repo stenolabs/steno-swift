@@ -81,6 +81,9 @@ public enum MeetingGrouping {
             == calendar.component(.year, from: now)
         let formatter = DateFormatter()
         formatter.calendar = calendar
+        // Pin the zone explicitly: `calendar` alone does not set it, and a
+        // system-zone mismatch shifts month labels across boundaries.
+        formatter.timeZone = calendar.timeZone
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = sameYear ? "LLLL" : "LLLL yyyy"
         return formatter.string(from: date)

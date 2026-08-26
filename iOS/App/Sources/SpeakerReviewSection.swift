@@ -1,6 +1,7 @@
 import Foundation
 import StenoDomain
 import StenoIdentity
+import StenoLibrary
 import StenoPipeline
 import SwiftUI
 
@@ -8,6 +9,29 @@ struct NewPersonReviewContext: Identifiable {
     let id = UUID()
     let cluster: IdentityCluster
     let review: MeetingReviewData
+}
+
+/// Persistenter Zeiger auf die "Ich"-Person. App-Zustand wie die
+/// Modellzustimmungen: StenoKit definiert nur den Vertrag, hier steht der
+/// Speicherort.
+private struct DefaultSelfVoiceprintStore: SelfVoiceprintPersonStoring {
+    private static let key = "steno.identity.selfPersonID"
+
+    func loadSelfPersonID() throws -> PersonID? {
+        guard let raw = UserDefaults.standard.string(forKey: Self.key),
+              let uuid = UUID(uuidString: raw) else {
+            return nil
+        }
+        return PersonID(rawValue: uuid)
+    }
+
+    func saveSelfPersonID(_ id: PersonID?) throws {
+        if let id {
+            UserDefaults.standard.set(id.rawValue.uuidString, forKey: Self.key)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.key)
+        }
+    }
 }
 
 /// Truthful speaker review for the iPad inspector.
@@ -22,6 +46,7 @@ struct SpeakerReviewSection: View {
 
     @State private var newPersonContext: NewPersonReviewContext?
     @State private var newPersonName = ""
+    @State private var isBindingSelf = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -155,6 +180,16 @@ struct SpeakerReviewSection: View {
         review data: MeetingReviewData
     ) -> some View {
         HStack(spacing: 6) {
+            if !isDemoMeeting,
+               confirmedPerson(cluster) == nil,
+               isSelfChannel(cluster.channel),
+               !isBindingSelf {
+                Button("This was me") {
+                    performThisWasMe(cluster, data: data)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
             if actions.contains(.confirmSuggestion),
                let personID = suggestion?.suggestedPersonID,
                let person = data.persons.first(where: { $0.id == personID }) {
@@ -316,6 +351,49 @@ struct SpeakerReviewSection: View {
             return nil
         }
         return personID
+    }
+
+    private func isSelfChannel(_ channel: String) -> Bool {
+        channel == MediaAsset.Kind.micTrack.rawValue
+    }
+
+    /// Das Mikrofon hoert zuerst den Operator. Der Knopf bindet einen
+    /// Mikrofon-Cluster an die dedizierte Ich-Person; ohne Betreiberprofil
+    /// auf iOS heisst sie "Me".
+    private func performThisWasMe(
+        _ cluster: IdentityCluster,
+        data: MeetingReviewData
+    ) {
+        Task { @MainActor in
+            isBindingSelf = true
+            defer { isBindingSelf = false }
+            guard let runtime = app.runtime else { return }
+            do {
+                let store = try IdentityStore(layout: await runtime.library.layout)
+                let snapshot = try await store.snapshot()
+                // Erst die Ich-Person sicher in die Bibliothek schreiben,
+                // dann ganz normal bestätigen: derselbe Pfad wie im Meeting.
+                let resolution = try SelfVoiceprint.resolveOrCreate(
+                    persons: snapshot.persons,
+                    operatorName: nil,
+                    store: DefaultSelfVoiceprintStore()
+                )
+                if resolution.mutated {
+                    _ = try await store.replacePersons(
+                        resolution.persons,
+                        expectedRevision: snapshot.revision
+                    )
+                }
+                _ = await app.performReviewUpdate(
+                    .confirm(personID: resolution.selfPerson.id),
+                    on: cluster,
+                    data: data,
+                    meetingID: meetingID
+                )
+            } catch {
+                // Der Review-Fehlerkanal zeigt den Fehler im selben Panel.
+            }
+        }
     }
 
     private func durationText(_ seconds: TimeInterval) -> String {

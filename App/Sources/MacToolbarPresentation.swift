@@ -16,6 +16,7 @@ enum MacToolbarItemID: String, CaseIterable {
     case findTranscript
     case inspector
     case shareMeeting
+    case continueRecording
     case recordingNotes
 }
 
@@ -45,8 +46,11 @@ enum MacToolbarPresentation {
              (.recordingNotes, .recording),
              (.newFolder, .sidebar),
              (.findTranscript, .meetingDetail),
-             (.shareMeeting, .meetingDetail):
+             (.shareMeeting, .meetingDetail),
+             (.recordingNotes, .recording):
             false
+        case (.continueRecording, .meetingDetail):
+            true
         default:
             false
         }
