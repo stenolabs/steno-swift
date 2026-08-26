@@ -29,10 +29,21 @@ public actor FluidSortformerProvider: DiarizationProvider {
         _ url: URL,
         hints: DiarizationHints = DiarizationHints()
     ) async throws -> DiarizationOutput {
+        try await diarize(url, hints: hints, progress: nil)
+    }
+
+    public func diarize(
+        _ url: URL,
+        hints: DiarizationHints = DiarizationHints(),
+        progress: DiarizationProgressHandler? = nil
+    ) async throws -> DiarizationOutput {
         // Sortformer 0.15.2 has four fixed output slots and no speaker-count
         // input, so the provider accepts the shared hint without pretending
         // that it can influence this model.
         _ = hints
+
+        let emitter = DiarizationProgressEmitter(handler: progress)
+        emitter.emit(.loadingAudio)
 
         let samples = try AVAudioSampleLoader.load(from: url)
         let choice = sortformerConfiguration(
@@ -41,15 +52,28 @@ public actor FluidSortformerProvider: DiarizationProvider {
         let config = choice.fluidConfig
         let models = try await loadModels(config: config)
 
-        let timeline: DiarizerTimeline
-        do {
-            let diarizer = SortformerDiarizer(config: config)
-            diarizer.initialize(models: models.sortformer)
-            timeline = try diarizer.processComplete(samples, sourceSampleRate: nil)
-        } catch {
-            throw DiarizationError.inferenceFailed(error.localizedDescription)
+        let diarizer = SortformerDiarizer(config: config)
+        diarizer.initialize(models: models.sortformer)
+        // processComplete is a single opaque CoreML call (the legacy 37-45 s
+        // silent window): no internal fraction is available, so only time-based
+        // heartbeats are emitted while it runs.
+        var timeline: DiarizerTimeline?
+        var inferenceFailure: (any Error)?
+        await emitter.withSegmentingHeartbeats {
+            do {
+                timeline = try diarizer.processComplete(samples, sourceSampleRate: nil)
+            } catch {
+                inferenceFailure = error
+            }
+        }
+        if let inferenceFailure {
+            throw DiarizationError.inferenceFailed(inferenceFailure.localizedDescription)
+        }
+        guard let timeline else {
+            throw DiarizationError.inferenceFailed("segmentation returned no timeline")
         }
 
+        emitter.emit(.clustering)
         let segments = filterDiarizationSegments(
             timeline.speakers.values
                 .flatMap(\.finalizedSegments)
@@ -69,6 +93,7 @@ public actor FluidSortformerProvider: DiarizationProvider {
             )
         } ?? [:]
 
+        emitter.emit(.writing, fraction: 1.0)
         return DiarizationOutput(
             segments: segments,
             embeddings: embeddings,

@@ -128,19 +128,6 @@ public enum CaptureRecovery {
                         sampleRate: sampleRate,
                         duration: duration
                     )
-                } catch LibraryError.duplicateProvenance {
-                    // Frühere Adoption wurde zwischen Registrierung und
-                    // Aufräumen unterbrochen: Asset existiert schon.
-                    do {
-                        try FileManager.default.removeItem(at: file)
-                    } catch {
-                        failures.append(Failure(
-                            meetingID: meeting.id,
-                            fileName: file.lastPathComponent,
-                            stage: .captureCleanup,
-                            error: error
-                        ))
-                    }
                 } catch {
                     failures.append(Failure(
                         meetingID: meeting.id,

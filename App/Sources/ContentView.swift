@@ -16,6 +16,11 @@ struct ContentView: View {
         @Bindable var model = model
         NavigationSplitView {
             MeetingSidebarView(selection: $model.selectedMeetingIDs)
+                // Shell status projection lives above the meetings column;
+                // the sidebar rows themselves stay untouched.
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    HomeStatusHeader(model: model)
+                }
                 .navigationSplitViewColumnWidth(min: 220, ideal: 280)
         } detail: {
             WindowStableDetail {
@@ -229,6 +234,18 @@ struct ContentView: View {
         // nicht und verschwindet erst auf Klick.
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 0) {
+                if let trashUndo = model.pendingTrashUndo {
+                    HStack(alignment: .bottom) {
+                        UndoDeleteToast(
+                            window: trashUndo,
+                            onUndo: { Task { await model.restoreTrashedMeeting() } },
+                            onExpire: { model.expireTrashUndoIfElapsed() }
+                        )
+                        Spacer()
+                    }
+                    .padding(.horizontal, Steno.Space.m)
+                    .transition(statusTransition(edge: .bottom))
+                }
                 if let export = model.audioExportActivity,
                    MacGlobalStatusSurface.audioExport == .bottom {
                     audioExportBanner(export)
@@ -244,6 +261,14 @@ struct ContentView: View {
         .animation(statusAnimation, value: model.notice)
         .animation(statusAnimation, value: model.audioExportActivity)
         .animation(statusAnimation, value: model.startupState)
+        .overlay {
+            if model.isCommandPalettePresented {
+                CommandPaletteView(model: model) {
+                    model.isCommandPalettePresented = false
+                }
+            }
+        }
+        .animation(statusAnimation, value: model.pendingTrashUndo)
     }
 
     private var statusMotionPolicy: MacStatusMotionPolicy {

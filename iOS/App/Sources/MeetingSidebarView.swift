@@ -128,6 +128,19 @@ struct MeetingSidebarView: View {
                     }
                 }
             }
+            if model.backgroundProcessingDeferred {
+                Section("Processing") {
+                    Label {
+                        Text(
+                            "Paused in the background. It finishes when you return to Steno."
+                        )
+                    } icon: {
+                        Image(systemName: "moon.zzz")
+                    }
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                }
+            }
 
             Section {
                 foldersHeading
@@ -433,8 +446,12 @@ struct MeetingSidebarView: View {
     ) -> some View {
         let isTargeted = targetedFolderID == node.id
         return HStack(spacing: Steno.Space.s) {
-            Label(node.folder.name, systemImage: "folder")
-                .font(font)
+            Label {
+                Text(node.folder.name)
+            } icon: {
+                folderIcon(node.folder)
+            }
+            .font(font)
             Spacer(minLength: Steno.Space.s)
             Menu {
                 folderMenu(node.folder)
@@ -470,6 +487,27 @@ struct MeetingSidebarView: View {
             )
     }
 
+    /// Renders the folder's chosen symbol tinted with its color token. A
+    /// folder without an explicit icon or color keeps the default look.
+    private func folderIcon(_ folder: Folder) -> some View {
+        Image(
+            systemName: folder.icon?.rawValue ?? "folder"
+        )
+        .foregroundStyle(folder.colorToken?.sidebarColor ?? Color.primary)
+    }
+
+    private func setFolderColor(_ token: FolderColorToken?, of folder: Folder) {
+        Task {
+            await model.setFolderColor(token, of: folder.id)
+        }
+    }
+
+    private func setFolderIcon(_ icon: FolderIcon?, of folder: Folder) {
+        Task {
+            await model.setFolderIcon(icon, of: folder.id)
+        }
+    }
+
     private var emptyFolderRow: some View {
         Text("No meetings")
             .font(.caption)
@@ -494,6 +532,28 @@ struct MeetingSidebarView: View {
                 Label("Rename\u{2026}", systemImage: "pencil")
             }
 
+            Menu("Color", systemImage: "paintpalette") {
+                Button("None") {
+                    setFolderColor(nil, of: folder)
+                }
+                ForEach(FolderColorToken.allCases, id: \.self) { token in
+                    Button(token.rawValue.capitalized) {
+                        setFolderColor(token, of: folder)
+                    }
+                }
+            }
+            Menu("Icon", systemImage: "square.grid.2x2") {
+                Button("Default") {
+                    setFolderIcon(nil, of: folder)
+                }
+                ForEach(FolderIcon.allCases, id: \.self) { icon in
+                    Button {
+                        setFolderIcon(icon, of: folder)
+                    } label: {
+                        Label(icon.rawValue, systemImage: icon.rawValue)
+                    }
+                }
+            }
             Divider()
 
             Button {
@@ -806,6 +866,23 @@ private enum FolderNameOperation: Identifiable {
             "Subfolders can contain meetings but no further folders."
         case .create, .rename:
             nil
+        }
+    }
+}
+
+extension FolderColorToken {
+    /// The fixed sidebar tint for the token. Deliberately not derived from
+    /// system accent colors so every folder keeps a recognizable hue.
+    fileprivate var sidebarColor: Color {
+        switch self {
+        case .blue: .blue
+        case .purple: .purple
+        case .pink: .pink
+        case .red: .red
+        case .orange: .orange
+        case .yellow: .yellow
+        case .green: .green
+        case .teal: .teal
         }
     }
 }

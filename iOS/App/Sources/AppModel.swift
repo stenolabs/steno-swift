@@ -110,6 +110,11 @@ final class AppModel {
     private var folderLibraryIssue: IOSLibraryIssue?
     private(set) var startupWarnings: [IOSStartupWarning] = []
     private(set) var actionNotice: IOSActionNotice?
+    /// True while a background-time expiration deferred pipeline work to
+    /// "finishes when you return"; drives the sidebar notice.
+    var backgroundProcessingDeferred = false
+    @ObservationIgnored var backgroundProcessingCoordinator:
+        BackgroundProcessingCoordinator?
 
     var libraryIssues: [IOSLibraryIssue] {
         [meetingLibraryIssue, folderLibraryIssue].compactMap { $0 }
@@ -454,6 +459,7 @@ final class AppModel {
         self.personsLoader = personsLoader ?? { library in
             try await IdentityStore(layout: library.layout).listPersons()
         }
+        startBackgroundProcessingCoordinator()
         recording.didBecomeIdle = { [weak self] in
             Task { @MainActor in
                 await self?.recordingDidBecomeIdle()

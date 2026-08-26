@@ -600,6 +600,7 @@ extension AppModel {
     /// damit die UI Erfolg, Fehler und Offenlegung demselben Lauf zuordnet.
     func requestMeetingMinutes(
         meetingID: MeetingID,
+        templateID: String? = nil,
         textModelEndpointID: String? = nil,
         textModelEndpointSnapshot: TextModelEndpointSnapshot? = nil,
         preflight: TemplateRenderPreflight
@@ -607,11 +608,21 @@ extension AppModel {
         guard let runtime else {
             throw AppModelReportPreflightError.runtimeUnavailable
         }
+        // Explicit picker choice wins; otherwise this meeting's pinned
+        // template (recording-time choice), then the default-template
+        // setting, then Meeting Minutes. A pin pointing at a deleted
+        // template falls through instead of failing the run.
+        let pinnedTemplateID = (try? await runtime.library.loadMeeting(meetingID))?
+            .metadata?.pinnedTemplateID
+        let resolvedTemplateID = TemplateRenderRequest.resolveReportTemplateID(
+            explicit: templateID,
+            pinned: pinnedTemplateID
+        )
         let job = try await TemplateRenderRequest.enqueue(
             library: runtime.library,
             jobStore: runtime.jobStore,
             meetingID: meetingID,
-            templateID: Template.meetingMinutes.id,
+            templateID: resolvedTemplateID,
             textModelEndpointID: textModelEndpointID,
             textModelEndpointSnapshot: textModelEndpointSnapshot,
             preflight: preflight
@@ -647,7 +658,13 @@ extension AppModel {
                 try? await runtime.coordinator.cancel(jobID: job.id)
             }
             try await runtime.jobStore.removeJobs(meetingID: meetingID)
-            try await runtime.library.trashMeeting(meetingID)
+            let trashedTitle = meetings.first(where: { $0.id == meetingID })?.title
+            let trashedURL = try await runtime.library.trashMeeting(meetingID)
+            beginTrashUndoWindow(
+                meetingID: meetingID,
+                title: trashedTitle ?? meetingID.description,
+                trashedURL: trashedURL
+            )
             if selectedMeetingID == meetingID { selectedMeetingID = nil }
             await refreshMeetings()
         } catch {

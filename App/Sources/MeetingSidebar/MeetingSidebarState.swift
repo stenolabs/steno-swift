@@ -1,5 +1,6 @@
 import Foundation
 import StenoDomain
+import StenoLibrary
 
 enum MeetingSidebarSelectionPolicy {
     static func singleID(in selection: Set<MeetingID>) -> MeetingID? {
@@ -307,5 +308,89 @@ struct FolderDisclosureStore {
         var folderIDs = load()
         folderIDs.remove(folderID)
         save(folderIDs)
+    }
+}
+
+/// Scope of a sidebar search: only meeting titles (fast, in-memory filter)
+/// or all indexed content (transcript, note, report via MeetingSearchIndex).
+enum MeetingSidebarSearchScope: String, CaseIterable, Equatable {
+    case titles
+    case allContent
+}
+
+/// One "all content" result row the sidebar can render.
+struct MeetingSidebarContentHit: Equatable {
+    let meetingID: MeetingID
+    let snippet: String
+}
+
+/// Routes a sidebar query by scope.
+///
+/// `titles` reuses the existing in-memory `MeetingSearch` title filter.
+/// `allContent` consumes index groups (already ranked and grouped by
+/// `MeetingSearchIndex.search`) and flattens them to one hit per meeting,
+/// keeping the index's stable ordering. Pure and synchronous so the view
+/// layer stays testable; fetching from the actor index happens at the call
+/// site the orchestrator wires into MeetingSidebarView.swift.
+enum MeetingSidebarSearchRouter {
+    static func results(
+        query: String,
+        scope: MeetingSidebarSearchScope,
+        meetings: [Meeting],
+        contentGroups: [MeetingContentGroup]
+    ) -> [MeetingSidebarContentHit] {
+        switch scope {
+        case .titles:
+            return MeetingSearch.matching(meetings, query: query).map { meeting in
+                MeetingSidebarContentHit(
+                    meetingID: meeting.id,
+                    snippet: meeting.title
+                )
+            }
+        case .allContent:
+            let needle = MeetingSearch.normalized(query)
+            guard !needle.isEmpty else { return [] }
+            return contentGroups.map { group in
+                // Prefer a hit whose snippet actually contains the folded
+                // query; fall back to the best-ranked snippet otherwise.
+                let snippet = group.hits.first {
+                    MeetingSearch.normalized($0.snippet).contains(needle)
+                }?.snippet ?? group.hits.first?.snippet ?? ""
+                return MeetingSidebarContentHit(
+                    meetingID: group.meetingID,
+                    snippet: snippet
+                )
+            }
+        }
+    }
+}
+
+/// Sidebar-side handle on the file-backed full-text content index.
+///
+/// `AppModel` owns the authoritative instance: it creates it from the
+/// library layout at startup and rebuilds it once. This store opens THE
+/// SAME SQLite database through its own connection so the sidebar can
+/// query concurrently - the index runs in WAL mode, so a second reader is
+/// safe. The connection is created lazily on the first "all content"
+/// search; if opening fails (derived data), the sidebar simply renders no
+/// content hits.
+@MainActor
+final class MeetingSidebarContentIndexStore {
+    private let layout: LibraryLayout
+    private var index: MeetingSearchIndex?
+
+    init(layout: LibraryLayout) {
+        self.layout = layout
+    }
+
+    /// Existing connection or a newly opened one; nil when the index file
+    /// cannot be opened.
+    func currentIndex() -> MeetingSearchIndex? {
+        if let index { return index }
+        guard let created = try? MeetingSearchIndex(layout: layout) else {
+            return nil
+        }
+        index = created
+        return created
     }
 }

@@ -296,6 +296,37 @@ public actor FolderStore {
         }
     }
 
+    /// Sets or clears a folder's sidebar color token. Only the token is
+    /// persisted; the concrete color values are chosen by the UI layer.
+    @discardableResult
+    public func setColorToken(
+        _ colorToken: FolderColorToken?,
+        of folderID: FolderID
+    ) throws -> Folder {
+        try mutateDocument { document in
+            guard let index = document.folders.firstIndex(where: { $0.id == folderID }) else {
+                throw LibraryError.folderNotFound(folderID)
+            }
+            document.folders[index].colorToken = colorToken
+            return document.folders[index]
+        }
+    }
+
+    /// Sets or clears a folder's SF Symbol icon. nil restores the default
+    /// folder symbol.
+    public func setIcon(
+        _ icon: FolderIcon?,
+        of folderID: FolderID
+    ) throws -> Folder {
+        try mutateDocument { document in
+            guard let index = document.folders.firstIndex(where: { $0.id == folderID }) else {
+                throw LibraryError.folderNotFound(folderID)
+            }
+            document.folders[index].icon = icon
+            return document.folders[index]
+        }
+    }
+
     @discardableResult
     public func moveFolder(
         _ folderID: FolderID,

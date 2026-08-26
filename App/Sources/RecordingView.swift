@@ -42,6 +42,9 @@ struct RecordingView: View {
     /// Die Entscheidung des Benutzers ueberlebt aber den Neustart: Wer es
     /// zuklappt, schreibt nicht mit und soll nicht jedesmal neu zuklappen.
     @AppStorage("steno.recording.notesOpen") private var showNotes = true
+    /// Ask bar visibility. The orchestrator wires Cmd+Shift+A to the same
+    /// AppStorage key; like the notes inspector, the choice survives restart.
+    @AppStorage(AskBarView.visibilityDefaultsKey) private var isAskBarVisible = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -61,6 +64,11 @@ struct RecordingView: View {
                 }
             }
             .inspectorColumnWidth(min: 260, ideal: 320, max: 420)
+        }
+        // The ask bar floats above the transcript, near the bottom edge -
+        // parity with the predecessor's floating bar above the dock band.
+        .overlay(alignment: .bottom) {
+            AskBarView(isVisible: $isAskBarVisible)
         }
         .toolbar(id: MacToolbarID.recording.rawValue) {
             ToolbarItem(

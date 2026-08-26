@@ -160,12 +160,12 @@ let package = Package(
         ),
         .testTarget(
             name: "StenoLibraryTests",
-            dependencies: ["StenoLibrary", "StenoDomain"],
+            dependencies: ["StenoAudioCore", "StenoLibrary", "StenoDomain"],
             swiftSettings: strictConcurrencySettings
         ),
         .testTarget(
             name: "StenoAudioCoreTests",
-            dependencies: ["StenoAudioCore", "StenoLibrary", "StenoDomain"],
+            dependencies: ["StenoAudioCore", "StenoTranscription", "StenoLibrary", "StenoDomain"],
             swiftSettings: strictConcurrencySettings
         ),
         .testTarget(

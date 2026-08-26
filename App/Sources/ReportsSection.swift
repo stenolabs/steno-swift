@@ -25,6 +25,12 @@ struct ReportsSection: View {
     @State private var preflight: TemplateRenderPreflight?
     @State private var preflightIsReady = false
     @State private var preflightError: String?
+    @State private var selectedTemplateID: String?
+    @State private var templateCatalog = TemplateCatalog()
+    @State private var showingTemplateEditor = false
+    /// Transcript turn texts for citation evidence; line indices match the
+    /// transcript view's turn rows so a jump lands on the right speaker turn.
+    @State private var citationLines: [String]?
 
     /// Nur der On-Device-Standard hat eine Vorab-Verfügbarkeitsauskunft;
     /// externe Endpunkte werden erst beim Rendern kontaktiert (nie vorab).
@@ -64,6 +70,7 @@ struct ReportsSection: View {
                         }
                     }
                 } else {
+                    templatePicker
                     modelPicker
                     Button {
                         Task { await startRender() }
@@ -131,9 +138,14 @@ struct ReportsSection: View {
             }
         }
         .task(id: meetingID) {
+            reloadTemplateCatalog()
             selectedEndpointSnapshot = textModelSettings.selectedEndpoint?.snapshot
             await refreshPreflight()
+            citationLines = await loadCitationLines()
             await refreshLoop()
+        }
+        .sheet(isPresented: $showingTemplateEditor) {
+            TemplateEditorView(onChanged: reloadTemplateCatalog)
         }
         // Die Wahl bleibt, ihr Inhalt wird nachgezogen. Ohne das behaelt eine
         // offene Ansicht die Kopie vom Oeffnen: der Bericht ginge mit der
@@ -159,6 +171,69 @@ struct ReportsSection: View {
         }
         .labelsHidden()
         .fixedSize()
+    }
+
+    /// Vorlagenwahl je Erstellung; nil bedeutet "gespeicherte
+    /// Standardvorlage". Der Editor haelt alle CRUD- und Override-Regeln.
+    private var templatePicker: some View {
+        Menu {
+            ForEach(templateCatalog.resolvedEntries(), id: \.template.id) { entry in
+                Button {
+                    selectedTemplateID = entry.template.id
+                } label: {
+                    Text(pickerLabel(entry))
+                }
+            }
+            Divider()
+            Button {
+                showingTemplateEditor = true
+            } label: {
+                Label("Manage Templates…", systemImage: "slider.horizontal.3")
+            }
+        } label: {
+            Label(selectedTemplateTitle, systemImage: "doc.plaintext")
+        }
+        .fixedSize()
+    }
+
+    private func pickerLabel(_ entry: ResolvedTemplateEntry) -> String {
+        var label = "\(entry.template.name) (v\(entry.template.version)"
+        switch entry.kind {
+        case .builtin: label += ", locked"
+        case .override: label += ", edited copy"
+        case .custom: break
+        }
+        label += ")"
+        if templateCatalog.defaultTemplateID == entry.template.id {
+            label += " · Default"
+        }
+        return label
+    }
+
+    /// Title shown on the picker: the explicit choice, otherwise the
+    /// default-template setting, otherwise Meeting Minutes.
+    private var selectedTemplateTitle: String {
+        effectiveSelectedTemplate.name
+    }
+
+    private var effectiveSelectedTemplate: Template {
+        if let selectedTemplateID,
+           let entry = templateCatalog.resolvedEntries()
+               .first(where: { $0.template.id == selectedTemplateID })
+        {
+            return entry.template
+        }
+        return templateCatalog.resolvedDefault()
+    }
+
+    private func reloadTemplateCatalog() {
+        templateCatalog = TemplateCatalogStore().load()
+        // A deleted custom must not linger as an invisible selection.
+        if let selectedTemplateID,
+           TemplateRenderRequest.template(for: selectedTemplateID) == nil
+        {
+            self.selectedTemplateID = nil
+        }
     }
 
     private var selectedEndpointID: Binding<UUID?> {
@@ -240,6 +315,9 @@ struct ReportsSection: View {
                 Text(stored.result.createdAt, format: .dateTime.day().month().hour().minute())
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Text("\(stored.result.template.name) · v\(stored.result.template.version)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Text(engineLabel(stored.result.engine))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -273,7 +351,7 @@ struct ReportsSection: View {
                 }
                 .controlSize(.small)
             }
-            MarkdownLiteView(markdown: stored.result.markdown)
+            MarkdownLiteView(markdown: stored.result.markdown, citationTranscript: citationLines)
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
@@ -295,6 +373,7 @@ struct ReportsSection: View {
             let endpoint = selectedEndpointSnapshot
             let job = try await model.requestMeetingMinutes(
                 meetingID: meetingID,
+                templateID: selectedTemplateID,
                 textModelEndpointID: endpoint?.id.uuidString,
                 textModelEndpointSnapshot: endpoint,
                 preflight: preflight
@@ -308,6 +387,15 @@ struct ReportsSection: View {
             renderError = AppModel.message("The minutes could not be started.", error)
             await refreshPreflight()
         }
+    }
+
+    /// One turn per line: resolver line indices equal the transcript view's
+    /// turn indices, so a citation jump scrolls to the exact speaker turn.
+    private func loadCitationLines() async -> [String]? {
+        guard let revision = await model.transcript(for: meetingID),
+              !revision.turns.isEmpty
+        else { return nil }
+        return revision.turns.map { TranscriptTurnRow.turnText($0) }
     }
 
     private func refreshPreflight() async {
@@ -466,6 +554,12 @@ enum ReportsDisclosurePresentation {
 /// Aufzählungen, Absätze. Bewusst kein vollwertiges Markdown.
 struct MarkdownLiteView: View {
     let markdown: String
+    /// Transcript turn texts used for evidence lookup; nil disables the
+    /// citation buttons entirely.
+    var citationTranscript: [String]? = nil
+
+    /// Preprocessed transcript for O(1) lookups; built once per input.
+    @State private var citationIndex: TranscriptCitations.ProcessedTranscript?
 
     /// Lesbare Protokollschrift; die 13-pt-Systemgröße war im Nutzungstest zu klein.
     /// Transkript und Protokoll teilen sich die Größe über das Token.
@@ -494,6 +588,18 @@ struct MarkdownLiteView: View {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text("•")
                         Text(inline(text))
+                        if let match = citation(for: text) {
+                            Button {
+                                TranscriptCitations.postCiteJump(lineIndex: match.lineIndex)
+                            } label: {
+                                Image(systemName: "magnifyingglass")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(Text("Jump to transcript evidence"))
+                            .help("Jump to transcript evidence")
+                        }
                     }
                     .font(Self.bodyFont)
                 case .paragraph(let text):
@@ -502,6 +608,10 @@ struct MarkdownLiteView: View {
                         .lineSpacing(3)
                 }
             }
+        }
+        .task(id: citationTranscript) {
+            // Built off the render path once; bullets then resolve in O(1).
+            citationIndex = citationTranscript.map(TranscriptCitations.preprocess)
         }
         .textSelection(.enabled)
     }
@@ -543,5 +653,12 @@ struct MarkdownLiteView: View {
 
     private func inline(_ text: String) -> AttributedString {
         (try? AttributedString(markdown: text)) ?? AttributedString(text)
+    }
+
+    /// Evidence for a bullet, or nil when nothing clears the confidence
+    /// threshold — no evidence means no citation button (anti-guessing).
+    private func citation(for bullet: String) -> TranscriptCitations.CitationMatch? {
+        guard let citationIndex else { return nil }
+        return TranscriptCitations.findCitation(bullet: bullet, transcript: citationIndex)
     }
 }

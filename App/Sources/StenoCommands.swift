@@ -10,6 +10,8 @@ enum StenoCommandID: Hashable {
     case findTranscript
     case toggleInspector
     case moveToTrash
+    case toggleAskBar
+    case commandPalette
 }
 
 struct StenoCommandShortcut: Hashable {
@@ -71,8 +73,10 @@ enum StenoCommandShortcuts {
         .findTranscript: StenoCommandShortcut("f", modifiers: [.command]),
         .toggleInspector: StenoCommandShortcut("i", modifiers: [.command, .control]),
         .moveToTrash: StenoCommandShortcut(.delete, modifiers: [.command]),
-    ]
+        .toggleAskBar: StenoCommandShortcut("a", modifiers: [.command, .shift]),
+        .commandPalette: StenoCommandShortcut("k", modifiers: [.command]),
 
+    ]
     static func shortcut(for command: StenoCommandID) -> StenoCommandShortcut {
         guard let shortcut = all[command] else {
             preconditionFailure("Missing shortcut for \(command)")
@@ -185,6 +189,17 @@ struct StenoCommands: Commands {
             }
             .stenoKeyboardShortcut(.markMoment)
             .disabled(!state.canMarkMoment)
+
+            Divider()
+
+            // F14/F11 companion: flips the persisted visibility of the
+            // recording ask bar. AskBarView/RecordingView read the same key
+            // through @AppStorage, so the bar reacts immediately and the
+            // choice survives restarts.
+            Button("Show or Hide Ask Bar") {
+                Self.toggleAskBarVisibility()
+            }
+            .stenoKeyboardShortcut(.toggleAskBar)
         }
 
         CommandGroup(replacing: .newItem) {
@@ -356,11 +371,53 @@ struct StenoCommands: Commands {
             )
         }
 
+        CommandGroup(after: .toolbar) {
+            Button("Command Palette…") {
+                openCommandPalette()
+            }
+            .stenoKeyboardShortcut(.commandPalette)
+        }
+
         CommandGroup(replacing: .help) {
             Button("Show Setup Assistant") {
                 openSetupAssistant()
             }
         }
+    }
+
+    /// Opens the Cmd-K command palette. The focused-window contexts are
+    /// snapshotted here because the palette's own search field takes
+    /// keyboard focus as soon as it appears, which would nil out every
+    /// @FocusedValue inside it.
+    private func openCommandPalette() {
+        let focusedTarget = MacFocusedCommandResolver.target(
+            meetingIDs: focusedMeetingContext?.meetingIDs ?? [],
+            folderID: focusedFolderContext?.folderID
+        )
+        let meeting: MacMeetingCommandContext? = switch focusedTarget {
+        case .meetings: focusedMeetingContext
+        case .folder, .none: nil
+        }
+        let folder: MacFolderCommandContext? = switch focusedTarget {
+        case .folder: focusedFolderContext
+        case .meetings, .none: nil
+        }
+        let detail = folder == nil ? focusedMeetingDetailContext : nil
+        model.commandPaletteContexts = CommandPaletteContexts(
+            meeting: meeting,
+            folder: folder,
+            detail: detail
+        )
+        model.isCommandPalettePresented = true
+    }
+
+    /// Cmd-Shift-A flips the persisted ask-bar visibility
+    /// (`AskBarView.visibilityDefaultsKey`). The recording UI observes the
+    /// same key via @AppStorage, so an in-flight recording reacts live.
+    static func toggleAskBarVisibility() {
+        let key = AskBarView.visibilityDefaultsKey
+        let defaults = UserDefaults.standard
+        defaults.set(!defaults.bool(forKey: key), forKey: key)
     }
 }
 

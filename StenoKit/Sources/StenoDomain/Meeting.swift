@@ -27,17 +27,32 @@ public struct MeetingMetadata: Codable, Equatable, Sendable {
     public let legacyFolders: [String]
     public let transferReceipt: MeetingTransferReceipt?
     public let demoProvenance: DemoProvenance?
+    /// Report template chosen for THIS meeting (recording-time pin).
+    /// Optional so older documents decode unchanged; nil means the global
+    /// default applies.
+    public var pinnedTemplateID: String?
 
     public init(
         legacyProvenanceKey: String? = nil,
         legacyFolders: [String] = [],
         transferReceipt: MeetingTransferReceipt? = nil,
-        demoProvenance: DemoProvenance? = nil
+        demoProvenance: DemoProvenance? = nil,
+        pinnedTemplateID: String? = nil
     ) {
         self.legacyProvenanceKey = legacyProvenanceKey
         self.legacyFolders = legacyFolders
         self.transferReceipt = transferReceipt
         self.demoProvenance = demoProvenance
+        self.pinnedTemplateID = pinnedTemplateID
+    }
+
+    /// Returns a copy carrying the given pin (nil clears it). The other
+    /// metadata fields stay immutable by design; only user-owned pins
+    /// mutate after creation.
+    public func withPinnedTemplateID(_ id: String?) -> MeetingMetadata {
+        var copy = self
+        copy.pinnedTemplateID = id
+        return copy
     }
 }
 

@@ -16,10 +16,17 @@ public enum MeetingSearch {
         return meetings.filter { fold($0.title).contains(needle) }
     }
 
-    /// Gross- und Kleinschreibung sowie Diakritika fallen weg, damit "Muller"
-    /// auch "Müller" findet. Ohne das sucht ein Mensch zweimal und glaubt beim
-    /// zweiten Mal, es gebe die Aufnahme nicht.
+    /// Case and diacritics are dropped so that "Muller" also finds "Müller".
+    /// Without this a user searches twice and, on the second try, believes
+    /// the recording does not exist.
     private static func fold(_ text: String) -> String {
+        normalized(text)
+    }
+
+    /// Shared normalization for all search: the sidebar title filter and the
+    /// full-text index in the StenoLibrary module both fold with exactly
+    /// this function, so "Mueller" finds the same things everywhere.
+    public static func normalized(_ text: String) -> String {
         text.trimmingCharacters(in: .whitespacesAndNewlines)
             .folding(
                 options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],

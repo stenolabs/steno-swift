@@ -711,7 +711,8 @@ func overwriteJob(
         attemptCount: job.attemptCount,
         createdAt: job.createdAt,
         errorMessage: job.errorMessage,
-        failureReason: job.failureReason
+        failureReason: job.failureReason,
+        languageDetection: job.languageDetection
     )
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

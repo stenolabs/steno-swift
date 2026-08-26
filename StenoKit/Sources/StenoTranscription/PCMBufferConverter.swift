@@ -1,6 +1,5 @@
 @preconcurrency import AVFAudio
 import Foundation
-import Synchronization
 
 final class PCMBufferConverter {
     private let targetFormat: AVAudioFormat
@@ -28,17 +27,13 @@ final class PCMBufferConverter {
             )
         }
 
-        let suppliedInput = Mutex(false)
+        let suppliedInput = OneShotConverterInputGate()
         var conversionError: NSError?
         let status = converter.convert(
             to: output,
             error: &conversionError
         ) { _, inputStatus in
-            let shouldSupply = suppliedInput.withLock { supplied in
-                if supplied { return false }
-                supplied = true
-                return true
-            }
+            let shouldSupply = suppliedInput.claim()
             if !shouldSupply {
                 inputStatus.pointee = .noDataNow
                 return nil
@@ -121,5 +116,24 @@ final class PCMBufferConverter {
         self.converter = converter
         sourceFormat = format
         return converter
+    }
+}
+
+/// One-shot flag for an ``AVAudioConverter`` input block.
+///
+/// Works around a Swift 6.4 frontend crash ("copy of noncopyable typed
+/// value") triggered by `Mutex.withLock` inside converter input closures;
+/// semantics are identical to the previous `Mutex(false)`.
+private final class OneShotConverterInputGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var supplied = false
+
+    /// Returns true exactly once; every later call returns false.
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if supplied { return false }
+        supplied = true
+        return true
     }
 }
