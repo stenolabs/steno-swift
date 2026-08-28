@@ -248,4 +248,58 @@ struct MeetingMarkdownTests {
         #expect(markdown.contains("**[00:05] Mic:** Real content."))
         #expect(!markdown.contains("[00:00]"))
     }
+
+    @Test("adjacent same-channel fragments merge; a pause keeps two turns")
+    func coalescesAdjacentFragmentsOnly() {
+        let adjacent = MeetingMarkdown.render(
+            MeetingMarkdown.Input(
+                meeting: meeting(),
+                revision: revision([
+                    turn(.channel("Ich"), "This fragment", at: 0),
+                    turn(.channel("Ich"), "continues.", at: 5.2),
+                ])
+            ),
+            calendar: calendar
+        )
+        #expect(adjacent.contains("**[00:00] Me:** This fragment continues."))
+        #expect(adjacent.contains("## Timestamped transcript"))
+        #expect(adjacent.contains("**[00:05] Me:** continues."))
+
+        let paused = MeetingMarkdown.render(
+            MeetingMarkdown.Input(
+                meeting: meeting(),
+                revision: revision([
+                    turn(.channel("You"), "First thought.", at: 0),
+                    turn(.channel("You"), "Later thought.", at: 15),
+                ])
+            ),
+            calendar: calendar
+        )
+        #expect(paused.contains("**[00:00] Me:** First thought."))
+        #expect(paused.contains("**[00:15] Me:** Later thought."))
+        #expect(!paused.contains("## Timestamped transcript"))
+    }
+
+    @Test("alternating channel turns keep honest labels and every timestamp")
+    func alternatingChannelExport() {
+        let markdown = MeetingMarkdown.render(
+            MeetingMarkdown.Input(
+                meeting: meeting(title: "Project sync"),
+                revision: revision([
+                    turn(.channel("Ich"), "Local opening.", at: 3),
+                    turn(.channel("Andere"), "Remote response.", at: 7),
+                    turn(.channel("You"), "Local follow-up.", at: 10),
+                    turn(.channel("Andere"), "Remote follow-up.", at: 14),
+                ])
+            ),
+            calendar: calendar
+        )
+
+        #expect(markdown.contains("# Project sync"))
+        #expect(markdown.contains("**[00:03] Me:** Local opening."))
+        #expect(markdown.contains("**[00:07] Others:** Remote response."))
+        #expect(markdown.contains("**[00:10] Me:** Local follow-up."))
+        #expect(markdown.contains("**[00:14] Others:** Remote follow-up."))
+        #expect(!markdown.contains("**Participants:**"))
+    }
 }

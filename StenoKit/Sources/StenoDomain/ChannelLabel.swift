@@ -15,7 +15,7 @@ public enum ChannelLabel {
     /// die feste Uebersetzung durch die Abfrage von meeting.json.
     public static func speakerLabel(_ raw: String) -> String {
         switch raw {
-        case "Ich": "Me"
+        case "Ich", "You": "Me"
         case "Andere": "Others"
         default: raw
         }

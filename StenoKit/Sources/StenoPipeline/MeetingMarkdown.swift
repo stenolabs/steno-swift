@@ -83,7 +83,15 @@ public enum MeetingMarkdown {
         lines.append("## Transcript")
         lines.append("")
         if let revision = input.revision, !revision.turns.isEmpty {
-            lines.append(contentsOf: transcript(revision, names: input.speakerNames))
+            let readable = transcript(revision, names: input.speakerNames)
+            lines.append(contentsOf: readable)
+            let stamped = timestampedTranscript(revision, names: input.speakerNames)
+            if stamped != readable {
+                lines.append("")
+                lines.append("## Timestamped transcript")
+                lines.append("")
+                lines.append(contentsOf: stamped)
+            }
         } else {
             // Ein leerer Abschnitt waere schlimmer als ein Satz, der sagt,
             // warum er leer ist.
@@ -93,16 +101,63 @@ public enum MeetingMarkdown {
         return lines.joined(separator: "\n")
     }
 
+    private static let coalesceMaxGap: TimeInterval = 2.5
+    private static let coalesceMaxSpan: TimeInterval = 20
+    private static let coalesceMaxCharacters = 400
+
     private static func transcript(
+        _ revision: TranscriptRevision,
+        names: [SpeakerReference: String]
+    ) -> [String] {
+        struct Row {
+            var start: TimeInterval
+            var end: TimeInterval
+            var speaker: String
+            var texts: [String]
+            var characterCount: Int { texts.joined(separator: " ").count }
+        }
+        var rows: [Row] = []
+        for turn in revision.turns {
+            let text = turnText(turn)
+            guard !text.isEmpty else { continue }
+            let speaker = turn.speaker.map { reference in
+                speakerName(for: reference, names: names)
+            } ?? "Unknown speaker"
+            if let last = rows.indices.last,
+               rows[last].speaker == speaker,
+               turn.start <= rows[last].end + coalesceMaxGap,
+               (turn.end - rows[last].start) <= coalesceMaxSpan,
+               rows[last].characterCount + 1 + text.count <= coalesceMaxCharacters
+            {
+                rows[last].texts.append(text)
+                rows[last].end = max(rows[last].end, turn.end)
+            } else {
+                rows.append(Row(
+                    start: turn.start,
+                    end: turn.end,
+                    speaker: speaker,
+                    texts: [text]
+                ))
+            }
+        }
+        var lines: [String] = []
+        for row in rows {
+            lines.append(
+                "**[\(timecode(row.start))] \(row.speaker):** \(row.texts.joined(separator: " "))"
+            )
+            lines.append("")
+        }
+        if lines.last?.isEmpty == true { lines.removeLast() }
+        return lines
+    }
+
+    private static func timestampedTranscript(
         _ revision: TranscriptRevision,
         names: [SpeakerReference: String]
     ) -> [String] {
         var lines: [String] = []
         for turn in revision.turns {
-            let text = turn.segments
-                .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-                .joined(separator: " ")
+            let text = turnText(turn)
             guard !text.isEmpty else { continue }
             let speaker = turn.speaker.map { reference in
                 speakerName(for: reference, names: names)
@@ -114,12 +169,19 @@ public enum MeetingMarkdown {
         return lines
     }
 
+    private static func turnText(_ turn: TranscriptTurn) -> String {
+        turn.segments
+            .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
     /// Ohne aufgeloesten Namen wird die technische Herkunft gezeigt, nicht
     /// geraten. Ein falscher Name in einem Dokument, das jemand weitergibt,
     /// ist der teuerste Fehler dieser Kette.
     private static func fallbackName(_ reference: SpeakerReference) -> String {
         switch reference {
-        case .channel(let name): name
+        case .channel(let name): ChannelLabel.speakerLabel(name)
         case .cluster(_, let clusterID): "Speaker \(clusterID)"
         case .person: "Unknown speaker"
         case .importedTextLabel(let imported):

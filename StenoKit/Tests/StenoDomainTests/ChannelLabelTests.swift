@@ -6,6 +6,7 @@ struct ChannelLabelTests {
     @Test("speaker labels and track names are resolved by different functions")
     func speakerAndTrackAreSeparate() {
         #expect(ChannelLabel.speakerLabel("Ich") == "Me")
+        #expect(ChannelLabel.speakerLabel("You") == "Me")
         #expect(ChannelLabel.speakerLabel("Andere") == "Others")
         #expect(ChannelLabel.trackName("micTrack") == "Microphone")
         #expect(ChannelLabel.trackName("systemTrack") == "System audio")
