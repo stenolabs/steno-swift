@@ -27,6 +27,11 @@ For lasting changes to the shared core, run all four suites documented in `AGENT
 Use disposable `STENO_LIBRARY_DIR` and `STENO_MODEL_DIR` locations for tests that must not touch an existing Steno installation.
 Never use real recordings, transcripts, participant data, or credentials in tests, screenshots, issues, or pull requests.
 
+## Contribution license
+
+Copyright in each contribution remains with its respective author.
+By submitting a contribution to this repository, you agree to license it under the [MIT License](LICENSE).
+
 ## Reporting problems
 
 Public bug reports should include the device, OS version, Steno commit, reproduction steps, and whether recording or only post-processing is affected.
