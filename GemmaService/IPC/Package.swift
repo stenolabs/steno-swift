@@ -16,6 +16,14 @@ let package = Package(
             name: "StenoGemmaServiceCore",
             targets: ["StenoGemmaServiceCore"]
         ),
+        .library(
+            name: "StenoGemmaProcessGate",
+            targets: ["StenoGemmaProcessGate"]
+        ),
+        .executable(
+            name: "steno-gemma-gate-probe",
+            targets: ["StenoGemmaProcessGateProbe"]
+        ),
     ],
     targets: [
         .target(
@@ -31,9 +39,22 @@ let package = Package(
                 .enableExperimentalFeature("StrictConcurrency"),
             ]
         ),
+        .target(
+            name: "StenoGemmaProcessGate",
+            swiftSettings: [
+                .enableExperimentalFeature("StrictConcurrency"),
+            ]
+        ),
+        .executableTarget(
+            name: "StenoGemmaProcessGateProbe",
+            dependencies: ["StenoGemmaProcessGate"],
+            swiftSettings: [
+                .enableExperimentalFeature("StrictConcurrency"),
+            ]
+        ),
         .testTarget(
             name: "StenoGemmaIPCTests",
-            dependencies: ["StenoGemmaIPC", "StenoGemmaServiceCore"],
+            dependencies: ["StenoGemmaIPC", "StenoGemmaServiceCore", "StenoGemmaProcessGate"],
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency"),
             ]
