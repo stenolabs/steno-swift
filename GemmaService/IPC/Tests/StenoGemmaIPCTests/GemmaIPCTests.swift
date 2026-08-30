@@ -374,56 +374,210 @@ struct GemmaIPCTests {
         }
     }
 
-    @Test("protocol v2 control frames require the expected UUID and exact operation")
+    @Test("protocol v3 control frames round-trip and require the exact response kind")
     func controlFramesRoundTrip() throws {
-        let prepared = GemmaIPCPreparedHelperExit(
+        let identity = GemmaIPCBoundHelperIdentity(
             helperInstanceID: UUID(),
             processIdentifier: 42
         )
-        let request = GemmaXPCControlRequestEnvelope(
+        let prepared = GemmaIPCPreparedHelperExit(
+            helperInstanceID: identity.helperInstanceID,
+            processIdentifier: identity.processIdentifier
+        )
+
+        let bindRequest = GemmaXPCControlRequestEnvelope(body: .bindExecutionGate)
+        #expect(try GemmaXPCControlCodec.decodeRequest(
+            GemmaXPCControlCodec.encode(bindRequest)
+        ) == bindRequest)
+        let bindResponse = GemmaXPCControlResponseEnvelope(
+            requestID: bindRequest.requestID,
+            body: .executionGateBound(identity)
+        )
+        #expect(try GemmaXPCControlCodec.decodeResponse(
+            GemmaXPCControlCodec.encode(bindResponse),
+            expectedRequestID: bindRequest.requestID,
+            expectedOperation: .bindExecutionGate
+        ) == bindResponse)
+
+        let prepareRequest = GemmaXPCControlRequestEnvelope(body: .prepareForExit)
+        #expect(try GemmaXPCControlCodec.decodeRequest(
+            GemmaXPCControlCodec.encode(prepareRequest)
+        ) == prepareRequest)
+        let prepareResponse = GemmaXPCControlResponseEnvelope(
+            requestID: prepareRequest.requestID,
+            body: .prepared(prepared)
+        )
+        #expect(try GemmaXPCControlCodec.decodeResponse(
+            GemmaXPCControlCodec.encode(prepareResponse),
+            expectedRequestID: prepareRequest.requestID,
+            expectedOperation: .prepareForExit
+        ) == prepareResponse)
+
+        let armRequest = GemmaXPCControlRequestEnvelope(
             body: .armAndExit(.init(preparedHelper: prepared))
         )
         #expect(try GemmaXPCControlCodec.decodeRequest(
-            GemmaXPCControlCodec.encode(request)
-        ) == request)
+            GemmaXPCControlCodec.encode(armRequest)
+        ) == armRequest)
 
-        let response = GemmaXPCControlResponseEnvelope(
-            requestID: request.requestID,
+        let armResponse = GemmaXPCControlResponseEnvelope(
+            requestID: armRequest.requestID,
             body: .armed(prepared)
         )
         #expect(try GemmaXPCControlCodec.decodeResponse(
-            GemmaXPCControlCodec.encode(response),
-            expectedRequestID: request.requestID,
+            GemmaXPCControlCodec.encode(armResponse),
+            expectedRequestID: armRequest.requestID,
             expectedOperation: .armAndExit
-        ) == response)
+        ) == armResponse)
         #expect(throws: GemmaIPCCodecError.malformedMessage) {
             _ = try GemmaXPCControlCodec.decodeResponse(
-                GemmaXPCControlCodec.encode(response),
+                GemmaXPCControlCodec.encode(armResponse),
                 expectedRequestID: UUID(),
                 expectedOperation: .armAndExit
             )
         }
 
-        let failure = GemmaXPCControlResponseEnvelope(
-            requestID: request.requestID,
-            body: .failure(.init(code: .shuttingDown))
+        let mismatches: [(GemmaXPCControlOperation, GemmaXPCControlResponseBody)] = [
+            (.bindExecutionGate, .prepared(prepared)),
+            (.prepareForExit, .executionGateBound(identity)),
+            (.armAndExit, .prepared(prepared)),
+        ]
+        for (expectedOperation, wrongBody) in mismatches {
+            let wrongResponse = GemmaXPCControlResponseEnvelope(
+                requestID: armRequest.requestID,
+                body: wrongBody
+            )
+            #expect(throws: GemmaIPCCodecError.malformedMessage) {
+                _ = try GemmaXPCControlCodec.decodeResponse(
+                    GemmaXPCControlCodec.encode(wrongResponse),
+                    expectedRequestID: armRequest.requestID,
+                    expectedOperation: expectedOperation
+                )
+            }
+        }
+
+        for operation in [
+            GemmaXPCControlOperation.bindExecutionGate,
+            .prepareForExit,
+            .armAndExit,
+        ] {
+            let failure = GemmaXPCControlResponseEnvelope(
+                requestID: armRequest.requestID,
+                body: .failure(.init(code: .shuttingDown))
+            )
+            #expect(try GemmaXPCControlCodec.decodeResponse(
+                GemmaXPCControlCodec.encode(failure),
+                expectedRequestID: armRequest.requestID,
+                expectedOperation: operation
+            ) == failure)
+        }
+
+        #expect(GemmaXPCChannel.model.rawValue == "model")
+        #expect(GemmaXPCChannel.control.rawValue == "control")
+    }
+
+    @Test("control JSON requires exact keys and rejects duplicates")
+    func controlFramesRequireExactJSONKeys() throws {
+        let requestID = UUID()
+        let bindRequest = GemmaXPCControlRequestEnvelope(
+            requestID: requestID,
+            body: .bindExecutionGate
         )
-        #expect(try GemmaXPCControlCodec.decodeResponse(
-            GemmaXPCControlCodec.encode(failure),
-            expectedRequestID: request.requestID,
-            expectedOperation: .armAndExit
-        ) == failure)
+        let requestData = try GemmaXPCControlCodec.encode(bindRequest)
+        let requestObject = try #require(
+            JSONSerialization.jsonObject(with: requestData) as? [String: Any]
+        )
+        #expect(Set(requestObject.keys) == ["protocolVersion", "requestID", "body"])
+        let requestBody = try #require(requestObject["body"] as? [String: Any])
+        #expect(Set(requestBody.keys) == ["operation", "payload"])
+        #expect((requestBody["payload"] as? [String: Any])?.isEmpty == true)
+
+        var requestWithExtraPayloadKey = requestObject
+        var extraRequestBody = requestBody
+        extraRequestBody["payload"] = ["gateFD": 7]
+        requestWithExtraPayloadKey["body"] = extraRequestBody
+        #expect(throws: GemmaIPCCodecError.malformedMessage) {
+            _ = try GemmaXPCControlCodec.decodeRequest(
+                JSONSerialization.data(withJSONObject: requestWithExtraPayloadKey)
+            )
+        }
+
+        let duplicateOperation = Data("""
+        {"protocolVersion":\(GemmaIPCProtocol.currentVersion),"requestID":"\(requestID.uuidString)","body":{"operation":"bindExecutionGate","operation":"prepareForExit","payload":{}}}
+        """.utf8)
+        #expect(throws: GemmaIPCCodecError.malformedMessage) {
+            _ = try GemmaXPCControlCodec.decodeRequest(duplicateOperation)
+        }
+
+        let identity = GemmaIPCBoundHelperIdentity(
+            helperInstanceID: UUID(),
+            processIdentifier: 42
+        )
+        let response = GemmaXPCControlResponseEnvelope(
+            requestID: requestID,
+            body: .executionGateBound(identity)
+        )
+        let responseData = try GemmaXPCControlCodec.encode(response)
+        var responseObject = try #require(
+            JSONSerialization.jsonObject(with: responseData) as? [String: Any]
+        )
+        #expect(Set(responseObject.keys) == ["protocolVersion", "requestID", "body"])
+        var responseBody = try #require(responseObject["body"] as? [String: Any])
+        #expect(Set(responseBody.keys) == ["kind", "payload"])
+        var responsePayload = try #require(responseBody["payload"] as? [String: Any])
+        #expect(Set(responsePayload.keys) == ["helperInstanceID", "processIdentifier"])
+        responsePayload["path"] = "/tmp/not-allowed"
+        responseBody["payload"] = responsePayload
+        responseObject["body"] = responseBody
+        #expect(throws: GemmaIPCCodecError.malformedMessage) {
+            _ = try GemmaXPCControlCodec.decodeResponse(
+                JSONSerialization.data(withJSONObject: responseObject),
+                expectedRequestID: requestID,
+                expectedOperation: .bindExecutionGate
+            )
+        }
+
+        let duplicateKind = Data("""
+        {"protocolVersion":\(GemmaIPCProtocol.currentVersion),"requestID":"\(requestID.uuidString)","body":{"kind":"executionGateBound","kind":"failure","payload":{"helperInstanceID":"\(identity.helperInstanceID.uuidString)","processIdentifier":42}}}
+        """.utf8)
+        #expect(throws: GemmaIPCCodecError.malformedMessage) {
+            _ = try GemmaXPCControlCodec.decodeResponse(
+                duplicateKind,
+                expectedRequestID: requestID,
+                expectedOperation: .bindExecutionGate
+            )
+        }
+    }
+
+    @Test("control protocol v3 rejects request and response version skew")
+    func controlFramesRejectVersionSkew() throws {
+        #expect(GemmaIPCProtocol.currentVersion == 3)
 
         let incompatible = GemmaXPCControlRequestEnvelope(
-            protocolVersion: GemmaIPCProtocol.currentVersion + 1,
-            body: .prepareForExit
+            protocolVersion: GemmaIPCProtocol.currentVersion - 1,
+            body: .bindExecutionGate
         )
         #expect(throws: GemmaIPCCodecError.protocolMismatch) {
             _ = try GemmaXPCControlCodec.decodeRequest(
                 GemmaXPCControlCodec.encode(incompatible)
             )
         }
-        #expect(GemmaXPCChannel.model.rawValue == "model")
-        #expect(GemmaXPCChannel.control.rawValue == "control")
+
+        let requestID = UUID()
+        let incompatibleResponse = GemmaXPCControlResponseEnvelope(
+            protocolVersion: GemmaIPCProtocol.currentVersion + 1,
+            requestID: requestID,
+            body: .executionGateBound(.init(
+                helperInstanceID: UUID(),
+                processIdentifier: 42
+            ))
+        )
+        #expect(throws: GemmaIPCCodecError.malformedMessage) {
+            _ = try GemmaXPCControlCodec.decodeResponse(
+                GemmaXPCControlCodec.encode(incompatibleResponse),
+                expectedRequestID: requestID,
+                expectedOperation: .bindExecutionGate
+            )
+        }
     }
 }
