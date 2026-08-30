@@ -1,0 +1,91 @@
+name: Steno27
+
+include: project.yml
+
+options:
+  minimumXcodeGenVersion: 2.46.0
+  xcodeVersion: "27.0"
+  deploymentTarget:
+    macOS: "27.0"
+
+packages:
+  StenoKit:
+    path: StenoKit
+  GemmaIPC:
+    path: GemmaService/IPC
+
+targets:
+  Steno:
+    dependencies:
+      - target: StenoGemmaXPC
+        embed: true
+        codeSign: true
+        link: false
+    settings:
+      base:
+        MACOSX_DEPLOYMENT_TARGET: "27.0"
+
+  StenoTests:
+    sources:
+      - GemmaService/XPC/Tests
+    dependencies:
+      - package: GemmaIPC
+        product: StenoGemmaIPC
+    settings:
+      base:
+        MACOSX_DEPLOYMENT_TARGET: "27.0"
+
+  StenoGemmaXPC:
+    type: xpc-service
+    platform: macOS
+    configFiles:
+      Debug: Config/Signing.xcconfig
+      Release: Config/Signing.xcconfig
+    sources:
+      - GemmaService/XPC/Sources
+    dependencies:
+      - package: GemmaIPC
+        product: StenoGemmaIPC
+      - package: GemmaIPC
+        product: StenoGemmaServiceCore
+    info:
+      path: .build/XcodeGen/StenoGemmaXPC/Info.plist
+      properties:
+        CFBundleDisplayName: Steno Gemma XPC
+        XPCService:
+          ServiceType: Application
+    entitlements:
+      path: .build/XcodeGen/StenoGemmaXPC/StenoGemmaXPC.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+    settings:
+      base:
+        ARCHS: arm64
+        PRODUCT_NAME: StenoGemmaXPC
+        PRODUCT_BUNDLE_IDENTIFIER: "$(STENO_BUNDLE_IDENTIFIER).GemmaXPC"
+        MACOSX_DEPLOYMENT_TARGET: "27.0"
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        SKIP_INSTALL: true
+        GENERATE_INFOPLIST_FILE: false
+        ENABLE_HARDENED_RUNTIME: true
+        ENABLE_APP_SANDBOX: true
+        ENABLE_INCOMING_NETWORK_CONNECTIONS: false
+        ENABLE_OUTGOING_NETWORK_CONNECTIONS: false
+        REGISTER_APP_GROUPS: false
+        APPLICATION_EXTENSION_API_ONLY: true
+        CODE_SIGN_STYLE: Automatic
+
+schemes:
+  Steno27:
+    build:
+      targets:
+        Steno: all
+    test:
+      targets:
+        - StenoTests
+
+  StenoGemmaXPC:
+    build:
+      targets:
+        StenoGemmaXPC: all

@@ -76,7 +76,7 @@ Any outstanding hardware or visual verification is stated on the item or in its 
 - [ ] Visually verify that Settings does not test endpoints automatically.
 - [x] (M4) Templates: builtin product-demo, sales-call, one-on-one, standup plus user-defined markdown templates, overrides with reset, and a default-template setting.
 - [ ] Direct Gemma downloads on iOS.
-- [ ] Direct native Gemma inference on macOS through MLX remains open; model installation, consent, checksum verification, and fail-closed execution must precede UI activation.
+- [ ] Native Gemma inference on macOS remains unavailable: the Xcode 27 variant now provides a signed, sandboxed, model-free XPC helper with incoming and outgoing network access disabled, strict IPC, and a real integration test, but production caller authentication, the recording quiescence barrier, bounded request lifecycle management, model import or installation, and verified model-runtime activation remain open.
 - [x] Multiple immutable report versions per meeting, pinned to a revision, with quarantine restoration.
 - [x] (M4) Title generation suggestion with apply/dismiss persistence.
 - [x] (M5) Optional external LLM providers with native dialects for Ollama, LM Studio, OpenAI, Anthropic, and Bedrock, plus a conservative OpenAI-compatible fallback. Providers are never contacted automatically, selection is pinned to the job, and the provider remains visible on the report. Real tests passed with LM Studio/MLX Gemma 4 and Ollama/Gemma 4 on Mac and iPad Simulator. Cloud contracts were verified locally with HTTP fixtures, without paid cloud requests.

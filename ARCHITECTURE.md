@@ -7,6 +7,7 @@ Labels in this document: **[Fact]** was verified against a local source, **[Assu
 
 Steno is a native Swift app in a single repository, with a local SwiftPM package named `StenoKit`, clearly separated targets, and a thin macOS app target.
 The experimental `GemmaService` package is a separate macOS 27 build boundary and is not part of the application dependency graph.
+Its dependency-free strict-concurrency IPC module is used by the separate Xcode 27 project variant, which embeds a signed, sandboxed, model-free XPC helper with incoming and outgoing network access disabled.
 Its core is a **file-based, versioned library** with immutable originals, append-only processing runs, and explicit revisions, without a database dependency in the initial implementation.
 Transcription primarily uses Apple's `SpeechAnalyzer` and `SpeechTranscriber` APIs, verified in the macOS 26 SDK, including `audioTimeRange` for word timestamps and `volatileResults` for provisional live results.
 Diarization uses the existing Sortformer and WeSpeaker code from the sidecar as an internal Swift target, in process rather than as a subprocess.
@@ -44,7 +45,8 @@ The speaker-identity logic from `speaker_suggestions.py` is reshaped as a Swift 
 ## 2. Modules and dependencies
 
 The shipping application contains one local SwiftPM package, `StenoKit`, with several targets and one Xcode app target.
-The separate experimental `GemmaService` package remains outside that graph until the deferred integration requirements are met.
+The separate experimental `GemmaService` package remains outside that graph.
+The separate Xcode 27 project variant adds only the dependency-free IPC module and embeds the model-free XPC helper; it does not activate the MLX model runtime in the app.
 [Recommendation] Use one package with multiple targets instead of many packages: target dependencies provide real boundaries without versioning and release overhead between artificial packages.
 
 ```text
@@ -287,5 +289,6 @@ The order follows the handoff with one correction: milestone 1 already needs min
 7. Detailed encryption design, including key format and recovery-code UX, before milestone 7.
 8. Native Gemma 4 app integration: `GemmaService` establishes a macOS 27 compile and local-verification boundary around an MLX runtime that conforms to Apple's Foundation Models `LanguageModel` API.
    Apple's framework does not load the external checkpoint.
-   The package must remain outside the app until the helper is signed, sandboxed without network entitlements, loads an immutable Steno-controlled snapshot tied to an explicitly approved checkpoint, and is proven unable to affect recording.
+   The separate Xcode 27 project variant now embeds a signed App Sandbox XPC helper with incoming and outgoing network access disabled.
+   The dependency-free IPC boundary and a real model-free XPC integration test are implemented, while production caller authentication, the recording quiescence barrier, bounded request lifecycle management, the model installer or importer, and verified model-runtime activation remain unresolved.
 9. Whether a speaker-count field should ever exist. If it does, ask "how many people spoke?", not "how many people attended?".
