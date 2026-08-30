@@ -258,9 +258,14 @@ The helper scripts always regenerate the corresponding Xcode project before buil
 
 The architectural invariants and failure behavior are documented in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
+## Contributing
+
+Bug reports, focused fixes, tests, and documentation improvements are welcome.
+Read [`CONTRIBUTING.md`](CONTRIBUTING.md), the [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md), and [`SUPPORT.md`](SUPPORT.md) before opening an issue or pull request.
+
 ## Reporting issues
 
-When the repository opens for public beta, reports should include the device, OS version, app commit, reproduction steps, and whether the issue affects recording or only post-processing.
+Bug reports should include the device, OS version, app commit, reproduction steps, and whether the issue affects recording or only post-processing.
 Do not attach real recordings, transcripts, participant details, endpoint credentials, or other meeting data to a public issue.
 A synthetic demo meeting or a minimal generated fixture is preferred.
 
@@ -270,3 +275,6 @@ Report suspected security vulnerabilities privately by following [`SECURITY.md`]
 
 Steno is available under the [MIT License](LICENSE).
 The bundled demo dataset carries its own attribution and licensing notes in [`ATTRIBUTION.md`](StenoKit/Sources/StenoDemo/Resources/DemoDataset/ATTRIBUTION.md).
+Additional dependency and fixture notices are collected in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
+Project roles and decision-making are described in [`GOVERNANCE.md`](GOVERNANCE.md) and [`MAINTAINERS.md`](MAINTAINERS.md).

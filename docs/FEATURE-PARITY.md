@@ -50,13 +50,13 @@ Any outstanding hardware or visual verification is stated on the item or in its 
 - [x] People registry with context-tagged prototypes and hard negatives, backed by the 13 legacy invariants as tests.
 - [x] Suggestion engine with calibrated `confirmed`, `possible`, and `none` gates, meeting-wide exclusivity, and run provenance.
 - [x] Speaker-review UI for confirm, many-to-one assignment, new person, multiple people, and generic labels; resolved names in transcripts; and quote-plus-audio samples from the same turn.
-- [x] People management in Settings: rename, merge, undoable delete, provenance and audio per sample, exclusion instead of deletion, and visible, reversible hard negatives. See `docs/PLAN-PEOPLE.md`.
+- [x] People management in Settings: rename, merge, undoable delete, provenance and audio per sample, exclusion instead of deletion, and visible, reversible hard negatives.
 - [x] Self voiceprint for recognizing "Me": operator person with a "This was me" binding on unconfirmed mic clusters.
 - [x] Manual voice enrollment outside a meeting: record-or-import clip in People settings computes a context-free prototype via the WeSpeaker extraction path.
 - [x] Visible cross-meeting suggestions in the People settings (possible-gate matches per person with quote samples, confirm or dismiss with reversible suppression).
 - [ ] More than four speakers per channel. The measured VBx path is unusable; see the risks in `ARCHITECTURE.md`.
       Candidate LS-EEND evaluated on paper: decision brief with sizes, estimates, and a
-      metadata-only first gate lives in [`PLAN-GT4-SPEAKERS.md`](PLAN-GT4-SPEAKERS.md).
+      further model evaluation remains separate benchmark work.
       Note: stenoai carries the identical Sortformer 4-slot ceiling, so this row is an
       improvement over both apps, not a parity regression.
 

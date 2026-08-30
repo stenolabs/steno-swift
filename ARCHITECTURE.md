@@ -1,7 +1,6 @@
 # Steno for macOS - Architecture
 
 Status: 4 August 2026.
-Author: Claude (Fable 5), based on the sources named in `HANDOFF.md`, all verified locally.
 Labels in this document: **[Fact]** was verified against a local source, **[Assumption]** is plausible but unmeasured, and **[Recommendation]** is a decision made by this design.
 
 ## 1. Overall decision
@@ -12,7 +11,7 @@ Transcription primarily uses Apple's `SpeechAnalyzer` and `SpeechTranscriber` AP
 Diarization uses the existing Sortformer and WeSpeaker code from the sidecar as an internal Swift target, in process rather than as a subprocess.
 The speaker-identity logic from `speaker_suggestions.py` is reshaped as a Swift domain model while preserving its 13 measurement-backed invariants.
 
-### Required corrections to the handoff assumptions
+### Corrections to earlier design assumptions
 
 1. **"Microphone and system audio remain separate local original tracks" describes a new implementation, not a port.**
    [Fact] The current app records one stereo WebM/Opus file, with microphone on the left and system audio on the right at 48 kHz (`useSystemAudioCapture.ts:318-461`), and only later splits it into 16 kHz mono files with ffmpeg (`transcriber.py:1877`).
@@ -21,7 +20,7 @@ The speaker-identity logic from `speaker_suggestions.py` is reshaped as a Swift 
    [Fact] The interval is 0.4 seconds, but the window is capped at 15 seconds and then slides (`simple_recorder.py:2202-2203, 2576`); a keep-pace guard stretches the interval to as much as eight seconds under load.
    The real problems are duplicate decoding for partial and final output, one synchronous consumer thread with backpressure on the stdin pipe, and the obsolete `ScriptProcessorNode` in the renderer.
    The target remains valid: a streaming-native pipeline without repeated decoding, which `SpeechAnalyzer` provides natively.
-3. **The experimental offline diarizer from `/private/tmp/wt-4plus` is measurably not ready to ship.**
+3. **The earlier experimental offline diarizer is measurably not ready to ship.**
    [Fact] Across 18 AMI development meetings, VBx/AHC produced DER 40.01 compared with Sortformer's 20.34; without constraints DER was 52.70; and the constrained path is nondeterministic because FluidAudio's `KMeansClustering.swift:64` uses unseeded K-means.
    The actual more-than-four-speaker comparison, the eight-speaker concatenation in `work/eightspk/`, was started but never scored.
    Consequently, the domain model must not impose a slot limit, but the engine choice for more than four speakers remains open behind the provider boundary.
@@ -36,8 +35,8 @@ The speaker-identity logic from `speaker_suggestions.py` is reshaped as a Swift 
 7. **The largest current recovery gap is the lack of a persistent job queue.**
    [Fact] `processingQueue` is in memory; after a crash between stopping and processing, the recording remains orphaned (`app/main.js`, `live-snapshot-sweep.js:12-20`).
    The new app persists processing runs as part of its data model.
-8. **Further alignment tuning is not worthwhile on conference material.**
-   [Fact] Overlap voting, island smoothing, and A-B-A collapse affect between 0 and 0.3 percent of the material and were all classified as "do not build" (`HANDOFF-feat-speaker-alignment.md:60-72`).
+8. **Further alignment tuning is not worthwhile on the measured conference material.**
+   [Fact] Earlier measurements found that overlap voting, island smoothing, and A-B-A collapse affected between 0 and 0.3 percent of the evaluated material.
    Only the word-level split of long sentences starting at five seconds (`transcriber.py:570`), overlap clamping, and the distance limit for nearest fallback are retained.
    The case of multiple people sharing one microphone remains unmeasured; it is a benchmark task, not an architecture assumption.
 
@@ -237,7 +236,7 @@ The `EngineDescriptor` is stored in every `run.json` so each artifact remains at
 
 - **Unit level**, fast and deterministic: domain invariants in `StenoDomain` and `StenoIdentity`, including the 13 legacy invariants as a test catalog, storage migrations, revision rules, and alignment rules using synthetic word timestamps.
 - **Integration level**: Pipeline runs against small real audio fixtures, including speech created with `say`; crash-recovery tests that terminate the process, relaunch, and inspect state; and storage round trips.
-- **Benchmark kit**: Continue using `~/Dev/sandbox/steno-diar-bench` with AMI development and test sets, CCC windows, dscore, and three-way DER/JER reporting. The new app receives a `steno-bench` CLI target that emits the same RTTM format so old and new measurements remain comparable.
+- **Benchmark kit**: Continue the documented AMI and CCC protocol with dscore and three-way DER/JER reporting. The app's benchmark CLI emits the same RTTM format so historical and new measurements remain comparable.
 - **Open measurement questions, in priority order**:
   1. Compare SpeechAnalyzer with Parakeet in German and English for WER, word-timestamp quality, latency, and energy. [Assumption] SpeechAnalyzer is good enough; this is unmeasured.
   2. Obtain real, time-aligned reference material with multiple people sharing one microphone. Do no further alignment tuning without this material.

@@ -61,7 +61,7 @@ struct RecordingStartStateTests {
         let identity = try #require(CurrentCodeSigningIdentity.cacheKey())
 
         // Machines without the ignored local `.steno-signing.xcconfig` build
-        // ad hoc; TCC then re-prompts on every build (see LESSONS-ALT-STENO).
+        // ad hoc; TCC then re-prompts on every build.
         // The stable-team contract can only hold where a DEVELOPMENT_TEAM is
         // actually configured, so ad-hoc machines skip the assertion.
         guard !identity.hasPrefix("adhoc:") else { return }

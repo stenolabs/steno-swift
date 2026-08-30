@@ -1,6 +1,6 @@
 # Legacy stenoai data formats: import specification
 
-Analyzed on 5 August 2026 from the writer code in the authoritative legacy repository at `~/Dev/Repositorys/stenoai`, then checked against real user data under `~/Library/Application Support/stenoai/`.
+Analyzed on 5 August 2026 from the writer code in the authoritative Steno Legacy repository, then checked against representative local data without committing that data.
 Legend: `[C]` means established by code and `[D]` means inferred only from example data.
 
 ## 0. Directory layout

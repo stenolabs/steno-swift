@@ -79,7 +79,7 @@ struct DomainModelTests {
             kind: .imported,
             sampleRate: 48_000,
             duration: 12.5,
-            provenanceKey: "0123456789abcdef",
+            provenanceKey: "0123456789abcdef", // gitleaks:allow - synthetic test value
             fileName: "audio.m4a"
         )
 

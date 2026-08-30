@@ -1,19 +1,30 @@
-# Demo-Datensatz: Herkunft und Lizenzhinweise
+# Synthetic demo dataset attribution
 
-Die drei WAV-Dateien wurden am 23. August 2026 lokal aus vollständig fiktiven deutschen Texten erzeugt.
+The three bundled WAV files were generated locally on 23 August 2026 from entirely fictional German scripts.
+They contain no recordings of real people, company data, CCC material, or AMI material.
 
-Sie enthalten keine Aufnahmen realer Personen, keine Unternehmensdaten und keine CCC- oder AMI-Materialien.
+## Speech generator
 
-Der Entwicklungszeit-Generator ist der archivierte [rhasspy/piper](https://github.com/rhasspy/piper/tree/38917ffd8c0e219c6581d73e07b30ef1d572fce1) Stand `38917ffd8c0e219c6581d73e07b30ef1d572fce1` unter MIT.
+The development-time generator was [rhasspy/piper](https://github.com/rhasspy/piper/tree/38917ffd8c0e219c6581d73e07b30ef1d572fce1) at commit `38917ffd8c0e219c6581d73e07b30ef1d572fce1`, licensed under MIT.
 
-Die Piper-Stimmen-Repositoryrevision ist [7e8200c80dbc9147404face0d3ee0bb69995d873](https://huggingface.co/rhasspy/piper-voices/tree/7e8200c80dbc9147404face0d3ee0bb69995d873) und trägt eine MIT-Lizenz.
+The voice repository was [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices/tree/7e8200c80dbc9147404face0d3ee0bb69995d873) at revision `7e8200c80dbc9147404face0d3ee0bb69995d873`, licensed under MIT.
 
-Für die Synthese wurde `de_DE-mls-medium` mit den Modellsprecherindizes 0, 1 und 5 verwendet.
+Generation used the `de_DE-mls-medium` voice with model speaker indices `0`, `1`, and `5`.
+The corresponding model speaker IDs recorded in the generation manifest are `2422`, `4536`, and `6507`.
 
-Die zugehörige Modellkarte erklärt das MLS-Trainingsmaterial als CC BY 4.0 und verweist auf [OpenSLR 94](http://openslr.org/94/).
+## Training-data attribution
 
-eSpeak NG `2023.9.7-4` aus [Commit 5c3a2e79c24f92cd408d067a9aa47553927ec891](https://github.com/rhasspy/espeak-ng/tree/5c3a2e79c24f92cd408d067a9aa47553927ec891) ist GPL-3.0-or-later und wurde ausschließlich als nicht gebündelte Entwicklungsabhängigkeit des Generators verwendet.
+The voice model card identifies its training material as Multilingual LibriSpeech, distributed as [OpenSLR SLR94](https://www.openslr.org/94/) under the [Creative Commons Attribution 4.0 International license](https://creativecommons.org/licenses/by/4.0/).
 
-Diese Erklärung trifft keine weitergehende rechtliche Aussage über erzeugte Ausgaben.
+Attribution: Vineel Pratap and the Multilingual LibriSpeech contributors, "MLS: A Large-Scale Multilingual Dataset for Speech Research," Interspeech 2020.
 
-Die vollständigen URLs, Revisionen, Bytezahlen und Prüfsummen aller Entwicklungsartefakte stehen in `scripts/demo/demo-script.json` und `docs/DEMO-FIXTURE.md`.
+The committed WAV files are generated and mixed outputs, not copies of the MLS recordings.
+They use fictional scripts, selected model speakers, explicit timing, and adjusted gain levels.
+
+## Unbundled development dependencies
+
+eSpeak NG `2023.9.7-4` at [commit `5c3a2e79c24f92cd408d067a9aa47553927ec891`](https://github.com/rhasspy/espeak-ng/tree/5c3a2e79c24f92cd408d067a9aa47553927ec891) is licensed under GPL-3.0-or-later.
+It was used only as an unbundled development dependency of the generator.
+The repository's small patch to eSpeak NG build configuration is also offered under GPL-3.0-or-later.
+
+The exact artifact URLs, revisions, byte counts, checksums, and licenses are recorded in `scripts/demo/demo-script.json` and `docs/DEMO-FIXTURE.md`.

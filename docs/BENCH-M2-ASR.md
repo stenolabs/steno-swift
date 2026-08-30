@@ -1,7 +1,7 @@
 # Milestone 2: SpeechAnalyzer benchmark and ASR reference decision
 
 Measured on 5 August 2026 on this machine running macOS 26.5 on Apple Silicon.
-Method and raw data are stored in `~/Dev/sandbox/steno-diar-bench`, section 2g of `RESULTS.md`.
+The method and summarized results are recorded here; task-local raw working artifacts from the original run are not distributed with the repository.
 Scoring matches the Parakeet baseline from section 2d, using the same single-stream reference, normalizer, and jiwer version.
 
 ## Result

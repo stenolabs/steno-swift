@@ -60,9 +60,9 @@ enum HomeStatusReviewPolicy {
             guard !cluster.isSelf, !cluster.containsMultipleSpeakers else {
                 return false
             }
-            // A generic label is itself a persistent review decision
-            // (LESSONS-ALT-STENO section 5): it must not resurface as an
-            // open speaker, exactly like a confirmed one.
+            // A generic label is itself a persistent review decision.
+            // It must not resurface as an open speaker, exactly like a
+            // confirmed one.
             switch cluster.reviewState {
             case .confirmed, .generic: return false
             default: return true

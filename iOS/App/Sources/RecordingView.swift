@@ -6,9 +6,8 @@ import SwiftUI
 /// The recording screen, for phone and tablet.
 ///
 /// Built to be consulted, not watched: during a meeting the device lies on the
-/// table and gets glances of one to three seconds, one-handed. The rules come
-/// from `steno-macos/docs/UX-REVIEW.md`, addendum "Was waehrend einer laufenden
-/// Aufnahme zaehlt", and they include what is deliberately absent:
+/// table and gets glances of one to three seconds, one-handed. The controls
+/// reflect that interaction model and include what is deliberately absent:
 ///
 /// - No pause button. Forgetting to resume destroys the recording, and a
 ///   control whose omission is that costly does not belong here.

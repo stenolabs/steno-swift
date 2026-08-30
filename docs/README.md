@@ -22,10 +22,6 @@ Keep measurements in English even when the evaluated speech and transcript fixtu
 
 ## Historical records
 
-Dated work packages, milestone plans, UX reviews, code reviews, and documents under [`superpowers/`](superpowers/) record how decisions were reached.
-Some remain in German.
+Selected completed reviews are retained under [`history/`](history/) for provenance.
 They are non-normative and may describe code that has since changed.
 Current code, tests, the architecture document, the iOS plan, the privacy contract, and the feature-parity checklist take precedence.
-
-Do not add new work to a historical German document.
-Create or update an English current document and link the historical record only when its rationale still matters.

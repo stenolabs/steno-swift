@@ -11,7 +11,7 @@
     "noiseW": 0,
     "generator": "rhasspy/piper",
     "generatorCommit": "38917ffd8c0e219c6581d73e07b30ef1d572fce1",
-    "sourcePatchSHA256": "4f0f8af3ce4a34caec4094974f466e4e3a85b9206be0360d1383522bc11160a4",
+    "sourcePatchSHA256": "46eb185d737ce00c617376e61af6197de3e73f49842c4603230eba64caa18870",
     "voice": "de_DE-mls-medium",
     "voiceRepositoryRevision": "7e8200c80dbc9147404face0d3ee0bb69995d873",
     "speakers": [

@@ -1,0 +1,32 @@
+name: Feature request
+description: Propose a focused improvement to Steno.
+title: "feature: "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include real recordings, transcripts, participant details, or credentials.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem should this change solve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest useful outcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: safety
+    attributes:
+      label: Recording and privacy impact
+      description: Explain any effect on recording integrity, local data, external services, credentials, or exports.
+    validations:
+      required: true

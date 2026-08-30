@@ -1,0 +1,3 @@
+# Synthetic provenance identifiers used by tests, verified as false positives.
+26d99c40c8aa1813167076fe8aa7a72ca3f6f94c:StenoKit/Tests/StenoLibraryTests/LibraryCRUDTests.swift:generic-api-key:151
+26d99c40c8aa1813167076fe8aa7a72ca3f6f94c:StenoKit/Tests/StenoDomainTests/DomainModelTests.swift:generic-api-key:82

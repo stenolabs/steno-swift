@@ -2,7 +2,6 @@
 
 Status: 24 August 2026.
 This is the English entry point for current iOS work.
-The complete German design session from 7 August 2026 is preserved as a non-normative historical record in [`history/PLAN-IOS-2026-08-07.de.md`](history/PLAN-IOS-2026-08-07.de.md).
 Current code, tests, `ARCHITECTURE.md`, and `FEATURE-PARITY.md` take precedence over that historical record.
 
 ## 1. Product decision
