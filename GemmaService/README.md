@@ -1,6 +1,9 @@
 # Native Gemma service
 
-`GemmaService` is the isolated macOS 27 build boundary for running a local Gemma 4 model through Apple's Foundation Models APIs and MLX.
+`GemmaService` is the isolated macOS 27 build boundary for exposing a local Gemma 4 model through Apple's Foundation Models `LanguageModel` API while MLX performs checkpoint loading and inference.
+
+Apple's Foundation Models framework does not load external Gemma checkpoints.
+The `MLXFoundationModels` adapter provides API compatibility with `LanguageModelSession`; it does not turn Gemma into Apple's `SystemLanguageModel` or make Apple responsible for the model runtime.
 
 It is intentionally a separate Swift package.
 The package is not a dependency of `StenoKit`, the macOS app target, or the iOS app target.

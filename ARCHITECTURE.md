@@ -285,5 +285,7 @@ The order follows the handoff with one correction: milestone 1 already needs min
 5. Distribution through Developer ID signing, notarization, and updates; the initial implementation is a local build.
 6. iOS: keep the domain and contracts portable, but write no iOS-specific code before the macOS core is stable.
 7. Detailed encryption design, including key format and recovery-code UX, before milestone 7.
-8. Native Gemma 4 app integration: `GemmaService` establishes a macOS 27 compile and local-verification boundary, but it must remain outside the app until the helper is signed, sandboxed without network entitlements, loads an immutable Steno-controlled snapshot tied to an explicitly approved checkpoint, and is proven unable to affect recording.
+8. Native Gemma 4 app integration: `GemmaService` establishes a macOS 27 compile and local-verification boundary around an MLX runtime that conforms to Apple's Foundation Models `LanguageModel` API.
+   Apple's framework does not load the external checkpoint.
+   The package must remain outside the app until the helper is signed, sandboxed without network entitlements, loads an immutable Steno-controlled snapshot tied to an explicitly approved checkpoint, and is proven unable to affect recording.
 9. Whether a speaker-count field should ever exist. If it does, ask "how many people spoke?", not "how many people attended?".
