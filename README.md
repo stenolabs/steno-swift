@@ -268,5 +268,5 @@ Report suspected security vulnerabilities privately by following [`SECURITY.md`]
 
 ## License
 
-No open-source license has been selected for this repository yet.
-Until a license file is added, normal copyright restrictions apply even if the repository is publicly readable.
+Steno is available under the [MIT License](LICENSE).
+The bundled demo dataset carries its own attribution and licensing notes in [`ATTRIBUTION.md`](StenoKit/Sources/StenoDemo/Resources/DemoDataset/ATTRIBUTION.md).
