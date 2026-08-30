@@ -23,6 +23,9 @@ public enum PipelineError: Error, Equatable, Sendable {
     case templateRenderInputChanged
     case templateRenderPinsRequired
     case textModelEndpointConfigurationIncomplete(String)
+    case nativeGemmaProviderUnavailable
+    case nativeGemmaProviderProvenanceMismatch
+    case nativeGemmaModelPinsInvalid
     case invalidDownstreamJob(JobID)
     case invalidRunArtifact(RunID)
     case corruptRunArtifact(RunID)
@@ -76,6 +79,12 @@ extension PipelineError: LocalizedError {
             "This external report predates the required input and endpoint safeguards. Review the current report preview and create the report again."
         case .textModelEndpointConfigurationIncomplete(let endpointName):
             "The text-model endpoint \u{201C}\(endpointName)\u{201D} has an incomplete configuration. Open Language Models in Settings and save the endpoint."
+        case .nativeGemmaProviderUnavailable:
+            "The selected native Gemma model is not available on this device."
+        case .nativeGemmaProviderProvenanceMismatch:
+            "The native Gemma provider does not match the verified model selection."
+        case .nativeGemmaModelPinsInvalid:
+            "The selected native Gemma model no longer has complete verified provenance. Create the report again."
         case .invalidDownstreamJob(let jobID):
             "Downstream pipeline job \(jobID) conflicts with its deterministic provenance."
         case .invalidRunArtifact(let runID):

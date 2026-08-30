@@ -412,6 +412,44 @@ struct JobStoreTests {
         }
     }
 
+    @Test("report job equivalence includes native Gemma provenance")
+    func reportJobEquivalenceIncludesNativeGemmaSnapshot() async throws {
+        try await withTemporaryDirectory { root in
+            let library = try Library.open(at: root)
+            let meeting = try await library.createMeeting(title: "Meeting", status: .ready)
+            let store = try JobStore(layout: library.layout)
+            let baselineSnapshot = nativeGemmaSnapshot(adapterRevisionNibble: "a")
+            let changedSnapshot = nativeGemmaSnapshot(adapterRevisionNibble: "b")
+            let baseline = Job(
+                kind: .templateRender,
+                meetingID: meeting.id,
+                textModelEndpointID: NativeGemmaModelSnapshot.reservedTextModelEndpointID,
+                nativeGemmaModelSnapshot: baselineSnapshot,
+                templateRenderInputFingerprint: "sha256:input"
+            )
+            let mutation = Job(
+                kind: .templateRender,
+                meetingID: meeting.id,
+                textModelEndpointID: NativeGemmaModelSnapshot.reservedTextModelEndpointID,
+                nativeGemmaModelSnapshot: changedSnapshot,
+                templateRenderInputFingerprint: "sha256:input"
+            )
+
+            let first = try await store.enqueueOrExistingEquivalentJob(
+                baseline,
+                blockingStatuses: [.queued, .running]
+            )
+            let second = try await store.enqueueOrExistingEquivalentJob(
+                mutation,
+                blockingStatuses: [.queued, .running]
+            )
+
+            #expect(first.id == baseline.id)
+            #expect(second.id == mutation.id)
+            #expect(try await store.list().count == 2)
+        }
+    }
+
     @Test("report job equivalence includes the endpoint configuration revision")
     func reportJobEquivalenceIncludesEndpointRevision() async throws {
         try await withTemporaryDirectory { root in
@@ -467,6 +505,18 @@ struct JobStoreTests {
             #expect(first.id != second.id)
         }
     }
+}
+
+private func nativeGemmaSnapshot(
+    adapterRevisionNibble: String
+) -> NativeGemmaModelSnapshot {
+    NativeGemmaModelSnapshot(
+        modelIdentifier: "mlx-community/gemma-4-e4b-it-4bit",
+        checkpointRevision: String(repeating: "9", count: 40),
+        adapterRevision: String(repeating: adapterRevisionNibble, count: 40),
+        licenseIdentifier: "gemma",
+        manifestSHA256: String(repeating: "a", count: 64)
+    )
 }
 
 private final class JobMutationCheckpointRecorder: @unchecked Sendable {

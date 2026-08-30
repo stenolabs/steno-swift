@@ -10,13 +10,16 @@ import StenoTranscription
 public struct TextModelProviderSelection: Equatable, Sendable {
     public let endpointID: String?
     public let endpointSnapshot: TextModelEndpointSnapshot?
+    public let nativeGemmaModelSnapshot: NativeGemmaModelSnapshot?
 
     public init(
         endpointID: String?,
-        endpointSnapshot: TextModelEndpointSnapshot? = nil
+        endpointSnapshot: TextModelEndpointSnapshot? = nil,
+        nativeGemmaModelSnapshot: NativeGemmaModelSnapshot? = nil
     ) {
         self.endpointID = endpointID
         self.endpointSnapshot = endpointSnapshot
+        self.nativeGemmaModelSnapshot = nativeGemmaModelSnapshot
     }
 }
 
@@ -129,6 +132,9 @@ public actor PipelineCoordinator {
         diarizationProvider: any DiarizationProvider = FluidSortformerProvider(),
         identityEngine: SpeakerSuggestionEngine = SpeakerSuggestionEngine(),
         textModelProviderResolver: @escaping TextModelProviderResolver = { selection in
+            if selection.nativeGemmaModelSnapshot != nil {
+                throw PipelineError.nativeGemmaProviderUnavailable
+            }
             if let endpointID = selection.endpointID {
                 throw PipelineError.unknownTextModelEndpoint(endpointID)
             }
@@ -163,6 +169,9 @@ public actor PipelineCoordinator {
         diarizationProvider: any DiarizationProvider = FluidSortformerProvider(),
         identityEngine: SpeakerSuggestionEngine = SpeakerSuggestionEngine(),
         textModelProviderResolver: @escaping TextModelProviderResolver = { selection in
+            if selection.nativeGemmaModelSnapshot != nil {
+                throw PipelineError.nativeGemmaProviderUnavailable
+            }
             if let endpointID = selection.endpointID {
                 throw PipelineError.unknownTextModelEndpoint(endpointID)
             }
@@ -190,6 +199,9 @@ public actor PipelineCoordinator {
         diarizationProvider: any DiarizationProvider = FluidSortformerProvider(),
         identityEngine: SpeakerSuggestionEngine = SpeakerSuggestionEngine(),
         textModelProviderResolver: @escaping TextModelProviderResolver = { selection in
+            if selection.nativeGemmaModelSnapshot != nil {
+                throw PipelineError.nativeGemmaProviderUnavailable
+            }
             if let endpointID = selection.endpointID {
                 throw PipelineError.unknownTextModelEndpoint(endpointID)
             }
@@ -225,6 +237,9 @@ public actor PipelineCoordinator {
         diarizationProvider: any DiarizationProvider = FluidSortformerProvider(),
         identityEngine: SpeakerSuggestionEngine = SpeakerSuggestionEngine(),
         textModelProviderResolver: @escaping TextModelProviderResolver = { selection in
+            if selection.nativeGemmaModelSnapshot != nil {
+                throw PipelineError.nativeGemmaProviderUnavailable
+            }
             if let endpointID = selection.endpointID {
                 throw PipelineError.unknownTextModelEndpoint(endpointID)
             }
@@ -549,9 +564,14 @@ public actor PipelineCoordinator {
         let textModelProvider = try textModelProviderResolver(
             TextModelProviderSelection(
                 endpointID: job.textModelEndpointID,
-                endpointSnapshot: job.textModelEndpointSnapshot
+                endpointSnapshot: job.textModelEndpointSnapshot,
+                nativeGemmaModelSnapshot: job.nativeGemmaModelSnapshot
             )
         )
+        if let nativeSnapshot = job.nativeGemmaModelSnapshot,
+           textModelProvider.descriptor != .mlxGemma(snapshot: nativeSnapshot) {
+            throw PipelineError.nativeGemmaProviderProvenanceMismatch
+        }
         if let message = textModelProvider.availability.unavailabilityMessage {
             throw PipelineError.textModelUnavailable(message)
         }
@@ -607,17 +627,43 @@ public actor PipelineCoordinator {
     }
 
     private func validateTemplateRenderPins(_ job: Job) throws {
-        guard job.textModelEndpointID != nil else { return }
-        guard let endpointID = job.textModelEndpointID.flatMap(UUID.init(uuidString:)),
-              let fingerprint = job.templateRenderInputFingerprint,
-              Self.isSHA256Fingerprint(fingerprint),
-              let snapshot = job.textModelEndpointSnapshot,
-              snapshot.id == endpointID
-        else {
+        switch (
+            job.textModelEndpointID,
+            job.textModelEndpointSnapshot,
+            job.nativeGemmaModelSnapshot
+        ) {
+        case (
+            NativeGemmaModelSnapshot.reservedTextModelEndpointID,
+            nil,
+            let nativeSnapshot?
+        ):
+            guard let fingerprint = job.templateRenderInputFingerprint,
+                  Self.isSHA256Fingerprint(fingerprint),
+                  nativeSnapshot.isWellFormed
+            else {
+                throw PipelineError.nativeGemmaModelPinsInvalid
+            }
+        case (let endpointID?, let snapshot?, nil):
+            guard let parsedEndpointID = UUID(uuidString: endpointID),
+                  endpointID != NativeGemmaModelSnapshot.reservedTextModelEndpointID,
+                  let fingerprint = job.templateRenderInputFingerprint,
+                  Self.isSHA256Fingerprint(fingerprint),
+                  snapshot.id == parsedEndpointID
+            else {
+                throw PipelineError.templateRenderPinsRequired
+            }
+            guard snapshot.configurationRevision != nil else {
+                throw PipelineError.textModelEndpointConfigurationIncomplete(snapshot.name)
+            }
+        case (nil, nil, nil):
+            return
+        default:
+            if job.nativeGemmaModelSnapshot != nil
+                || job.textModelEndpointID
+                    == NativeGemmaModelSnapshot.reservedTextModelEndpointID {
+                throw PipelineError.nativeGemmaModelPinsInvalid
+            }
             throw PipelineError.templateRenderPinsRequired
-        }
-        guard snapshot.configurationRevision != nil else {
-            throw PipelineError.textModelEndpointConfigurationIncomplete(snapshot.name)
         }
     }
 
@@ -1650,6 +1696,9 @@ public actor PipelineCoordinator {
         case .identitySuggestion:
             return identityEngineDescriptor
         case .templateRender:
+            if let nativeSnapshot = job.nativeGemmaModelSnapshot {
+                return .mlxGemma(snapshot: nativeSnapshot)
+            }
             if job.textModelEndpointID == nil {
                 return FoundationModelsProvider().descriptor
             }

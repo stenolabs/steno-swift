@@ -406,6 +406,7 @@ struct MeetingReportsSection: View {
             isPending: presentation.pendingJobID != nil,
             pendingEndpointID: presentation.pendingEndpointID,
             pendingEndpointSnapshot: presentation.pendingEndpointSnapshot,
+            pendingNativeGemmaModelSnapshot: presentation.pendingNativeGemmaModelSnapshot,
             selectedEndpointSnapshot: selectedEndpointSnapshot,
             configuredEndpoints: textModels.endpoints
         )

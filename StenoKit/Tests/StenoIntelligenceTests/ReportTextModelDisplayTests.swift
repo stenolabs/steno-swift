@@ -144,6 +144,31 @@ struct ReportTextModelDisplayTests {
         #expect(ReportTextModelDisplay.refreshedSelection(nil, in: []) == nil)
     }
 
+    @Test("a pending native Gemma job stays on device and never exposes an endpoint")
+    func nativeGemmaHasNoExternalDisclosure() {
+        let native = NativeGemmaModelSnapshot(
+            modelIdentifier: "mlx-community/gemma-4-e4b-it-4bit",
+            checkpointRevision: String(repeating: "9", count: 40),
+            adapterRevision: String(repeating: "b", count: 40),
+            licenseIdentifier: "gemma",
+            manifestSHA256: String(repeating: "a", count: 64)
+        )
+
+        let display = ReportTextModelDisplay.resolve(
+            isPending: true,
+            pendingEndpointID: NativeGemmaModelSnapshot.reservedTextModelEndpointID,
+            pendingEndpointSnapshot: nil,
+            pendingNativeGemmaModelSnapshot: native,
+            selectedEndpointSnapshot: snapshot(name: "External"),
+            configuredEndpoints: []
+        )
+
+        #expect(display == .nativeGemma(native))
+        #expect(!display.usesExternalEndpoint)
+        #expect(display.endpointSnapshot == nil)
+        #expect(display.modelLabel.contains("on device"))
+    }
+
     private func snapshot(
         id: UUID = UUID(),
         name: String,

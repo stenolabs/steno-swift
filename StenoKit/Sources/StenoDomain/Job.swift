@@ -19,6 +19,10 @@ public struct Job: Codable, Equatable, Sendable {
     /// Secret-free endpoint configuration shown when the job was queued.
     /// Legacy schema-one jobs decode this optional value as `nil`.
     public let textModelEndpointSnapshot: TextModelEndpointSnapshot?
+    /// Immutable path-free provenance for an explicitly selected native Gemma
+    /// model. Native jobs persist `NativeGemmaModelSnapshot.reservedTextModelEndpointID`
+    /// in `textModelEndpointID` so older readers do not mistake them for Apple.
+    public let nativeGemmaModelSnapshot: NativeGemmaModelSnapshot?
     /// Bindet einen Template-Render an genau die Eingabe, deren Offenlegung
     /// der Nutzer gesehen hat. Jobs vor dieser Erweiterung bleiben nil.
     public let templateRenderInputFingerprint: String?
@@ -61,6 +65,7 @@ public struct Job: Codable, Equatable, Sendable {
         revisionID: RevisionID? = nil,
         textModelEndpointID: String? = nil,
         textModelEndpointSnapshot: TextModelEndpointSnapshot? = nil,
+        nativeGemmaModelSnapshot: NativeGemmaModelSnapshot? = nil,
         templateRenderInputFingerprint: String? = nil,
         localeIdentifier: String? = nil,
         importGenerationID: MeetingTransferGenerationID? = nil,
@@ -81,6 +86,7 @@ public struct Job: Codable, Equatable, Sendable {
         self.revisionID = revisionID
         self.textModelEndpointID = textModelEndpointID
         self.textModelEndpointSnapshot = textModelEndpointSnapshot
+        self.nativeGemmaModelSnapshot = nativeGemmaModelSnapshot
         self.templateRenderInputFingerprint = templateRenderInputFingerprint
         self.localeIdentifier = localeIdentifier
         self.importGenerationID = importGenerationID

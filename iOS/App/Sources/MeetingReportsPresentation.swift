@@ -9,6 +9,7 @@ struct MeetingReportsPresentation: Equatable {
     var pendingJobID: JobID?
     private(set) var pendingEndpointSnapshot: TextModelEndpointSnapshot?
     private(set) var pendingEndpointID: String?
+    private(set) var pendingNativeGemmaModelSnapshot: NativeGemmaModelSnapshot?
     var isStarting = false
     var errorMessage: String?
     private(set) var needsPreflightRefresh = false
@@ -53,6 +54,7 @@ struct MeetingReportsPresentation: Equatable {
         pendingJobID = job.id
         pendingEndpointSnapshot = job.textModelEndpointSnapshot
         pendingEndpointID = job.textModelEndpointID
+        pendingNativeGemmaModelSnapshot = job.nativeGemmaModelSnapshot
         errorMessage = nil
         needsPreflightRefresh = false
         snapshotFailureIsCurrent = false
@@ -64,6 +66,7 @@ struct MeetingReportsPresentation: Equatable {
         pendingJobID = nil
         pendingEndpointSnapshot = nil
         pendingEndpointID = nil
+        pendingNativeGemmaModelSnapshot = nil
         errorMessage = message
         needsPreflightRefresh = false
         snapshotFailureIsCurrent = false
@@ -116,6 +119,7 @@ struct MeetingReportsPresentation: Equatable {
         }
         pendingEndpointSnapshot = pending.textModelEndpointSnapshot
         pendingEndpointID = pending.textModelEndpointID
+        pendingNativeGemmaModelSnapshot = pending.nativeGemmaModelSnapshot
         let expectedRunID = PipelineRunIdentity.runID(for: pending)
 
         switch pending.status {
@@ -132,16 +136,19 @@ struct MeetingReportsPresentation: Equatable {
                 self.pendingJobID = nil
                 pendingEndpointSnapshot = nil
                 pendingEndpointID = nil
+                pendingNativeGemmaModelSnapshot = nil
             } else {
                 self.pendingJobID = nil
                 pendingEndpointSnapshot = nil
                 pendingEndpointID = nil
+                pendingNativeGemmaModelSnapshot = nil
                 errorMessage = "The minutes finished without a readable result."
             }
         case .failed:
             self.pendingJobID = nil
             pendingEndpointSnapshot = nil
             pendingEndpointID = nil
+            pendingNativeGemmaModelSnapshot = nil
             errorMessage = pending.errorMessage
                 ?? "The minutes could not be generated."
             needsPreflightRefresh = pending.failureReason == .templateRenderInputChanged
@@ -152,6 +159,7 @@ struct MeetingReportsPresentation: Equatable {
             self.pendingJobID = nil
             pendingEndpointSnapshot = nil
             pendingEndpointID = nil
+            pendingNativeGemmaModelSnapshot = nil
             errorMessage = nil
             needsPreflightRefresh = false
             snapshotFailureIsCurrent = false
@@ -180,6 +188,7 @@ struct MeetingReportsPresentation: Equatable {
         pendingJobID = active.id
         pendingEndpointSnapshot = active.textModelEndpointSnapshot
         pendingEndpointID = active.textModelEndpointID
+        pendingNativeGemmaModelSnapshot = active.nativeGemmaModelSnapshot
         selectionWasManual = false
     }
 

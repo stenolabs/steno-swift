@@ -48,6 +48,248 @@ struct TemplateRenderPipelineTests {
         }
     }
 
+    @Test("native Gemma template request persists its reserved marker and reaches the resolver")
+    func nativeGemmaRequestPinsAndReachesResolver() async throws {
+        try await withTemporaryDirectory { root in
+            let fixture = try await makeTemplateFixture(at: root)
+            let preflight = try await TemplateRenderInputAssembler.preflight(
+                library: fixture.library,
+                meetingID: fixture.meeting.id
+            )
+            let native = nativeGemmaSnapshot()
+            let expectedDescriptor = EngineDescriptor.mlxGemma(snapshot: native)
+            let provider = FakePipelineTextModelProvider(
+                behavior: .succeed,
+                descriptor: expectedDescriptor
+            )
+            let resolver = ResolverRecorder { _ in provider }
+
+            let job = try await TemplateRenderRequest.enqueue(
+                library: fixture.library,
+                jobStore: fixture.jobStore,
+                meetingID: fixture.meeting.id,
+                templateID: Template.meetingMinutes.id,
+                nativeGemmaModelSnapshot: native,
+                preflight: preflight
+            )
+
+            #expect(
+                job.textModelEndpointID
+                    == NativeGemmaModelSnapshot.reservedTextModelEndpointID
+            )
+            #expect(job.textModelEndpointSnapshot == nil)
+            #expect(job.nativeGemmaModelSnapshot == native)
+
+            let coordinator = makeTemplateCoordinator(
+                fixture: fixture,
+                textModelProviderResolver: resolver.resolve
+            )
+            await coordinator.start()
+            try await coordinator.waitUntilIdle()
+
+            #expect(resolver.selections == [TextModelProviderSelection(
+                endpointID: NativeGemmaModelSnapshot.reservedTextModelEndpointID,
+                nativeGemmaModelSnapshot: native
+            )])
+            #expect(try await fixture.jobStore.load(job.id).status == .finished)
+            let run = try #require(processingRuns(
+                library: fixture.library,
+                meetingID: fixture.meeting.id
+            ).first { $0.kind == .templateRender })
+            let artifact = try JSONDecoder().decode(
+                TemplateRenderArtifact.self,
+                from: Data(contentsOf: fixture.library.layout.runTemplate(
+                    fixture.meeting.id,
+                    runID: run.id
+                ))
+            )
+            #expect(run.engine == expectedDescriptor)
+            #expect(artifact.result.engine == expectedDescriptor)
+            await coordinator.stop()
+        }
+    }
+
+    @Test("native Gemma rejects a resolver provider with different provenance")
+    func nativeGemmaRejectsMismatchedProviderProvenance() async throws {
+        try await withTemporaryDirectory { root in
+            let fixture = try await makeTemplateFixture(at: root)
+            let preflight = try await TemplateRenderInputAssembler.preflight(
+                library: fixture.library,
+                meetingID: fixture.meeting.id
+            )
+            let provider = FakePipelineTextModelProvider(
+                behavior: .succeed,
+                descriptor: .mlxGemma(
+                    snapshot: nativeGemmaSnapshot(
+                        licenseIdentifier: "Apache-2.0"
+                    )
+                )
+            )
+            let job = try await TemplateRenderRequest.enqueue(
+                library: fixture.library,
+                jobStore: fixture.jobStore,
+                meetingID: fixture.meeting.id,
+                templateID: Template.meetingMinutes.id,
+                nativeGemmaModelSnapshot: nativeGemmaSnapshot(),
+                preflight: preflight
+            )
+            let coordinator = makeTemplateCoordinator(
+                fixture: fixture,
+                textModelProviderResolver: { _ in provider }
+            )
+
+            await coordinator.start()
+            try await coordinator.waitUntilIdle()
+
+            let failed = try await fixture.jobStore.load(job.id)
+            #expect(failed.status == .failed)
+            #expect(
+                failed.errorMessage
+                    == PipelineError.nativeGemmaProviderProvenanceMismatch.localizedDescription
+            )
+            #expect(await provider.callCount() == 0)
+            await coordinator.stop()
+        }
+    }
+
+    @Test("native Gemma enqueue rejects caller-controlled endpoint pins")
+    func nativeGemmaRequestRejectsCallerEndpointPins() async throws {
+        try await withTemporaryDirectory { root in
+            let fixture = try await makeTemplateFixture(at: root)
+            let preflight = try await TemplateRenderInputAssembler.preflight(
+                library: fixture.library,
+                meetingID: fixture.meeting.id
+            )
+
+            await #expect(throws: PipelineError.nativeGemmaModelPinsInvalid) {
+                _ = try await TemplateRenderRequest.enqueue(
+                    library: fixture.library,
+                    jobStore: fixture.jobStore,
+                    meetingID: fixture.meeting.id,
+                    templateID: Template.meetingMinutes.id,
+                    textModelEndpointID: "caller-controlled",
+                    nativeGemmaModelSnapshot: nativeGemmaSnapshot(),
+                    preflight: preflight
+                )
+            }
+            #expect(try await fixture.jobStore.list().isEmpty)
+        }
+    }
+
+    @Test("malformed mixed and literal native pins fail before any provider resolver")
+    func invalidNativeGemmaPinsFailBeforeResolver() async throws {
+        try await withTemporaryDirectory { root in
+            let fixture = try await makeTemplateFixture(at: root)
+            let preflight = try await TemplateRenderInputAssembler.preflight(
+                library: fixture.library,
+                meetingID: fixture.meeting.id
+            )
+            let malformed = NativeGemmaModelSnapshot(
+                modelIdentifier: " gemma ",
+                checkpointRevision: "revision",
+                adapterRevision: "adapter",
+                licenseIdentifier: "gemma",
+                manifestSHA256: String(repeating: "a", count: 64)
+            )
+            let endpointID = UUID()
+            let externalSnapshot = TextModelEndpointSnapshot(
+                id: endpointID,
+                name: "External",
+                baseURL: URL(string: "https://models.example.test/v1")!,
+                modelID: "model",
+                requiresAPIKey: false,
+                configurationRevision: UUID()
+            )
+            let jobs = [
+                Job(
+                    kind: .templateRender,
+                    meetingID: fixture.meeting.id,
+                    templateID: Template.meetingMinutes.id,
+                    revisionID: preflight.revisionID,
+                    textModelEndpointID: NativeGemmaModelSnapshot.reservedTextModelEndpointID,
+                    nativeGemmaModelSnapshot: malformed,
+                    templateRenderInputFingerprint: preflight.inputFingerprint
+                ),
+                Job(
+                    kind: .templateRender,
+                    meetingID: fixture.meeting.id,
+                    templateID: Template.meetingMinutes.id,
+                    revisionID: preflight.revisionID,
+                    textModelEndpointID: endpointID.uuidString,
+                    textModelEndpointSnapshot: externalSnapshot,
+                    nativeGemmaModelSnapshot: nativeGemmaSnapshot(),
+                    templateRenderInputFingerprint: preflight.inputFingerprint
+                ),
+                Job(
+                    kind: .templateRender,
+                    meetingID: fixture.meeting.id,
+                    templateID: Template.meetingMinutes.id,
+                    revisionID: preflight.revisionID,
+                    textModelEndpointID: NativeGemmaModelSnapshot.reservedTextModelEndpointID,
+                    templateRenderInputFingerprint: preflight.inputFingerprint
+                ),
+            ]
+            for job in jobs {
+                _ = try await fixture.jobStore.enqueueOrExistingEquivalentJob(
+                    job,
+                    blockingStatuses: [.queued, .running]
+                )
+            }
+            let provider = FakePipelineTextModelProvider(behavior: .succeed)
+            let resolver = ResolverRecorder { _ in provider }
+            let coordinator = makeTemplateCoordinator(
+                fixture: fixture,
+                textModelProviderResolver: resolver.resolve
+            )
+            await coordinator.start()
+            try await coordinator.waitUntilIdle()
+
+            for job in jobs {
+                let failed = try await fixture.jobStore.load(job.id)
+                #expect(failed.status == .failed)
+                #expect(failed.errorMessage == PipelineError.nativeGemmaModelPinsInvalid.localizedDescription)
+                #expect(failed.failureReason == nil)
+            }
+            #expect(resolver.selections.isEmpty)
+            #expect(await provider.callCount() == 0)
+            await coordinator.stop()
+        }
+    }
+
+    @Test("default pipeline resolver rejects a valid native Gemma selection instead of Apple fallback")
+    func defaultResolverRejectsNativeGemma() async throws {
+        try await withTemporaryDirectory { root in
+            let fixture = try await makeTemplateFixture(at: root)
+            let preflight = try await TemplateRenderInputAssembler.preflight(
+                library: fixture.library,
+                meetingID: fixture.meeting.id
+            )
+            let job = try await TemplateRenderRequest.enqueue(
+                library: fixture.library,
+                jobStore: fixture.jobStore,
+                meetingID: fixture.meeting.id,
+                templateID: Template.meetingMinutes.id,
+                nativeGemmaModelSnapshot: nativeGemmaSnapshot(),
+                preflight: preflight
+            )
+            let coordinator = PipelineCoordinator(
+                library: fixture.library,
+                jobStore: fixture.jobStore,
+                providers: [:],
+                diarizationProvider: FakeDiarizationProvider(behavior: .fail),
+                locale: Locale(identifier: "de-DE")
+            )
+            await coordinator.start()
+            try await coordinator.waitUntilIdle()
+
+            let failed = try await fixture.jobStore.load(job.id)
+            #expect(failed.status == .failed)
+            #expect(failed.errorMessage == PipelineError.nativeGemmaProviderUnavailable.localizedDescription)
+            #expect(failed.failureReason == nil)
+            await coordinator.stop()
+        }
+    }
+
     @Test("input changed after validation cannot leave a template job")
     func inputChangedAfterValidationDoesNotEnqueue() async throws {
         try await withTemporaryDirectory { root in
@@ -1798,12 +2040,30 @@ private final class ResolverRecorder: @unchecked Sendable {
         return storedSelections.map(\.endpointID)
     }
 
+    var selections: [TextModelProviderSelection] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedSelections
+    }
+
     func resolve(_ selection: TextModelProviderSelection) throws -> any TextModelProvider {
         lock.lock()
         storedSelections.append(selection)
         lock.unlock()
         return try implementation(selection)
     }
+}
+
+private func nativeGemmaSnapshot(
+    licenseIdentifier: String = "gemma"
+) -> NativeGemmaModelSnapshot {
+    NativeGemmaModelSnapshot(
+        modelIdentifier: "mlx-community/gemma-4-e4b-it-4bit",
+        checkpointRevision: String(repeating: "9", count: 40),
+        adapterRevision: String(repeating: "b", count: 40),
+        licenseIdentifier: licenseIdentifier,
+        manifestSHA256: String(repeating: "a", count: 64)
+    )
 }
 
 private actor FakePipelineTextModelProvider: StructuredTextModelProvider {

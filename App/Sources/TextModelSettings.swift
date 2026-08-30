@@ -452,6 +452,9 @@ extension TextModelSettings {
         registry: any TextModelEndpointRegistryStoring,
         providerFactory: TextModelProviderBuilding
     ) throws -> any TextModelProvider {
+        if selection.nativeGemmaModelSnapshot != nil {
+            throw PipelineError.nativeGemmaProviderUnavailable
+        }
         guard let endpointID = selection.endpointID else {
             return FoundationModelsProvider()
         }

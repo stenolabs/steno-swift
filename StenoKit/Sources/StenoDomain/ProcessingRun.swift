@@ -10,6 +10,19 @@ public struct EngineDescriptor: Codable, Equatable, Sendable {
         self.version = version
         self.modelVersion = modelVersion
     }
+
+    /// Provenance descriptor for native MLX Gemma inference. The name names
+    /// MLX directly and intentionally does not imply Foundation Models or any
+    /// Apple-hosted model.
+    public static func mlxGemma(
+        snapshot: NativeGemmaModelSnapshot
+    ) -> Self {
+        Self(
+            name: "MLXLanguageModel",
+            version: "\(snapshot.adapterRevision)@\(snapshot.manifestSHA256)",
+            modelVersion: "\(snapshot.modelIdentifier)@\(snapshot.checkpointRevision)#license=\(snapshot.licenseIdentifier)"
+        )
+    }
 }
 
 public struct ProcessingRun: Codable, Equatable, Sendable {

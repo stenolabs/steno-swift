@@ -76,10 +76,13 @@ Any outstanding hardware or visual verification is stated on the item or in its 
 - [ ] Visually verify that Settings does not test endpoints automatically.
 - [x] (M4) Templates: builtin product-demo, sales-call, one-on-one, standup plus user-defined markdown templates, overrides with reset, and a default-template setting.
 - [ ] Direct Gemma downloads on iOS.
+- [ ] Direct native Gemma inference on macOS through MLX remains open; model installation, consent, checksum verification, and fail-closed execution must precede UI activation.
 - [x] Multiple immutable report versions per meeting, pinned to a revision, with quarantine restoration.
 - [x] (M4) Title generation suggestion with apply/dismiss persistence.
 - [x] (M5) Optional external LLM providers with native dialects for Ollama, LM Studio, OpenAI, Anthropic, and Bedrock, plus a conservative OpenAI-compatible fallback. Providers are never contacted automatically, selection is pinned to the job, and the provider remains visible on the report. Real tests passed with LM Studio/MLX Gemma 4 and Ollama/Gemma 4 on Mac and iPad Simulator. Cloud contracts were verified locally with HTTP fixtures, without paid cloud requests.
 - [x] Ask bar during recording (chat over finalized segments only, bounded single-query transport) and title suggestions from Apple Foundation Models.
+- [ ] Legacy parity for optional automatic report generation after successful final transcription remains open and must retain the explicitly pinned model choice and external-disclosure consent.
+- [ ] Legacy parity for Whisper fallback outside the locally available Apple Speech language set remains open and requires explicit installation, provenance, and bounded Apple Silicon evaluation.
 - [x] Global chat across all notes: Library Chat window over every meeting's latest report + notes (bounded newest-first context, persisted sessions, OutboundDisclosure consent for external endpoints).
 - Intentionally omitted: bundling and managing an Ollama process.
 
