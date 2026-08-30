@@ -77,8 +77,8 @@ Any outstanding hardware or visual verification is stated on the item or in its 
 - [x] (M4) Templates: builtin product-demo, sales-call, one-on-one, standup plus user-defined markdown templates, overrides with reset, and a default-template setting.
 - [ ] Direct Gemma downloads on iOS.
 - [ ] Native Gemma inference on macOS remains unavailable.
-      The Xcode 27 variant now provides a mutually authenticated, signed, sandboxed, model-free XPC helper with incoming and outgoing network access disabled, strict IPC, bounded client deadlines, exact helper-exit proof, and one app-process-wide recording coordinator.
-      Cross-process recording and helper exclusion, server-side inference task cancellation and quiescence, production Hardened Runtime validation, consented immutable model import, a buildable matched MLX dependency snapshot, provider activation, and a real model run remain open.
+      The Xcode 27 variant now provides a mutually authenticated, signed, sandboxed, model-free XPC helper with incoming and outgoing network access disabled, strict IPC, bounded client deadlines, server-side targeted cancellation and true task-and-reply quiescence, exact helper-exit proof, and one app-process-wide recording coordinator.
+      Cross-process recording and helper exclusion, production Hardened Runtime validation, consented immutable model import, a buildable matched MLX dependency snapshot, provider activation, and a real model run remain open.
 - [x] Multiple immutable report versions per meeting, pinned to a revision, with quarantine restoration.
 - [x] (M4) Title generation suggestion with apply/dismiss persistence.
 - [x] (M5) Optional external LLM providers with native dialects for Ollama, LM Studio, OpenAI, Anthropic, and Bedrock, plus a conservative OpenAI-compatible fallback. Providers are never contacted automatically, selection is pinned to the job, and the provider remains visible on the report. Real tests passed with LM Studio/MLX Gemma 4 and Ollama/Gemma 4 on Mac and iPad Simulator. Cloud contracts were verified locally with HTTP fixtures, without paid cloud requests.

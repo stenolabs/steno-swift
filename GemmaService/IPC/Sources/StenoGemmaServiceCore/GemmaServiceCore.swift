@@ -17,24 +17,14 @@ public struct GemmaServiceCoreBuildInfo: Sendable, Equatable {
     )
 }
 
-public enum GemmaServiceLifecycleState: Sendable, Equatable {
-    case ready
-    case shutdown
-}
-
 /// Model-free, fail-closed dispatcher for the sandboxed Gemma XPC service.
 ///
 /// This core never accesses the network, filesystem, model weights, audio, or app state.
 public actor GemmaServiceCore {
     private let buildInfo: GemmaServiceCoreBuildInfo
-    private var state: GemmaServiceLifecycleState = .ready
 
     public init(buildInfo: GemmaServiceCoreBuildInfo) {
         self.buildInfo = buildInfo
-    }
-
-    public func lifecycleState() -> GemmaServiceLifecycleState {
-        state
     }
 
     /// Handles exactly one size-bounded request frame and always rejects unsupported work.
@@ -67,26 +57,11 @@ public actor GemmaServiceCore {
         }
 
         switch request.body {
-        case .cancel:
-            return encodedResponse(
-                requestID: request.requestID,
-                body: .acknowledgement(
-                    GemmaIPCAcknowledgement(kind: .cancelled, didChangeState: false)
-                )
-            )
-        case .shutdown:
-            let changedState = state == .ready
-            state = .shutdown
-            return encodedResponse(
-                requestID: request.requestID,
-                body: .acknowledgement(
-                    GemmaIPCAcknowledgement(kind: .shutdown, didChangeState: changedState)
-                )
-            )
+        case .cancel, .shutdown:
+            // The process-wide registry owns lifecycle work so these operations never queue
+            // behind a future model actor through the production XPC path.
+            return encodedFailure(requestID: request.requestID, code: .invalidRequest)
         case .handshake(let handshake):
-            guard state == .ready else {
-                return encodedFailure(requestID: request.requestID, code: .shuttingDown)
-            }
             guard handshake.model.adapterRevision == buildInfo.adapterRevision else {
                 return encodedFailure(requestID: request.requestID, code: .adapterMismatch)
             }
@@ -101,9 +76,6 @@ public actor GemmaServiceCore {
                 )
             )
         case .countTokens, .generate:
-            guard state == .ready else {
-                return encodedFailure(requestID: request.requestID, code: .shuttingDown)
-            }
             return encodedFailure(requestID: request.requestID, code: .modelUnavailable)
         }
     }

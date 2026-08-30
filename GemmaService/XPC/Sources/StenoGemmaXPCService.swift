@@ -169,38 +169,139 @@ final class StenoGemmaXPCService: @unchecked Sendable {
             sendModelFailure(.invalidRequest, for: outer.requestID, replyTo: message)
             return
         }
-
-        switch StenoGemmaXPCProcessLifecycle.begin(request.body.operation) {
-        case .shuttingDown:
-            sendModelFailure(.shuttingDown, for: outer.requestID, replyTo: message)
-            return
-        case .busy:
-            sendModelFailure(.busy, for: outer.requestID, replyTo: message)
-            return
-        case .admitted:
-            break
-        }
-
         guard let reply = xpc_dictionary_create_reply(message) else {
-            StenoGemmaXPCProcessLifecycle.finish(request.body.operation)
             return
         }
         let frame = outer.frame
         let requestID = outer.requestID
-        let operation = request.body.operation
         let replyHandle = GemmaXPCReplyHandle(
             connection: connection,
             reply: reply,
             channel: .model
         )
-        Task { [replyHandle] in
-            defer { StenoGemmaXPCProcessLifecycle.finish(operation) }
-            let response = await StenoGemmaXPCProcessRuntime.core.handle(
-                encodedRequest: frame,
-                expectedRequestID: requestID
-            )
+        let replyOnce = GemmaServiceReplyOnce { [replyHandle] response in
             replyHandle.send(response, requestID: requestID)
         }
+
+        switch request.body {
+        case .cancel(let cancellation):
+            guard let ticket = admitLifecycle(
+                requestID: requestID,
+                reply: replyOnce
+            ) else { return }
+            let changed = StenoGemmaXPCProcessRuntime.registry.cancel(
+                cancellation.targetRequestID
+            )
+            completeModelLifecycle(
+                ticket,
+                requestID: requestID,
+                body: .acknowledgement(.init(kind: .cancelled, didChangeState: changed))
+            )
+
+        case .shutdown:
+            guard let ticket = admitLifecycle(
+                requestID: requestID,
+                reply: replyOnce
+            ) else { return }
+            let changed = StenoGemmaXPCProcessRuntime.registry.closeForShutdown()
+            completeModelLifecycle(
+                ticket,
+                requestID: requestID,
+                body: .acknowledgement(.init(kind: .shutdown, didChangeState: changed))
+            )
+
+        case .handshake, .countTokens, .generate:
+            guard let cancellationResponse = Self.encodedModelResponse(
+                requestID: requestID,
+                body: .failure(.init(code: .cancelled))
+            ) else {
+                xpc_connection_cancel(connection)
+                return
+            }
+            let inferenceLike = request.body.operation == .countTokens
+                || request.body.operation == .generate
+            let reservation = StenoGemmaXPCProcessRuntime.registry.reserveWork(
+                requestID: requestID,
+                inferenceLike: inferenceLike,
+                cancellationResponse: cancellationResponse,
+                reply: replyOnce
+            )
+            guard let ticket = admit(reservation, requestID: requestID, reply: replyOnce) else {
+                return
+            }
+            _ = StenoGemmaXPCProcessRuntime.registry.start(ticket) {
+                await StenoGemmaXPCProcessRuntime.core.handle(
+                    encodedRequest: frame,
+                    expectedRequestID: requestID
+                )
+            }
+        }
+    }
+
+    private func admitLifecycle(
+        requestID: UUID,
+        reply: GemmaServiceReplyOnce
+    ) -> GemmaServiceRequestRegistry.Ticket? {
+        admit(
+            StenoGemmaXPCProcessRuntime.registry.reserveLifecycle(
+                requestID: requestID,
+                reply: reply
+            ),
+            requestID: requestID,
+            reply: reply
+        )
+    }
+
+    private func admit(
+        _ reservation: GemmaServiceRequestRegistry.Reservation,
+        requestID: UUID,
+        reply: GemmaServiceReplyOnce
+    ) -> GemmaServiceRequestRegistry.Ticket? {
+        switch reservation {
+        case .admitted(let ticket):
+            return ticket
+        case .duplicateRequestID:
+            replyModelFailure(.invalidRequest, for: requestID, reply: reply)
+        case .busy:
+            replyModelFailure(.busy, for: requestID, reply: reply)
+        case .shuttingDown:
+            replyModelFailure(.shuttingDown, for: requestID, reply: reply)
+        }
+        return nil
+    }
+
+    private func completeModelLifecycle(
+        _ ticket: GemmaServiceRequestRegistry.Ticket,
+        requestID: UUID,
+        body: GemmaIPCResponseBody
+    ) {
+        guard let response = Self.encodedModelResponse(requestID: requestID, body: body) else {
+            _exit(EXIT_FAILURE)
+        }
+        _ = StenoGemmaXPCProcessRuntime.registry.complete(ticket, response: response)
+    }
+
+    private func replyModelFailure(
+        _ code: GemmaIPCErrorCode,
+        for requestID: UUID,
+        reply: GemmaServiceReplyOnce
+    ) {
+        guard let response = Self.encodedModelResponse(
+            requestID: requestID,
+            body: .failure(.init(code: code))
+        ) else {
+            _exit(EXIT_FAILURE)
+        }
+        _ = reply.send(response)
+    }
+
+    private static func encodedModelResponse(
+        requestID: UUID,
+        body: GemmaIPCResponseBody
+    ) -> Data? {
+        try? GemmaIPCCodec.encode(
+            GemmaIPCResponseEnvelope(requestID: requestID, body: body)
+        )
     }
 
     private static func failureCode(for error: GemmaIPCCodecError) -> GemmaIPCErrorCode {
@@ -219,46 +320,139 @@ final class StenoGemmaXPCService: @unchecked Sendable {
         outerRequestID: UUID,
         replyTo message: xpc_object_t
     ) {
+        guard let reply = xpc_dictionary_create_reply(message) else { return }
+        let replyHandle = GemmaXPCReplyHandle(
+            connection: connection,
+            reply: reply,
+            channel: .control
+        )
+        let replyOnce = GemmaServiceReplyOnce { [replyHandle] response in
+            replyHandle.send(response, requestID: outerRequestID)
+        }
+        guard let ticket = admitControlLifecycle(
+            requestID: outerRequestID,
+            reply: replyOnce
+        ) else { return }
+
         switch control.body {
         case .prepareForExit:
-            guard let identity = StenoGemmaXPCProcessLifecycle.prepareForExit() else {
-                sendControlFailure(.shuttingDown, for: outerRequestID, replyTo: message)
+            guard case .accepted = StenoGemmaXPCProcessRuntime.registry.beginPrepareForExit() else {
+                completeControl(
+                    ticket,
+                    requestID: outerRequestID,
+                    body: .failure(.init(code: .shuttingDown))
+                )
                 return
             }
-            sendControl(.prepared(identity), for: outerRequestID, replyTo: message)
+            let started = StenoGemmaXPCProcessRuntime.registry.start(ticket) {
+                await StenoGemmaXPCProcessRuntime.registry.waitForWorkQuiescence()
+                guard let identity = StenoGemmaXPCProcessRuntime.registry.finishPrepareForExit(),
+                      let response = Self.encodedControlResponse(
+                          requestID: outerRequestID,
+                          body: .prepared(identity)
+                      )
+                else {
+                    _exit(EXIT_FAILURE)
+                }
+                return response
+            }
+            if !started {
+                _exit(EXIT_FAILURE)
+            }
 
         case .armAndExit(let request):
-            armAndExit(
-                request.preparedHelper,
-                requestID: outerRequestID,
-                replyTo: message
-            )
+            let started = StenoGemmaXPCProcessRuntime.registry.start(ticket) {
+                guard StenoGemmaXPCProcessRuntime.registry.beginArmAndExit(
+                    request.preparedHelper,
+                    armRequest: ticket
+                ) else {
+                    guard let response = Self.encodedControlResponse(
+                        requestID: outerRequestID,
+                        body: .failure(.init(code: .invalidRequest))
+                    ) else {
+                        _exit(EXIT_FAILURE)
+                    }
+                    return response
+                }
+                await StenoGemmaXPCProcessRuntime.registry.waitUntilReadyToArm(
+                    excluding: ticket
+                )
+                let body: GemmaXPCControlResponseBody
+                if StenoGemmaXPCProcessRuntime.registry.finishArmAndExit(
+                    request.preparedHelper,
+                    armRequest: ticket
+                ) {
+                    body = .armed(request.preparedHelper)
+                } else {
+                    body = .failure(.init(code: .invalidRequest))
+                }
+                guard let response = Self.encodedControlResponse(
+                    requestID: outerRequestID,
+                    body: body
+                ) else {
+                    _exit(EXIT_FAILURE)
+                }
+                return response
+            }
+            if !started {
+                _exit(EXIT_FAILURE)
+            }
         }
     }
 
-    private func armAndExit(
-        _ identity: GemmaIPCPreparedHelperExit,
+    private func admitControlLifecycle(
         requestID: UUID,
-        replyTo message: xpc_object_t
+        reply: GemmaServiceReplyOnce
+    ) -> GemmaServiceRequestRegistry.Ticket? {
+        let reservation = StenoGemmaXPCProcessRuntime.registry.reserveLifecycle(
+            requestID: requestID,
+            reply: reply
+        )
+        switch reservation {
+        case .admitted(let ticket):
+            return ticket
+        case .duplicateRequestID:
+            replyControlFailure(.invalidRequest, for: requestID, reply: reply)
+        case .busy:
+            replyControlFailure(.busy, for: requestID, reply: reply)
+        case .shuttingDown:
+            replyControlFailure(.shuttingDown, for: requestID, reply: reply)
+        }
+        return nil
+    }
+
+    private func completeControl(
+        _ ticket: GemmaServiceRequestRegistry.Ticket,
+        requestID: UUID,
+        body: GemmaXPCControlResponseBody
     ) {
-        // Allocate the reply before changing process state. A missing reply port must not leave
-        // a prepared helper irreversibly armed without being able to authenticate that fact.
-        guard let reply = xpc_dictionary_create_reply(message) else {
-            return
+        guard let response = Self.encodedControlResponse(requestID: requestID, body: body) else {
+            _exit(EXIT_FAILURE)
         }
-        guard StenoGemmaXPCProcessLifecycle.armAndExit(identity) else {
-            sendControlFailure(.invalidRequest, for: requestID, replyTo: message)
-            return
-        }
-        guard let data = try? GemmaXPCControlCodec.encode(
-            GemmaXPCControlResponseEnvelope(requestID: requestID, body: .armed(identity))
+        _ = StenoGemmaXPCProcessRuntime.registry.complete(ticket, response: response)
+    }
+
+    private func replyControlFailure(
+        _ code: GemmaIPCErrorCode,
+        for requestID: UUID,
+        reply: GemmaServiceReplyOnce
+    ) {
+        guard let response = Self.encodedControlResponse(
+            requestID: requestID,
+            body: .failure(.init(code: code))
         ) else {
             _exit(EXIT_FAILURE)
         }
-        GemmaXPCOuterFrame.write(data, requestID: requestID, channel: .control, to: reply)
-        xpc_connection_send_message(connection, reply)
-        // Do not send or schedule anything else. After authenticating this echo, the client
-        // cancels this exact connection. The resulting peer-disconnect event is the exit trigger.
+        _ = reply.send(response)
+    }
+
+    private static func encodedControlResponse(
+        requestID: UUID,
+        body: GemmaXPCControlResponseBody
+    ) -> Data? {
+        try? GemmaXPCControlCodec.encode(
+            GemmaXPCControlResponseEnvelope(requestID: requestID, body: body)
+        )
     }
 
     private func sendModelFailure(
@@ -311,32 +505,9 @@ final class StenoGemmaXPCService: @unchecked Sendable {
 
 /// Process-wide state prevents a second XPC peer from bypassing a recording teardown.
 private enum StenoGemmaXPCProcessLifecycle {
-    private enum AdmissionState {
-        case open
-        case prepared
-        case armed
-        case terminating
-    }
-
-    enum ModelAdmission {
-        case admitted
-        case busy
-        case shuttingDown
-    }
-
     private final class Storage: @unchecked Sendable {
-        static let maximumModelRequests = 32
-        static let maximumLifecycleRequests = 64
-
         let lock = NSLock()
-        let identity = GemmaIPCPreparedHelperExit(
-            helperInstanceID: UUID(),
-            processIdentifier: getpid()
-        )
-        var admission: AdmissionState = .open
         var activePeer: UUID?
-        var modelRequests = 0
-        var lifecycleRequests = 0
     }
 
     private static let storage = Storage()
@@ -344,77 +515,33 @@ private enum StenoGemmaXPCProcessLifecycle {
     static func claimPeer(_ peer: UUID) -> Bool {
         storage.lock.lock()
         defer { storage.lock.unlock() }
-        guard storage.admission != .terminating,
-              storage.activePeer == nil || storage.activePeer == peer
+        guard storage.activePeer == nil || storage.activePeer == peer
         else { return false }
         storage.activePeer = peer
         return true
     }
 
     static func boundPeerDisconnected(_ peer: UUID) -> Int32 {
-        storage.lock.lock()
-        defer { storage.lock.unlock() }
-        if storage.activePeer == peer {
-            let exitCode = storage.admission == .armed ? EXIT_SUCCESS : EXIT_FAILURE
-            storage.admission = .terminating
-            storage.activePeer = nil
-            return exitCode
+        let wasActivePeer = storage.lock.withLock {
+            storage.activePeer == peer
         }
-        return EXIT_FAILURE
+        guard wasActivePeer else { return EXIT_FAILURE }
+        // Keep the peer claimed until the caller immediately exits the process. Clearing it here
+        // would leave a small window in which a new connection could bind after termination began.
+        return StenoGemmaXPCProcessRuntime.registry.markTerminatingAndReturnWasArmed()
+            ? EXIT_SUCCESS
+            : EXIT_FAILURE
     }
-
-    static func begin(_ operation: GemmaIPCOperation) -> ModelAdmission {
-        storage.lock.lock()
-        defer { storage.lock.unlock() }
-
-        let isLifecycleRequest = operation == .cancel || operation == .shutdown
-        guard storage.admission == .open || isLifecycleRequest else {
-            return .shuttingDown
-        }
-        if isLifecycleRequest {
-            guard storage.lifecycleRequests < Storage.maximumLifecycleRequests else {
-                return .busy
-            }
-            storage.lifecycleRequests += 1
-        } else {
-            guard storage.modelRequests < Storage.maximumModelRequests else {
-                return .busy
-            }
-            storage.modelRequests += 1
-        }
-        return .admitted
-    }
-
-    static func finish(_ operation: GemmaIPCOperation) {
-        storage.lock.lock()
-        if operation == .cancel || operation == .shutdown {
-            storage.lifecycleRequests = max(0, storage.lifecycleRequests - 1)
-        } else {
-            storage.modelRequests = max(0, storage.modelRequests - 1)
-        }
-        storage.lock.unlock()
-    }
-
-    static func prepareForExit() -> GemmaIPCPreparedHelperExit? {
-        storage.lock.lock()
-        defer { storage.lock.unlock() }
-        guard storage.admission == .open else { return nil }
-        storage.admission = .prepared
-        return storage.identity
-    }
-
-    static func armAndExit(_ identity: GemmaIPCPreparedHelperExit) -> Bool {
-        storage.lock.lock()
-        defer { storage.lock.unlock() }
-        guard storage.admission == .prepared, identity == storage.identity else { return false }
-        storage.admission = .armed
-        return true
-    }
-
 }
 
 /// The model execution actor is created only after an authenticated peer submits model work.
 private enum StenoGemmaXPCProcessRuntime {
+    static let registry = GemmaServiceRequestRegistry(
+        helperIdentity: GemmaIPCPreparedHelperExit(
+            helperInstanceID: UUID(),
+            processIdentifier: getpid()
+        )
+    )
     static let core = GemmaServiceCore(buildInfo: .current)
 }
 

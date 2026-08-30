@@ -353,56 +353,25 @@ struct GemmaIPCTests {
         #expect(response.body == .failure(.init(code: .adapterMismatch)))
     }
 
-    @Test("cancel is idempotent and shutdown transitions to fail-closed state")
-    func cancelAndShutdownLifecycle() async throws {
+    @Test("the model core rejects lifecycle requests owned by the process registry")
+    func coreRejectsRegistryLifecycleRequests() async throws {
         let core = GemmaServiceCore(buildInfo: .current)
-        let cancel = try GemmaIPCRequestEnvelope(
-            body: .cancel(.init(targetRequestID: UUID()))
-        )
-        for _ in 0 ..< 2 {
+        let requests = try [
+            GemmaIPCRequestEnvelope(body: .cancel(.init(targetRequestID: UUID()))),
+            GemmaIPCRequestEnvelope(body: .shutdown),
+        ]
+
+        for request in requests {
             let response = try GemmaIPCCodec.decodeResponse(
                 await core.handle(
-                    encodedRequest: GemmaIPCCodec.encode(cancel),
-                    expectedRequestID: cancel.requestID
+                    encodedRequest: GemmaIPCCodec.encode(request),
+                    expectedRequestID: request.requestID
                 ),
-                expectedRequestID: cancel.requestID,
-                expectedOperation: .cancel
+                expectedRequestID: request.requestID,
+                expectedOperation: request.body.operation
             )
-            #expect(response.body == .acknowledgement(.init(kind: .cancelled, didChangeState: false)))
+            #expect(response.body == .failure(.init(code: .invalidRequest)))
         }
-
-        let shutdown = try GemmaIPCRequestEnvelope(body: .shutdown)
-        let firstShutdown = try GemmaIPCCodec.decodeResponse(
-            await core.handle(
-                encodedRequest: GemmaIPCCodec.encode(shutdown),
-                expectedRequestID: shutdown.requestID
-            ),
-            expectedRequestID: shutdown.requestID,
-            expectedOperation: .shutdown
-        )
-        #expect(firstShutdown.body == .acknowledgement(.init(kind: .shutdown, didChangeState: true)))
-        #expect(await core.lifecycleState() == .shutdown)
-
-        let secondShutdown = try GemmaIPCCodec.decodeResponse(
-            await core.handle(
-                encodedRequest: GemmaIPCCodec.encode(shutdown),
-                expectedRequestID: shutdown.requestID
-            ),
-            expectedRequestID: shutdown.requestID,
-            expectedOperation: .shutdown
-        )
-        #expect(secondShutdown.body == .acknowledgement(.init(kind: .shutdown, didChangeState: false)))
-
-        let handshake = try GemmaIPCRequestEnvelope(body: .handshake(.init(model: pin)))
-        let rejected = try GemmaIPCCodec.decodeResponse(
-            await core.handle(
-                encodedRequest: GemmaIPCCodec.encode(handshake),
-                expectedRequestID: handshake.requestID
-            ),
-            expectedRequestID: handshake.requestID,
-            expectedOperation: .handshake
-        )
-        #expect(rejected.body == .failure(.init(code: .shuttingDown)))
     }
 
     @Test("protocol v2 control frames require the expected UUID and exact operation")
