@@ -148,7 +148,10 @@ public struct OllamaProvider: StructuredTextModelProvider {
         do {
             return try StructuredTemplateCodec.decode(
                 Data(response.message.content.utf8),
-                template: template
+                template: template,
+                allowsOuterJSONCodeFence: Self.requiresPlainJSONFormat(
+                    modelID: endpoint.modelID
+                )
             )
         } catch {
             throw OllamaProviderError.invalidResponse
@@ -237,10 +240,28 @@ public struct OllamaProvider: StructuredTextModelProvider {
         context: RenderContext,
         includesThink: Bool
     ) -> [String: Any] {
+        let usesPlainJSON = Self.requiresPlainJSONFormat(modelID: endpoint.modelID)
+        var instructions = StructuredTemplatePrompt.instructions(
+            for: template,
+            context: context
+        )
+        if usesPlainJSON {
+            instructions += """
+
+            Every section value MUST be a JSON string, never an array or object. Even when a section asks for a list, put the Markdown bullets into one string separated by escaped newline characters. Match these JSON value types exactly:
+            \(StructuredTemplateCodec.stringJSONShapeExample(for: template))
+            Replace every example value with source-grounded content or an empty string.
+            """
+        }
         var body: [String: Any] = [
             "model": endpoint.modelID,
             "stream": false,
-            "format": StructuredTemplateCodec.schema(for: template),
+            // Ollama 0.33's MLX runner accepts a nested schema for Gemma 4 but
+            // ignores it and emits a different, fenced object. Its plain JSON
+            // mode follows an explicit shape, which is still decoded strictly.
+            "format": usesPlainJSON
+                ? "json"
+                : StructuredTemplateCodec.schema(for: template),
             "options": [
                 "temperature": 0,
                 "num_ctx": contextWindow.maximumTokens,
@@ -249,7 +270,7 @@ public struct OllamaProvider: StructuredTextModelProvider {
             "messages": [
                 [
                     "role": "system",
-                    "content": StructuredTemplatePrompt.instructions(for: template, context: context),
+                    "content": instructions,
                 ],
                 [
                     "role": "user",
@@ -265,6 +286,20 @@ public struct OllamaProvider: StructuredTextModelProvider {
             body["think"] = false
         }
         return body
+    }
+
+    private static func requiresPlainJSONFormat(modelID: String) -> Bool {
+        let leaf = modelID
+            .lowercased()
+            .split(separator: "/")
+            .last
+            .map(String.init) ?? modelID.lowercased()
+        guard leaf == "gemma4" || leaf.hasPrefix("gemma4:") else {
+            return false
+        }
+        return leaf.contains("-nvfp")
+            || leaf.contains("-mxfp")
+            || leaf.contains("-mlx-")
     }
 
     private func send(_ request: URLRequest) async throws -> TextModelHTTPResponse {

@@ -44,6 +44,24 @@ enum StructuredTemplateCodec {
         ]
     }
 
+    /// A concrete instance of the strict output shape whose non-empty values
+    /// make every JSON type unambiguous to runtimes that ignore JSON Schema.
+    /// `decode` remains the authority that rejects missing or extra fields.
+    static func stringJSONShapeExample(for template: Template) -> String {
+        let sections = Dictionary(
+            uniqueKeysWithValues: uniqueSectionIDs(template).map {
+                ($0, "Example \($0) content as one string")
+            }
+        )
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: ["sections": sections],
+            options: [.sortedKeys]
+        ), let result = String(data: data, encoding: .utf8) else {
+            return #"{"sections":{}}"#
+        }
+        return result
+    }
+
     static func decode(
         _ data: Data,
         template: Template,

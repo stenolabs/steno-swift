@@ -57,6 +57,46 @@ struct OllamaProviderTests {
         #expect(messages.map { $0["role"] as? String } == ["system", "user"])
     }
 
+    @Test("Gemma 4 MLX variants use strict prompt-guided JSON mode")
+    func gemma4MLXUsesPlainJSONFormat() async throws {
+        let recorder = OllamaRequestRecorder()
+        let configuration = makeOllamaConfiguration { request in
+            recorder.append(request)
+            return try ollamaResponse(request, object: [
+                "message": [
+                    "role": "assistant",
+                    "content": """
+                        ```json
+                        \(validOllamaContent("Local Gemma"))
+                        ```
+                        """,
+                ],
+                "done": true,
+                "done_reason": "stop",
+            ])
+        }
+        let provider = OllamaProvider(
+            endpoint: ollamaEndpoint(modelID: "gemma4:e2b-nvfp4"),
+            sessionConfiguration: configuration
+        )
+
+        let output = try await provider.generate(
+            template: .meetingMinutes,
+            request: .map(TranscriptChunk(turns: [])),
+            context: .empty
+        )
+
+        #expect(output.sections.first?.markdown == "Local Gemma")
+        let body = try ollamaRequestJSON(try #require(recorder.requests.first))
+        #expect(body["format"] as? String == "json")
+        let messages = try #require(body["messages"] as? [[String: Any]])
+        let instructions = try #require(messages.first?["content"] as? String)
+        #expect(instructions.contains(
+            StructuredTemplateCodec.stringJSONShapeExample(for: .meetingMinutes)
+        ))
+        #expect(instructions.contains("never an array or object"))
+    }
+
     @Test("probe lists the exact model and reports native structured generation")
     func probeUsesTagsAndSyntheticGeneration() async throws {
         let recorder = OllamaRequestRecorder()
@@ -203,11 +243,14 @@ private final class OllamaRequestRecorder: @unchecked Sendable {
     }
 }
 
-private func ollamaEndpoint(contextTokens: Int = 16_384) -> TextModelEndpoint {
+private func ollamaEndpoint(
+    contextTokens: Int = 16_384,
+    modelID: String = "gemma4:12b"
+) -> TextModelEndpoint {
     makeTextModelEndpoint(
         name: "Ollama 4070 Ti",
         baseURL: URL(string: "http://192.168.1.10:11434/v1")!,
-        modelID: "gemma4:12b",
+        modelID: modelID,
         requiresAPIKey: false,
         hosting: .selfHosted,
         dialect: .ollama,
