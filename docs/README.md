@@ -13,6 +13,7 @@ German is retained only for localization, German-language speech and transcript 
 - [`LEGACY-FORMATS.md`](LEGACY-FORMATS.md): legacy import format specification.
 - [`BENCH-FIXTURES.md`](BENCH-FIXTURES.md): benchmark and test-material policy.
 - [`DEMO-FIXTURE.md`](DEMO-FIXTURE.md): synthetic demo-library contract.
+- [`../GemmaService/README.md`](../GemmaService/README.md): isolated macOS 27 boundary and acceptance requirements for a future native Gemma 4 provider.
 
 ## Measurements
 
