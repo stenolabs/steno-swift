@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# This patch modifies GPL-3.0-or-later code from eSpeak NG.
 --- a/cmake/deps.cmake
 +++ b/cmake/deps.cmake
 @@ -5,8 +5,6 @@

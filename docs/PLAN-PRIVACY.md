@@ -68,7 +68,7 @@ The meeting-package allowlist excludes participant lists, the people library, em
 
 Company and notes could theoretically be optional on the model path, but they remain fixed and disclosed.
 If a real need arises, such as notes containing private asides, the opt-out belongs next to the transmission notice at render time, never in Settings.
-The same applies if PDF content is ever allowed externally: that would be a new per-action consent decision and would explicitly override the boundary in `PLAN-CONTEXT.md` step 4.
+The same applies if PDF content is ever allowed externally: that would require a new per-action consent decision and an explicit update to this privacy contract.
 
 ## Where each decision belongs
 

@@ -332,6 +332,7 @@ struct LibraryCRUDTests {
 
             #expect(FileManager.default.fileExists(atPath: source.path))
             #expect(try Data(contentsOf: copiedURL) == audio)
+            // gitleaks:allow - deterministic digest of a synthetic fixture
             #expect(asset.provenanceKey == "aafe9f6cb200b33109672a43c8ea1e40835484abeb0520632cdc9362ce1f58a1")
             #expect(try await library.loadMediaAsset(asset.id, meetingID: firstMeeting.id) == asset)
 

@@ -77,6 +77,8 @@ Diarization ran through Steno's production `steno-diarize-bench`, `FluidSortform
 
 According to the bundled source package, OOCC v2 is licensed under CC BY-NC-ND 4.0.
 The corpus therefore remains a local non-commercial research candidate and is not committed as a freely reusable product foundation.
+This document publishes aggregate measurements and methodology only.
+It contains no corpus audio, transcript excerpts, or reconstructed reference data.
 The verified source archives were exactly the files registered in the manifest, with MD5 `2dedd7b8aea80bec39f6815a6ad9f104` for audio and video and `2d512c753d4275e497b38548b362cf5b` for the transcripts.
 
 Overlapping words do not have a fully unambiguous order in a linear mixed transcript.
@@ -88,7 +90,7 @@ The measurement contains only spontaneous two-person conversations and covers ne
 
 A separate live benchmark was prepared for the M5 Air to compare Apple SpeechAnalyzer, Steno's hidden Parakeet live adapter, and FluidAudio Nemotron 3.5 ASR Streaming Multilingual.
 The Nemotron runner pins FluidAudio to commit `667181a368da13b3a9178e310414e9dcbe8f23ce` so that Steno's production FluidAudio version and diarization remain unchanged.
-The local transfer package under `/private/tmp/steno-oocc-benchmark` contains seven validated OOCC samples, both ARM64 release runners, the verified Parakeet model, launch scripts, and SHA-256 checksums.
+The task-local transfer package contained seven validated OOCC samples, both ARM64 release runners, the verified Parakeet model, launch scripts, and SHA-256 checksums.
 The matrix dry run plans exactly 42 steps for seven samples: three engines and three subsequent ASR evaluations per sample.
 
 A Parakeet live smoke test with excerpt 7 completed in 4.77 seconds after fixing a real completion hang, produced nine visible updates, and reached 15.99% WER at RTF 0.0520.

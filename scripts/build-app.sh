@@ -1,6 +1,6 @@
 #!/bin/bash
-# Baut steno-macos.app (PRODUCT_NAME in project.yml) aus project.yml + StenoKit.
-# Nutzung: scripts/build-app.sh [--run]
+# Builds steno-macos.app (PRODUCT_NAME in project.yml) from project.yml and StenoKit.
+# Usage: scripts/build-app.sh [--run]
 set -euo pipefail
 
 SCRIPT_DIRECTORY="$(cd "$(dirname "$0")" && pwd)"

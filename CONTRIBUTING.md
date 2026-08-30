@@ -2,6 +2,7 @@
 
 Steno is a source-only public beta for Apple Silicon.
 Bug reports, focused fixes, tests, and documentation improvements are welcome.
+Participation is governed by the [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
 
 ## Language
 
@@ -31,6 +32,8 @@ Never use real recordings, transcripts, participant data, or credentials in test
 
 Copyright in each contribution remains with its respective author.
 By submitting a contribution to this repository, you agree to license it under the [MIT License](LICENSE).
+
+Project roles and decision-making are described in [`GOVERNANCE.md`](GOVERNANCE.md).
 
 ## Reporting problems
 

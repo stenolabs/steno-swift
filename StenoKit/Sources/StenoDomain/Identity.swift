@@ -149,20 +149,13 @@ extension HardNegative: SpeakerEvidence {}
 public struct Person: Codable, Equatable, Identifiable, Sendable {
     public let id: PersonID
     public var displayName: String
-    /// Unterscheidungsmerkmal in einer wachsenden Stimmdatenbank: Zwei
-    /// Menschen gleichen Namens sind dort der Normalfall, und beim Zuordnen
-    /// eines Sprechers muss erkennbar sein, welcher gemeint ist. Ein
-    /// Protokollversand an diese Adresse ist denkbar, aber nicht ihr Zweck.
-    ///
-    /// Sie ist reine Bibliotheksdatei und darf niemals in eine
-    /// Prompt-Zusammenstellung oder in eine Teilnehmerliste geraten, die ein
-    /// Modell zu sehen bekommt; Teilnehmer bleiben dort namensbasiert.
+    /// Distinguishes people in a growing voice library where duplicate names
+    /// are normal. This address is library metadata and must never enter model
+    /// prompts or participant lists, which remain name-based.
     public var email: String?
-    /// Firma oder Organisation. Wie die Adresse ein Ordnungsmerkmal fuer die
-    /// wachsende Stimmdatenbank - nicht mehr. Damit ein Firmenname der
-    /// Erkennung hilft, muesste er in den Kontext des Transkriptionslaufs
-    /// gelangen (docs/PLAN-CONTEXT.md, Schritt 3); das ist weder gebaut noch
-    /// gemessen.
+    /// Company or organization used only to disambiguate library entries.
+    /// Using it for recognition would require adding it to transcription
+    /// context. That behavior is neither implemented nor measured.
     public var organization: String?
     public let createdAt: Date
     public var updatedAt: Date

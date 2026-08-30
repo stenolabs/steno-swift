@@ -1,0 +1,72 @@
+name: Bug report
+description: Report a reproducible problem using non-sensitive data.
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not attach real recordings, transcripts, participant details, credentials, or meeting metadata.
+        Report suspected vulnerabilities privately as described in SECURITY.md.
+
+  - type: input
+    id: commit
+    attributes:
+      label: Steno commit
+      description: Paste the commit hash from the version you tested.
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Device and OS
+      placeholder: MacBook Pro M5 Max, macOS 26.6
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Use a synthetic demo meeting or a minimal generated fixture.
+      placeholder: |
+        1. Open ...
+        2. Select ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: dropdown
+    id: recording
+    attributes:
+      label: Recording impact
+      options:
+        - Recording loss, corruption, or interruption
+        - Recording is intact; post-processing is affected
+        - No recording was involved
+        - Unknown
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy confirmation
+      options:
+        - label: I removed recordings, transcripts, names, credentials, paths, and other private meeting data.
+          required: true

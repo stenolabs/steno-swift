@@ -1,7 +1,7 @@
-// steno-diarize-bench: fährt den FluidSortformerProvider über eine Audiodatei
-// und schreibt RTTM (dscore-kompatibel) für den Vergleich mit der
-// Alt-Basislinie aus ~/Dev/sandbox/steno-diar-bench.
-// Nutzung: steno-diarize-bench <wav> <rttm-out> [--gpu]
+// steno-diarize-bench runs FluidSortformerProvider over an audio file and
+// emits dscore-compatible RTTM for comparison with the documented historical
+// baseline.
+// Usage: steno-diarize-bench <wav> <rttm-out> [--gpu]
 
 import Foundation
 import StenoDiarization

@@ -72,12 +72,12 @@ struct LiveQueryPromptAssemblerTests {
         let prompt = try assembler.assemble(
             question: "Who owns the launch?",
             meetingTitle: "Launch prep",
-            participants: ["Ada Lovelace", "  ", "Ben"],
+            participants: ["Ada Lovelace", "  ", "Grace Hopper"],
             segments: [segment(text: "Ada owns the launch.")]
         )
 
         #expect(prompt.userPrompt.contains("Meeting: Launch prep"))
-        #expect(prompt.userPrompt.contains("Participants present: Ada Lovelace, Ben"))
+        #expect(prompt.userPrompt.contains("Participants present: Ada Lovelace, Grace Hopper"))
         #expect(prompt.userPrompt.hasSuffix("Question: Who owns the launch?"))
     }
 

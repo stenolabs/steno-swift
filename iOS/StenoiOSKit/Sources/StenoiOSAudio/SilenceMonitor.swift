@@ -3,8 +3,8 @@ import Foundation
 /// Watches the input level for a microphone that has gone dead.
 ///
 /// The worst outcome of a recording app is the 70 minute recording with no
-/// sound in it (`steno-macos/docs/UX-REVIEW.md`, addendum). The levels are
-/// there anyway, so the check costs nothing; the grace period keeps a pause in
+/// sound in it. The levels are available anyway, so the check costs nothing;
+/// the grace period keeps a pause in
 /// the conversation from crying wolf.
 public struct SilenceMonitor: Equatable, Sendable {
     /// Peak below which the input counts as no signal.

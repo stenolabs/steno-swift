@@ -1,16 +1,16 @@
 #!/bin/bash
-# Baut die iOS-App aus iOS/project.yml + StenoKit.
+# Builds the iOS app from iOS/project.yml and StenoKit.
 #
-# Nutzung:
-#   scripts/build-ios.sh                 # generisch, nur bauen
-#   scripts/build-ios.sh --simulator [UDID] # bauen und im Simulator starten
-#   scripts/build-ios.sh --ipad-simulator # bauen und im iPad-Simulator starten
+# Usage:
+#   scripts/build-ios.sh                 # generic build only
+#   scripts/build-ios.sh --simulator [UDID] # build and launch in a simulator
+#   scripts/build-ios.sh --ipad-simulator # build and launch in an iPad simulator
 #   scripts/build-ios.sh --print-destination --simulator [UDID]
 #   scripts/build-ios.sh --print-destination --ipad-simulator
-#   scripts/build-ios.sh --device [UUID]  # bauen und aufs iPhone; ohne UUID das erste
+#   scripts/build-ios.sh --device [UUID]  # build and install on a device; first available by default
 #
-# Signieren laeuft automatisch ueber DEVELOPMENT_TEAM aus der ignorierten
-# lokalen .steno-signing.xcconfig an der Repository-Wurzel.
+# Signing uses DEVELOPMENT_TEAM from the ignored local
+# .steno-signing.xcconfig at the repository root.
 set -euo pipefail
 
 SCRIPT_DIRECTORY="$(cd "$(dirname "$0")" && pwd)"
@@ -42,14 +42,14 @@ create_or_boot_ipad_simulator() {
         runtime="$(xcrun simctl list runtimes -j | python3 -c 'import json,re,sys; runtimes=[runtime for runtime in json.load(sys.stdin)["runtimes"] if runtime.get("isAvailable", True) and ".iOS-" in runtime["identifier"]]; runtimes.sort(key=lambda runtime: (tuple(int(number) for number in re.findall(r"\d+", runtime.get("version", runtime["identifier"]))), runtime["identifier"]), reverse=True); print(runtimes[0]["identifier"] if runtimes else "")')"
         device_type="$(xcrun simctl list devicetypes -j | python3 -c 'import json,sys; device_types=[device_type for device_type in json.load(sys.stdin)["devicetypes"] if device_type.get("isAvailable", True) and device_type.get("name") == "iPad Pro 13-inch (M5)"]; print(device_types[0]["identifier"] if device_types else "")')"
         if [[ -z "$runtime" || -z "$device_type" ]]; then
-            echo "Kein installierter iPad-Simulator zur Erstellung verfuegbar." >&2
+            echo "No installed iPad simulator is available to create." >&2
             return 1
         fi
         simulator="$(xcrun simctl create "Steno iPad" "$device_type" "$runtime")"
     fi
 
     xcrun simctl boot "$simulator" 2>/dev/null || true
-    # Fortschritt nach stderr: stdout dieser Funktion ist die UDID.
+    # Send progress to stderr because stdout is the returned UDID.
     xcrun simctl bootstatus "$simulator" -b >&2
     printf '%s\n' "$simulator"
 }
@@ -82,12 +82,12 @@ if [[ "$PRINT_DESTINATION" == true ]]; then
         ;;
     --ipad-simulator)
         if ! resolve_simulator_destination "" true; then
-            echo "Kein gebootetes iPad fuer --print-destination." >&2
+            echo "No booted iPad is available for --print-destination." >&2
             exit 1
         fi
         ;;
     *)
-        echo "--print-destination erwartet --simulator oder --ipad-simulator." >&2
+        echo "--print-destination requires --simulator or --ipad-simulator." >&2
         exit 1
         ;;
     esac
@@ -96,18 +96,17 @@ fi
 
 cd "$SCRIPT_DIRECTORY/../iOS"
 
-# Immer erst generieren: das Projekt ist ein Generat. Nach einem Branch-
-# Wechsel oder Merge fehlen sonst neue Quelldateien und der Build bricht mit
-# "cannot find type ..." ab, was wie ein Codefehler aussieht und keiner ist.
+# Always regenerate first. After a branch switch or merge, a stale generated
+# project can omit new source files and fail with "cannot find type ..." even
+# though the source itself is valid.
 xcodegen generate --quiet
 
 case "$MODE" in
 --device)
-    # Zweites Argument gewinnt, sonst das erste verfuegbare iPhone oder iPad.
-    # Auf Modell gefiltert, weil eine gekoppelte Apple Watch ebenfalls als
-    # "available" gelistet wird und in der Liste vor dem Telefon stehen kann.
-    # Die UUID per Muster statt per Spalte: "available (paired)" enthaelt ein
-    # Leerzeichen und verschiebt jede feldbasierte Zaehlung.
+    # The second argument wins; otherwise use the first available iPhone or iPad.
+    # Filter by model because a paired Apple Watch is also listed as available
+    # and may appear before the phone. Match the UUID pattern instead of a
+    # column because "available (paired)" shifts whitespace-delimited fields.
     DEVICE="${2:-}"
     if [[ -z "$DEVICE" ]]; then
         DEVICE=$(xcrun devicectl list devices 2>/dev/null \
@@ -117,7 +116,7 @@ case "$MODE" in
             | head -1)
     fi
     if [[ -z "$DEVICE" ]]; then
-        echo "Kein verfuegbares Geraet. iPhone entsperren, im selben Netz." >&2
+        echo "No available device. Unlock the iPhone or iPad and keep it on the same network." >&2
         exit 1
     fi
     xcodebuild -project StenoiOS.xcodeproj -scheme Steno \
@@ -130,7 +129,7 @@ case "$MODE" in
     ;;
 --simulator)
     if ! DESTINATION="$(resolve_simulator_destination "$SIMULATOR_REQUESTED")"; then
-        echo "Kein gebooteter Simulator. Simulator.app starten." >&2
+        echo "No booted simulator. Start Simulator.app first." >&2
         exit 1
     fi
     SIM="${DESTINATION#platform=iOS Simulator,id=}"

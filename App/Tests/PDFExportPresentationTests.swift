@@ -12,7 +12,7 @@ struct PDFExportPresentationTests {
     private static let sampleMarkdown = """
     # Quarterly Planning
 
-    **Author:** Audrey
+    **Author:** Grace Hopper
 
     *2026-08-26 10:00*
 

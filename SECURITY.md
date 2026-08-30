@@ -44,4 +44,4 @@ Reports are especially useful when they concern:
 - unsafe handling of imported or transferred meeting packages; or
 - a way to bypass integrity, provenance, consent, or human-confirmation safeguards.
 
-General bugs, feature requests, and expected limitations documented in the README belong in the public issue tracker once it opens.
+General bugs, feature requests, and expected limitations documented in the README belong in the public issue tracker.

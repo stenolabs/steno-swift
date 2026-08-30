@@ -4,7 +4,7 @@ Steno processes real meetings in everyday use.
 Those recordings are unsuitable for development, screenshots, and measurements because they contain third-party personal data and must not leave the machine.
 This document records which public material is used instead, where it lives, and, most importantly, what it can and cannot support.
 
-The audio files deliberately remain outside the repository under `~/Dev/sandbox/steno-ccc-fixtures`.
+The audio files deliberately remain outside the repository and must be sourced separately in accordance with their licenses.
 They can be reproduced at any time from the sources listed below.
 
 ## Recordings

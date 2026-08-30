@@ -1,29 +1,27 @@
 #!/bin/bash
-# Erzeugt das Pruefsummen-Manifest aus einer lokal vorhandenen, geprueften
-# Modellinstallation.
+# Generates the checksum manifest from a locally available, verified model
+# installation.
 #
-# Grenze: Das friert die Bytes ein, die JETZT auf dieser Platte liegen. Es
-# beweist nicht ihre Echtheit. Vor dem Ausfuehren pruefen, woher sie stammen.
+# Boundary: this freezes the bytes that are currently on this disk. It does
+# not prove their authenticity. Verify the installation source before use.
 #
-# Das Verzeichnis muss aus genau einem Lauf des Installers stammen. Ein
-# gewachsener Modellordner enthaelt Verzeichnisse, die der Installer nie
-# laedt - etwa Embedding, Segmentation, FBank oder PldaRho aus einem
-# Benchmarklauf. Landen die im Manifest, scheitert die Pruefung bei jedem
-# anderen Nutzer. Der verlaessliche Weg ist ein leeres Verzeichnis, auf das
-# STENO_MODEL_DIR zeigt, und ein Download ueber die App.
+# The directory must come from exactly one installer run. A grown model
+# directory can contain files that the installer never downloads, such as
+# Embedding, Segmentation, FBank, or PldaRho directories from a benchmark run.
+# Including those files would make verification fail for every other user.
+# The reliable workflow starts with an empty STENO_MODEL_DIR and installs the
+# model through the app.
 #
-# Das Skript schreibt NUR das Diarisierungs-Manifest. Parakeet hat ein
-# eigenes unter StenoTranscription/Resources/parakeet-model-checksums.json,
-# und genau dort ist der Fehler schon einmal passiert: es entstand aus einem
-# gewachsenen Ordner und verlangte danach config.json und parakeet_vocab.json,
-# die FluidAudio fuer v3 nie laedt. Auf jedem frischen Geraet brach die
-# Installation ab. Ein Test in ParakeetModelInstallerTests haelt jetzt fest,
-# was das Manifest enthalten darf.
+# This script writes only the diarization manifest. Parakeet has a separate
+# manifest at StenoTranscription/Resources/parakeet-model-checksums.json.
+# That manifest once came from a grown directory and incorrectly required
+# config.json and parakeet_vocab.json, which FluidAudio v3 never downloads.
+# ParakeetModelInstallerTests defines the allowed manifest contents.
 #
-# Nutzung: scripts/generate-model-checksums.sh <modellverzeichnis>
+# Usage: scripts/generate-model-checksums.sh <model-directory>
 set -euo pipefail
 
-DIR="${1:?Modellverzeichnis angeben}"
+DIR="${1:?Specify a model directory}"
 OUT="StenoKit/Sources/StenoDiarization/Resources/model-checksums.json"
 
 cd "$(dirname "$0")/.."
@@ -42,4 +40,4 @@ cd "$DIR"
     echo '}'
 } > "$ROOT/$OUT"
 
-echo "Geschrieben: $OUT"
+echo "Wrote: $OUT"

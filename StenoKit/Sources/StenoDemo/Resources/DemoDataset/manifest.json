@@ -8,7 +8,7 @@
     "model" : "de_DE-mls-medium",
     "modelRevision" : "7e8200c80dbc9147404face0d3ee0bb69995d873",
     "speakerIDs" : ["2422", "4536", "6507"],
-    "inputScriptSHA256" : "0a7c729a449950c636e95b39e2856e4a7eda2e5c69d2f8defee35797d122f7d2",
+    "inputScriptSHA256" : "b389b51a5da74182c814f8622bf428b760addda5d7a44b745e34b8207fcc9900",
     "mixParameters" : { "sampleRate" : 22050, "fixedPointFractionBits" : 16, "speakerAGainDB" : 0, "speakerBGainDB" : -1, "speakerCGainDB" : -0.5, "speakerAGainNumerator" : 65536, "speakerBGainNumerator" : 58409, "speakerCGainNumerator" : 61870 },
     "license" : "Piper MIT; Piper Voices MIT; model card declares MLS CC BY 4.0",
     "modificationProvenance" : "Fully synthetic German fictional scripts, Piper synthesis, deterministic PCM16 mixing."
@@ -43,7 +43,7 @@
     }
   ],
   "resources" : [
-    { "id" : "attribution", "kind" : "attribution", "relativePath" : "ATTRIBUTION.md", "byteCount" : 1437, "sha256" : "c14676c1501a68fedc47457958d340264ba86a63faf15930d2b8b48f95b04ef1" },
+    { "id" : "attribution", "kind" : "attribution", "relativePath" : "ATTRIBUTION.md", "byteCount" : 2070, "sha256" : "bdf2d644e2d406f79fd8fcc23da42bfdde50442df716abc3f436d1d0e42a6a66" },
     { "id" : "audio-projektauftakt", "kind" : "audio", "relativePath" : "projektauftakt/audio.wav", "byteCount" : 2974700, "sha256" : "272327f366fb6b2a4cc0aef014d99a7655828b51e7aa922dcf1c86b28b42001b" },
     { "id" : "transcript-projektauftakt", "kind" : "transcript", "relativePath" : "projektauftakt/transcript.json", "byteCount" : 5808, "sha256" : "9f35a89966f06c43e2835962fba7aa1cb8ed7c88825eec060cecf1b9d50aa27a" },
     { "id" : "notes-projektauftakt", "kind" : "note", "relativePath" : "projektauftakt/notes.md", "byteCount" : 494, "sha256" : "cc26e3036ef011c0f0a1e175a032abbb1a450f8e65dddb8d492d3a90332a5139" },
