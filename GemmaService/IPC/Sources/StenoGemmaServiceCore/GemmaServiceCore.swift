@@ -46,9 +46,17 @@ public actor GemmaServiceCore {
         do {
             request = try GemmaIPCCodec.decodeRequest(encodedRequest)
         } catch let error as GemmaIPCCodecError {
+            let code: GemmaIPCErrorCode = switch error {
+            case .malformedMessage:
+                .invalidRequest
+            case .oversizedMessage:
+                .requestTooLarge
+            case .protocolMismatch:
+                .protocolMismatch
+            }
             return encodedFailure(
                 requestID: expectedRequestID,
-                code: error == .malformedMessage ? .invalidRequest : .requestTooLarge
+                code: code
             )
         } catch {
             return encodedFailure(requestID: expectedRequestID, code: .invalidRequest)
@@ -56,10 +64,6 @@ public actor GemmaServiceCore {
 
         if request.requestID != expectedRequestID {
             return encodedFailure(requestID: expectedRequestID, code: .invalidRequest)
-        }
-
-        guard request.protocolVersion == GemmaIPCProtocol.currentVersion else {
-            return encodedFailure(requestID: request.requestID, code: .protocolMismatch)
         }
 
         switch request.body {

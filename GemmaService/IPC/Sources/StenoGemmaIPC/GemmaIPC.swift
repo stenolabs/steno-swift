@@ -2,10 +2,20 @@ import Foundation
 
 /// The canonical version of Steno's narrow, local-only Gemma helper protocol.
 public enum GemmaIPCProtocol {
-    public static let currentVersion = 1
+    /// Version 2 adds the strictly encoded helper self-exit control exchange.
+    public static let currentVersion = 2
     public static let maximumEncodedMessageBytes = 256 * 1024
     public static let maximumTextBytes = 128 * 1024
     public static let maximumGenerationTokens = 4_096
+}
+
+/// Separates model work from process-lifecycle control at the raw XPC envelope.
+///
+/// The discriminator is outside JSON so a malformed control frame can never be
+/// reinterpreted as a model request with a different failure schema.
+public enum GemmaXPCChannel: String, Sendable, Equatable, Hashable {
+    case model
+    case control
 }
 
 /// Compile-time identity shared by the app-facing IPC client and the helper.
@@ -455,6 +465,7 @@ public struct GemmaIPCResponseEnvelope: Codable, Sendable, Equatable {
 
 public enum GemmaIPCCodecError: Error, Equatable, Sendable {
     case oversizedMessage(limit: Int, actual: Int)
+    case protocolMismatch
     case malformedMessage
 }
 
@@ -470,13 +481,18 @@ public enum GemmaIPCCodec {
 
     public static func decodeRequest(_ data: Data) throws -> GemmaIPCRequestEnvelope {
         try checkSize(data)
+        let request: GemmaIPCRequestEnvelope
         do {
             try GemmaJSONDuplicateKeyValidator.validate(data)
             try GemmaIPCJSONSchema.validateRequest(data)
-            return try JSONDecoder().decode(GemmaIPCRequestEnvelope.self, from: data)
+            request = try JSONDecoder().decode(GemmaIPCRequestEnvelope.self, from: data)
         } catch {
             throw GemmaIPCCodecError.malformedMessage
         }
+        guard request.protocolVersion == GemmaIPCProtocol.currentVersion else {
+            throw GemmaIPCCodecError.protocolMismatch
+        }
+        return request
     }
 
     public static func decodeResponse(
@@ -552,6 +568,216 @@ public enum GemmaIPCCodec {
             }
         default:
             throw GemmaIPCCodecError.malformedMessage
+        }
+    }
+}
+
+/// Control requests travel inside the same bounded, strictly decoded Data frame as model work.
+/// They are intercepted by the XPC shell and never reach `GemmaServiceCore`.
+public enum GemmaXPCControlOperation: String, Codable, Sendable, Equatable {
+    case prepareForExit
+    case armAndExit
+}
+
+/// A helper-created identity, unique for exactly one helper process lifetime.
+public struct GemmaIPCPreparedHelperExit: Codable, Sendable, Equatable {
+    public let helperInstanceID: UUID
+    public let processIdentifier: Int32
+
+    public init(helperInstanceID: UUID, processIdentifier: Int32) {
+        self.helperInstanceID = helperInstanceID
+        self.processIdentifier = processIdentifier
+    }
+}
+
+public struct GemmaIPCArmAndExitRequest: Codable, Sendable, Equatable {
+    public let preparedHelper: GemmaIPCPreparedHelperExit
+
+    public init(preparedHelper: GemmaIPCPreparedHelperExit) {
+        self.preparedHelper = preparedHelper
+    }
+}
+
+public enum GemmaXPCControlRequestBody: Sendable, Equatable, Codable {
+    case prepareForExit
+    case armAndExit(GemmaIPCArmAndExitRequest)
+
+    public var operation: GemmaXPCControlOperation {
+        switch self {
+        case .prepareForExit:
+            .prepareForExit
+        case .armAndExit:
+            .armAndExit
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case operation
+        case payload
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(GemmaXPCControlOperation.self, forKey: .operation) {
+        case .prepareForExit:
+            _ = try container.decode(GemmaIPCEmptyPayload.self, forKey: .payload)
+            self = .prepareForExit
+        case .armAndExit:
+            self = .armAndExit(try container.decode(GemmaIPCArmAndExitRequest.self, forKey: .payload))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(operation, forKey: .operation)
+        switch self {
+        case .prepareForExit:
+            try container.encode(GemmaIPCEmptyPayload(), forKey: .payload)
+        case .armAndExit(let request):
+            try container.encode(request, forKey: .payload)
+        }
+    }
+}
+
+public struct GemmaXPCControlRequestEnvelope: Codable, Sendable, Equatable {
+    public let protocolVersion: Int
+    public let requestID: UUID
+    public let body: GemmaXPCControlRequestBody
+
+    public init(
+        protocolVersion: Int = GemmaIPCProtocol.currentVersion,
+        requestID: UUID = UUID(),
+        body: GemmaXPCControlRequestBody
+    ) {
+        self.protocolVersion = protocolVersion
+        self.requestID = requestID
+        self.body = body
+    }
+}
+
+public enum GemmaXPCControlResponseBody: Sendable, Equatable, Codable {
+    case prepared(GemmaIPCPreparedHelperExit)
+    case armed(GemmaIPCPreparedHelperExit)
+    case failure(GemmaIPCFailure)
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case payload
+    }
+
+    private enum Kind: String, Codable {
+        case prepared
+        case armed
+        case failure
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(Kind.self, forKey: .kind) {
+        case .prepared:
+            self = .prepared(try container.decode(GemmaIPCPreparedHelperExit.self, forKey: .payload))
+        case .armed:
+            self = .armed(try container.decode(GemmaIPCPreparedHelperExit.self, forKey: .payload))
+        case .failure:
+            self = .failure(try container.decode(GemmaIPCFailure.self, forKey: .payload))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .prepared(let prepared):
+            try container.encode(Kind.prepared, forKey: .kind)
+            try container.encode(prepared, forKey: .payload)
+        case .armed(let armed):
+            try container.encode(Kind.armed, forKey: .kind)
+            try container.encode(armed, forKey: .payload)
+        case .failure(let failure):
+            try container.encode(Kind.failure, forKey: .kind)
+            try container.encode(failure, forKey: .payload)
+        }
+    }
+}
+
+public struct GemmaXPCControlResponseEnvelope: Codable, Sendable, Equatable {
+    public let protocolVersion: Int
+    public let requestID: UUID
+    public let body: GemmaXPCControlResponseBody
+
+    public init(
+        protocolVersion: Int = GemmaIPCProtocol.currentVersion,
+        requestID: UUID,
+        body: GemmaXPCControlResponseBody
+    ) {
+        self.protocolVersion = protocolVersion
+        self.requestID = requestID
+        self.body = body
+    }
+}
+
+public enum GemmaXPCControlCodec {
+    public static func encode(_ request: GemmaXPCControlRequestEnvelope) throws -> Data {
+        try encodeValue(request)
+    }
+
+    public static func encode(_ response: GemmaXPCControlResponseEnvelope) throws -> Data {
+        try encodeValue(response)
+    }
+
+    public static func decodeRequest(_ data: Data) throws -> GemmaXPCControlRequestEnvelope {
+        try checkSize(data)
+        let request: GemmaXPCControlRequestEnvelope
+        do {
+            try GemmaJSONDuplicateKeyValidator.validate(data)
+            try GemmaXPCControlJSONSchema.validateRequest(data)
+            request = try JSONDecoder().decode(GemmaXPCControlRequestEnvelope.self, from: data)
+        } catch {
+            throw GemmaIPCCodecError.malformedMessage
+        }
+        guard request.protocolVersion == GemmaIPCProtocol.currentVersion else {
+            throw GemmaIPCCodecError.protocolMismatch
+        }
+        return request
+    }
+
+    public static func decodeResponse(
+        _ data: Data,
+        expectedRequestID: UUID,
+        expectedOperation: GemmaXPCControlOperation
+    ) throws -> GemmaXPCControlResponseEnvelope {
+        try checkSize(data)
+        do {
+            try GemmaJSONDuplicateKeyValidator.validate(data)
+            try GemmaXPCControlJSONSchema.validateResponse(data)
+            let response = try JSONDecoder().decode(GemmaXPCControlResponseEnvelope.self, from: data)
+            guard response.protocolVersion == GemmaIPCProtocol.currentVersion,
+                  response.requestID == expectedRequestID
+            else {
+                throw GemmaIPCCodecError.malformedMessage
+            }
+            switch (expectedOperation, response.body) {
+            case (.prepareForExit, .prepared), (.armAndExit, .armed), (_, .failure):
+                return response
+            default:
+                throw GemmaIPCCodecError.malformedMessage
+            }
+        } catch {
+            throw GemmaIPCCodecError.malformedMessage
+        }
+    }
+
+    private static func encodeValue<Value: Encodable>(_ value: Value) throws -> Data {
+        let data = try JSONEncoder().encode(value)
+        try checkSize(data)
+        return data
+    }
+
+    private static func checkSize(_ data: Data) throws {
+        guard data.count <= GemmaIPCProtocol.maximumEncodedMessageBytes else {
+            throw GemmaIPCCodecError.oversizedMessage(
+                limit: GemmaIPCProtocol.maximumEncodedMessageBytes,
+                actual: data.count
+            )
         }
     }
 }
@@ -798,16 +1024,55 @@ private enum GemmaIPCJSONSchema {
     }
 }
 
-/// The only XPC-facing method shape required by the future helper.
-///
-/// It transports encoded frames and request IDs only. Model paths, audio, meeting data,
-/// prompts as object parameters, URLs, and secrets are deliberately absent.
-@objc public protocol StenoGemmaXPCProtocol {
-    func sendRequest(
-        _ requestData: NSData,
-        requestID: NSUUID,
-        withReply reply: @escaping @Sendable (NSData) -> Void
-    )
+private enum GemmaXPCControlJSONSchema {
+    private static let envelopeKeys: Set<String> = ["protocolVersion", "requestID", "body"]
+    private static let requestBodyKeys: Set<String> = ["operation", "payload"]
+    private static let responseBodyKeys: Set<String> = ["kind", "payload"]
+    private static let preparedKeys: Set<String> = ["helperInstanceID", "processIdentifier"]
+
+    static func validateRequest(_ data: Data) throws {
+        let envelope = try rootObject(data, keys: envelopeKeys)
+        let body = try object(envelope["body"], keys: requestBodyKeys)
+        guard let operation = body["operation"] as? String else {
+            throw GemmaIPCCodecError.malformedMessage
+        }
+        switch operation {
+        case GemmaXPCControlOperation.prepareForExit.rawValue:
+            _ = try object(body["payload"], keys: [])
+        case GemmaXPCControlOperation.armAndExit.rawValue:
+            let payload = try object(body["payload"], keys: ["preparedHelper"])
+            _ = try object(payload["preparedHelper"], keys: preparedKeys)
+        default:
+            throw GemmaIPCCodecError.malformedMessage
+        }
+    }
+
+    static func validateResponse(_ data: Data) throws {
+        let envelope = try rootObject(data, keys: envelopeKeys)
+        let body = try object(envelope["body"], keys: responseBodyKeys)
+        guard let kind = body["kind"] as? String else {
+            throw GemmaIPCCodecError.malformedMessage
+        }
+        switch kind {
+        case "prepared", "armed":
+            _ = try object(body["payload"], keys: preparedKeys)
+        case "failure":
+            _ = try object(body["payload"], keys: ["code"])
+        default:
+            throw GemmaIPCCodecError.malformedMessage
+        }
+    }
+
+    private static func rootObject(_ data: Data, keys: Set<String>) throws -> [String: Any] {
+        try object(try JSONSerialization.jsonObject(with: data), keys: keys)
+    }
+
+    private static func object(_ value: Any?, keys: Set<String>) throws -> [String: Any] {
+        guard let object = value as? [String: Any], Set(object.keys) == keys else {
+            throw GemmaIPCCodecError.malformedMessage
+        }
+        return object
+    }
 }
 
 private struct GemmaIPCEmptyPayload: Codable, Sendable, Equatable {}

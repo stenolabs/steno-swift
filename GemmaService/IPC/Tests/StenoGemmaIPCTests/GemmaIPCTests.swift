@@ -404,4 +404,57 @@ struct GemmaIPCTests {
         )
         #expect(rejected.body == .failure(.init(code: .shuttingDown)))
     }
+
+    @Test("protocol v2 control frames require the expected UUID and exact operation")
+    func controlFramesRoundTrip() throws {
+        let prepared = GemmaIPCPreparedHelperExit(
+            helperInstanceID: UUID(),
+            processIdentifier: 42
+        )
+        let request = GemmaXPCControlRequestEnvelope(
+            body: .armAndExit(.init(preparedHelper: prepared))
+        )
+        #expect(try GemmaXPCControlCodec.decodeRequest(
+            GemmaXPCControlCodec.encode(request)
+        ) == request)
+
+        let response = GemmaXPCControlResponseEnvelope(
+            requestID: request.requestID,
+            body: .armed(prepared)
+        )
+        #expect(try GemmaXPCControlCodec.decodeResponse(
+            GemmaXPCControlCodec.encode(response),
+            expectedRequestID: request.requestID,
+            expectedOperation: .armAndExit
+        ) == response)
+        #expect(throws: GemmaIPCCodecError.malformedMessage) {
+            _ = try GemmaXPCControlCodec.decodeResponse(
+                GemmaXPCControlCodec.encode(response),
+                expectedRequestID: UUID(),
+                expectedOperation: .armAndExit
+            )
+        }
+
+        let failure = GemmaXPCControlResponseEnvelope(
+            requestID: request.requestID,
+            body: .failure(.init(code: .shuttingDown))
+        )
+        #expect(try GemmaXPCControlCodec.decodeResponse(
+            GemmaXPCControlCodec.encode(failure),
+            expectedRequestID: request.requestID,
+            expectedOperation: .armAndExit
+        ) == failure)
+
+        let incompatible = GemmaXPCControlRequestEnvelope(
+            protocolVersion: GemmaIPCProtocol.currentVersion + 1,
+            body: .prepareForExit
+        )
+        #expect(throws: GemmaIPCCodecError.protocolMismatch) {
+            _ = try GemmaXPCControlCodec.decodeRequest(
+                GemmaXPCControlCodec.encode(incompatible)
+            )
+        }
+        #expect(GemmaXPCChannel.model.rawValue == "model")
+        #expect(GemmaXPCChannel.control.rawValue == "control")
+    }
 }

@@ -13,6 +13,8 @@ packages:
     path: StenoKit
   GemmaIPC:
     path: GemmaService/IPC
+  GemmaClient:
+    path: GemmaService/Client
 
 targets:
   Steno:
@@ -21,6 +23,10 @@ targets:
         embed: true
         codeSign: true
         link: false
+      - package: GemmaClient
+        product: StenoGemmaClient
+      - package: GemmaIPC
+        product: StenoGemmaIPC
     settings:
       base:
         MACOSX_DEPLOYMENT_TARGET: "27.0"
@@ -31,6 +37,8 @@ targets:
     dependencies:
       - package: GemmaIPC
         product: StenoGemmaIPC
+      - package: GemmaClient
+        product: StenoGemmaClient
     settings:
       base:
         MACOSX_DEPLOYMENT_TARGET: "27.0"
@@ -84,6 +92,8 @@ schemes:
     test:
       targets:
         - StenoTests
+      environmentVariables:
+        STENO_TEST_ISOLATE_TEXT_MODEL_REGISTRY: "1"
 
   StenoGemmaXPC:
     build:

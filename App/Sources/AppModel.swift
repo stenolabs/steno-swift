@@ -156,6 +156,10 @@ final class AppModel {
     @ObservationIgnored
     private let recordingPermissionIdentity: @MainActor () -> String?
     @ObservationIgnored
+    private let nativeGemmaRecordingBarrier: any NativeGemmaCoordinator
+    @ObservationIgnored
+    private var nativeGemmaRecordingBarrierIsHeld = false
+    @ObservationIgnored
     private let pipelineStarter: MacPipelineStarter
     @ObservationIgnored
     private let libraryURLOverride: URL?
@@ -212,6 +216,8 @@ final class AppModel {
         recordingPermissionIdentity: @escaping @MainActor () -> String? = {
             CurrentCodeSigningIdentity.cacheKey()
         },
+        nativeGemmaRecordingBarrier: any NativeGemmaCoordinator =
+            NativeGemmaRecordingBarrierFactory.live(),
         pipelineStarter: @escaping MacPipelineStarter = { request in
             try await startPipeline(
                 at: request.libraryURL,
@@ -251,6 +257,7 @@ final class AppModel {
         self.recordingPermissionClient = recordingPermissionClient
         self.recordingPermissionDefaults = recordingPermissionDefaults
         self.recordingPermissionIdentity = recordingPermissionIdentity
+        self.nativeGemmaRecordingBarrier = nativeGemmaRecordingBarrier
         self.pipelineStarter = pipelineStarter
         self.supportedLocalesLoader = supportedLocalesLoader
         self.meetingListLoader = meetingListLoader
@@ -663,6 +670,7 @@ final class AppModel {
     )
 
     private var meetingChangesTask: Task<Void, Never>?
+    private var searchIndexRebuildTask: Task<Void, Never>?
     /// Derived full-text index; rebuildable at any time (ARCHITECTURE s11).
     @ObservationIgnored
     private var searchIndex: MeetingSearchIndex?
@@ -1502,7 +1510,8 @@ final class AppModel {
             do {
                 let index = try MeetingSearchIndex(layout: runtime.library.layout)
                 searchIndex = index
-                Task { [library = runtime.library] in
+                searchIndexRebuildTask?.cancel()
+                searchIndexRebuildTask = Task { [library = runtime.library] in
                     try? await index.rebuild(library: library)
                 }
             } catch {
@@ -1877,6 +1886,22 @@ final class AppModel {
         retryingLibraryIssueIDs.removeAll()
     }
 
+    #if DEBUG
+    func stopBackgroundLibraryTasksForTesting() async {
+        if let meetingChangesTask {
+            meetingChangesTask.cancel()
+            await meetingChangesTask.value
+            self.meetingChangesTask = nil
+        }
+        if let searchIndexRebuildTask {
+            searchIndexRebuildTask.cancel()
+            await searchIndexRebuildTask.value
+            self.searchIndexRebuildTask = nil
+        }
+        searchIndex = nil
+    }
+    #endif
+
     func retryStartup() async {
         guard case .failed = startupState, runtime == nil else { return }
         await bootstrap()
@@ -2226,6 +2251,18 @@ final class AppModel {
         dismissNotice()
         recordingTemplateChoice.beginNewMeeting()
 
+        do {
+            try await nativeGemmaRecordingBarrier.acquire()
+            nativeGemmaRecordingBarrierIsHeld = true
+        } catch {
+            _ = recordingStartState.fail()
+            report(Self.message(
+                "The recording could not be started because the local model helper could not be stopped safely.",
+                error
+            ))
+            return
+        }
+
         let micStatus = await recordingPermissionClient.requestMicrophone()
         recordingPermissions = RecordingAudioPermissionState(
             microphone: micStatus,
@@ -2235,6 +2272,7 @@ final class AppModel {
         guard micStatus == .authorized else {
             _ = recordingStartState.fail()
             report("No microphone access. Allow it in System Settings under Privacy & Security.")
+            await releaseNativeGemmaRecordingBarrierAfterCapture()
             return
         }
         do {
@@ -2279,6 +2317,7 @@ final class AppModel {
                 guard existing.status != .recording else {
                     report("This meeting is already recording.")
                     _ = recordingStartState.fail()
+                    await releaseNativeGemmaRecordingBarrierAfterCapture()
                     return
                 }
                 // Die angehangene Aufnahme beginnt nach dem laengsten
@@ -2529,6 +2568,7 @@ final class AppModel {
         // Recording is over: external-capture detection becomes
         // actionable again.
         resumeMeetingDetectionMonitor()
+        await releaseNativeGemmaRecordingBarrierAfterCapture()
     }
 
     private func abortRecordingCleanup() async {
@@ -2551,6 +2591,21 @@ final class AppModel {
         // Recording is over: external-capture detection becomes
         // actionable again.
         resumeMeetingDetectionMonitor()
+        await releaseNativeGemmaRecordingBarrierAfterCapture()
+    }
+
+    private func releaseNativeGemmaRecordingBarrierAfterCapture() async {
+        guard nativeGemmaRecordingBarrierIsHeld else { return }
+        do {
+            try await nativeGemmaRecordingBarrier.release()
+            nativeGemmaRecordingBarrierIsHeld = false
+        } catch {
+            // Keep the held flag set. Native Gemma then remains unavailable until restart.
+            report(Self.message(
+                "The local model helper remains disabled because its recording barrier could not be released safely.",
+                error
+            ))
+        }
     }
 
     func setMicrophonePaused(_ paused: Bool) async {
