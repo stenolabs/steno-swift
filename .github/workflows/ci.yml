@@ -27,13 +27,14 @@ jobs:
         run: brew install xcodegen
 
       - name: Test shared core
-        run: swift test --package-path StenoKit
+        run: swift test --package-path StenoKit --no-parallel
 
       - name: Test macOS app
         run: |
           xcodegen generate
           xcodebuild -project Steno.xcodeproj -scheme Steno \
-            -destination 'platform=macOS' test
+            -destination 'platform=macOS' \
+            -parallel-testing-enabled NO test
 
       - name: Test iOS app
         working-directory: iOS
@@ -41,10 +42,12 @@ jobs:
           xcodegen generate
           xcodebuild -project StenoiOS.xcodeproj -scheme Steno \
             -destination 'platform=iOS Simulator,name=iPhone 17' \
-            -derivedDataPath build/DerivedData test
+            -derivedDataPath build/DerivedData \
+            -parallel-testing-enabled NO test
 
       - name: Test iOS audio package
         working-directory: iOS/StenoiOSKit
         run: |
           xcodebuild -scheme StenoiOSKit \
-            -destination 'platform=iOS Simulator,name=iPhone 17' test
+            -destination 'platform=iOS Simulator,name=iPhone 17' \
+            -parallel-testing-enabled NO test
