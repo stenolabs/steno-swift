@@ -126,5 +126,6 @@ It must not be read from the same untrusted checkpoint directory it is meant to 
 
 The remaining production work is to add a crash-releasing cross-process recording and helper gate, validate Hardened Runtime and the Release entitlement policy, implement the consented immutable model importer, select a buildable matched MLX dependency snapshot, and connect the verified model runtime to the helper.
 Cross-process exclusion requires a two-process integration test and must be complete before native Gemma is activated.
+The normative design for that boundary is [Native Gemma cross-process gate](../docs/NATIVE-GEMMA-GATE.md).
 Approved manifests and expected digests must live in Steno-controlled metadata, and installation must route through `ModelInstallationCoordinator` with explicit consent.
 The provider must remain unavailable in the app until those conditions, the exact checkpoint licensing, and the associated recovery behavior are accepted.

@@ -291,5 +291,5 @@ The order follows the handoff with one correction: milestone 1 already needs min
    Apple's framework does not load the external checkpoint.
    The separate Xcode 27 project variant now embeds a signed App Sandbox XPC helper with incoming and outgoing network access disabled.
    Mutual caller authentication, strict IPC correlation, bounded client deadlines, a server-side request registry with targeted cancellation and true task-and-reply quiescence, exact helper-process exit proof, and one app-process-wide recording coordinator are implemented and covered by model-free tests.
-   A crash-releasing cross-process recording and helper gate with a two-process integration test, production Hardened Runtime validation, the consented immutable model importer, a buildable matched MLX dependency snapshot, and verified model-runtime activation remain unresolved.
+   The reviewed cross-process gate contract is documented in `docs/NATIVE-GEMMA-GATE.md`, but its crash-releasing implementation and two-process test, production Hardened Runtime validation, the consented immutable model importer, a buildable matched MLX dependency snapshot, and verified model-runtime activation remain unresolved.
 9. Whether a speaker-count field should ever exist. If it does, ask "how many people spoke?", not "how many people attended?".
