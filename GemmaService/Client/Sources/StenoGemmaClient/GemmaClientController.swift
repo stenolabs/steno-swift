@@ -35,6 +35,12 @@ public struct GemmaAuthenticatedHelperExitProof: Equatable, Sendable {
 
 /// A model-free transport with lifecycle controls that bypass the model execution actor.
 public protocol GemmaClientTransport: Sendable {
+    /// Completes the authenticated model-directory bind and waits until helper activation ends.
+    ///
+    /// This is a distinct lifecycle step so expensive checkpoint activation is covered by the
+    /// session-activation deadline rather than by the first ordinary request deadline.
+    func bindSession() async throws
+
     /// Transports one original encoded frame without decoding it first.
     func send(_ encodedRequest: Data, requestID: UUID) async throws -> Data
 
@@ -100,6 +106,7 @@ public protocol GemmaAuthenticatedHelperExitProving: Sendable {
 }
 
 public enum GemmaClientDeadlineOperation: String, Hashable, Sendable {
+    case sessionActivation
     case request
     case prepareForExit
     case exitObservationRegistration
@@ -231,7 +238,7 @@ public actor GemmaClientController {
         let sessionID: UUID
         let requestID: UUID
         let actionTask: Task<Void, Never>
-        let deadlineTask: Task<Void, Never>
+        var deadlineTask: Task<Void, Never>?
         let completion: GemmaOneShot<GemmaIPCResponseBody>
     }
 
@@ -255,6 +262,7 @@ public actor GemmaClientController {
     private let transportFactory: any GemmaClientTransportFactory
     private let exitProver: any GemmaAuthenticatedHelperExitProving
     private let deadline: any GemmaClientDeadline
+    private let activationDeadline: any GemmaClientDeadline
     private let maximumInFlightRequests: Int
 
     private var phase: Phase = .available
@@ -274,7 +282,8 @@ public actor GemmaClientController {
         maximumInFlightRequests: Int,
         transportFactory: any GemmaClientTransportFactory,
         exitProver: any GemmaAuthenticatedHelperExitProving,
-        deadline: any GemmaClientDeadline
+        deadline: any GemmaClientDeadline,
+        activationDeadline: (any GemmaClientDeadline)? = nil
     ) throws {
         guard (1 ... Self.hardMaximumInFlightRequests).contains(maximumInFlightRequests) else {
             throw GemmaClientControllerError.invalidInFlightLimit
@@ -284,6 +293,7 @@ public actor GemmaClientController {
         self.transportFactory = transportFactory
         self.exitProver = exitProver
         self.deadline = deadline
+        self.activationDeadline = activationDeadline ?? deadline
     }
 
     public func lifecycleState() -> GemmaClientControllerState {
@@ -373,7 +383,7 @@ public actor GemmaClientController {
         }
 
         let completion = GemmaOneShot<GemmaIPCResponseBody>()
-        let deadline = self.deadline
+        let activationDeadline = self.activationDeadline
         let requestID = request.requestID
         let actionTask = Task { [weak self, completion] in
             guard let self else {
@@ -382,11 +392,31 @@ public actor GemmaClientController {
             }
             let result: Result<GemmaIPCResponseBody, GemmaClientControllerError>
             do {
-                let activeTransport = try await self.transport(
-                    for: session,
-                    requestID: requestID
-                )
+                let activation = await GemmaDeadlineRace.run(
+                    operation: .sessionActivation,
+                    deadline: activationDeadline
+                ) {
+                    let transport = try await self.transport(
+                        for: session,
+                        requestID: requestID
+                    )
+                    try await transport.bindSession()
+                    return transport
+                }
+                guard !Task.isCancelled else {
+                    throw GemmaClientControllerError.requestCancelled
+                }
+                let activeTransport: any GemmaClientTransport
+                switch activation {
+                case .success(let transport):
+                    activeTransport = transport
+                case .failure(let error):
+                    throw Self.activationFailure(error)
+                }
                 try Task.checkCancellation()
+                guard await self.beginRequestDeadline(requestID: requestID) else {
+                    throw GemmaClientControllerError.modelSessionInactive
+                }
                 let encodedResponse = try await activeTransport.send(
                     encodedRequest,
                     requestID: request.requestID
@@ -401,16 +431,11 @@ public actor GemmaClientController {
             }
             await self.requestActionFinished(requestID: requestID, result: result)
         }
-        let deadlineTask = Task { [weak self] in
-            await deadline.waitUntilExpired(for: .request)
-            guard !Task.isCancelled else { return }
-            await self?.requestDeadlineExpired(requestID: requestID)
-        }
         inFlightRequests[request.requestID] = InFlightRequest(
             sessionID: session.identifier,
             requestID: request.requestID,
             actionTask: actionTask,
-            deadlineTask: deadlineTask,
+            deadlineTask: nil,
             completion: completion
         )
 
@@ -596,7 +621,7 @@ public actor GemmaClientController {
         result: Result<GemmaIPCResponseBody, GemmaClientControllerError>
     ) {
         guard let request = inFlightRequests.removeValue(forKey: requestID) else { return }
-        request.deadlineTask.cancel()
+        request.deadlineTask?.cancel()
 
         if case .failure(let error) = result,
            Self.isInfrastructureFailure(error),
@@ -607,6 +632,20 @@ public actor GemmaClientController {
             return
         }
         request.completion.resolve(result)
+    }
+
+    private func beginRequestDeadline(requestID: UUID) -> Bool {
+        guard var request = inFlightRequests[requestID],
+              request.deadlineTask == nil
+        else { return false }
+        let deadline = self.deadline
+        request.deadlineTask = Task { [weak self] in
+            await deadline.waitUntilExpired(for: .request)
+            guard !Task.isCancelled else { return }
+            await self?.requestDeadlineExpired(requestID: requestID)
+        }
+        inFlightRequests[requestID] = request
+        return true
     }
 
     private func requestDeadlineExpired(requestID: UUID) {
@@ -642,7 +681,7 @@ public actor GemmaClientController {
         current.completion.resolve(.failure(error))
         for request in outstandingRequests where request.requestID != current.requestID {
             request.actionTask.cancel()
-            request.deadlineTask.cancel()
+            request.deadlineTask?.cancel()
             request.completion.resolve(.failure(.faulted))
         }
     }
@@ -792,7 +831,7 @@ public actor GemmaClientController {
         for request in trackedRequests {
             request.completion.resolve(.failure(requestError))
             request.actionTask.cancel()
-            request.deadlineTask.cancel()
+            request.deadlineTask?.cancel()
         }
 
         let retiringTransport = transport
@@ -1019,10 +1058,27 @@ public actor GemmaClientController {
 
     private static func isInfrastructureFailure(_ error: GemmaClientControllerError) -> Bool {
         switch error {
+        case .timedOut(.sessionActivation), .operationFailed(.sessionActivation):
+            true
         case .timedOut(.request), .operationFailed(.request), .invalidResponse:
             true
         default:
             false
+        }
+    }
+
+    private static func activationFailure(
+        _ error: GemmaClientControllerError
+    ) -> GemmaClientControllerError {
+        switch error {
+        case .timedOut(.sessionActivation), .operationFailed(.sessionActivation),
+             .requestCancelled, .cancelledForRecording, .modelAdmissionBusy,
+             .modelSessionInactive:
+            error
+        case .connectionFailed, .invalidResponse, .faulted:
+            .operationFailed(.sessionActivation)
+        default:
+            error
         }
     }
 

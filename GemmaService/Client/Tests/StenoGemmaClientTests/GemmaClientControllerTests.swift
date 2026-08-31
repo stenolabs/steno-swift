@@ -227,6 +227,100 @@ struct GemmaClientControllerTests {
         #expect(factory.creationCount == 1)
     }
 
+    @Test("session activation has a distinct deadline before request execution begins")
+    func activationUsesDistinctDeadline() async throws {
+        let events = EventLog()
+        let bindGate = AsyncGate<Void>()
+        let requestDeadline = ManualDeadline()
+        let activationDeadline = ManualDeadline()
+        let controller = try makeController(
+            factory: TestTransportFactory(
+                transport: TestTransport(events: events, bindGate: bindGate),
+                events: events
+            ),
+            events: events,
+            deadline: requestDeadline,
+            activationDeadline: activationDeadline
+        )
+
+        let task = Task {
+            try await controller.send(try generationBody(prompt: "slow activation"))
+        }
+        await events.waitUntilPresent("bindSession")
+        await activationDeadline.waitUntilRegistered(.sessionActivation)
+        #expect(requestDeadline.waiterCount(for: .request) == 0)
+
+        activationDeadline.expire(.sessionActivation)
+        await #expect(throws: GemmaClientControllerError.timedOut(.sessionActivation)) {
+            try await task.value
+        }
+        #expect(await controller.lifecycleState() == .faulted)
+        #expect(events.count(of: "send:generate") == 0)
+        #expect(events.count(of: "invalidate") == 1)
+        bindGate.resolve(())
+    }
+
+    @Test("caller cancellation during activation retires without fault or relaunch")
+    func activationCancellationRemainsARequestCancellation() async throws {
+        let events = EventLog()
+        let bindGate = AsyncGate<Void>()
+        let firstTransport = TestTransport(events: events, bindGate: bindGate)
+        let secondTransport = TestTransport(events: events)
+        let factory = TestTransportFactory(
+            transports: [firstTransport, secondTransport],
+            events: events
+        )
+        let controller = try makeController(factory: factory, events: events)
+
+        let task = Task {
+            try await controller.send(try generationBody(prompt: "cancel activation"))
+        }
+        await events.waitUntilPresent("bindSession")
+        task.cancel()
+
+        await #expect(throws: GemmaClientControllerError.requestCancelled) {
+            try await task.value
+        }
+        #expect(events.count(of: "invalidate") == 1)
+        #expect(await controller.lifecycleState() == .idle)
+
+        _ = try await controller.send(try generationBody(prompt: "new explicit session"))
+        #expect(factory.creationCount == 2)
+        #expect(events.count(of: "send:generate") == 1)
+        #expect(events.count(of: "invalidate") == 2)
+        #expect(await controller.lifecycleState() == .idle)
+    }
+
+    @Test("the ordinary request deadline starts only after activation succeeds")
+    func requestDeadlineStartsAfterActivation() async throws {
+        let events = EventLog()
+        let applicationGate = AsyncGate<GemmaIPCResponseBody>()
+        let requestDeadline = ManualDeadline()
+        let activationDeadline = ManualDeadline()
+        let controller = try makeController(
+            factory: TestTransportFactory(
+                transport: TestTransport(events: events, applicationGate: applicationGate),
+                events: events
+            ),
+            events: events,
+            deadline: requestDeadline,
+            activationDeadline: activationDeadline
+        )
+
+        let task = Task {
+            try await controller.send(try generationBody(prompt: "request timeout"))
+        }
+        await events.waitUntilPresent("send:generate")
+        await requestDeadline.waitUntilRegistered(.request)
+        #expect(activationDeadline.waiterCount(for: .sessionActivation) == 0)
+
+        requestDeadline.expire(.request)
+        await #expect(throws: GemmaClientControllerError.timedOut(.request)) {
+            try await task.value
+        }
+        applicationGate.resolve(.generate(.init(text: "late")))
+    }
+
     @Test("process-gate contention is recoverable and does not start a helper")
     func gateBusyFactoryAdmissionIsRecoverable() async throws {
         let events = EventLog()
@@ -394,10 +488,11 @@ struct GemmaClientControllerTests {
         let modelTask = Task {
             try await controller.withModelSession(model: try modelPin()) { session in
                 _ = try await session.send(try generationBody(prompt: "connect"))
+                events.record("modelClosureHolding")
                 await hold.wait()
             }
         }
-        await events.waitUntilPresent("send:generate")
+        await events.waitUntilPresent("modelClosureHolding")
         let leaseTask = Task { try await controller.acquireRecordingLease(GemmaRecordingLease()) }
         await events.waitUntilPresent("waitForExit")
         await deadline.waitUntilRegistered(.authenticatedHelperExit)
@@ -499,13 +594,17 @@ struct GemmaClientControllerTests {
     private func makeController(
         factory: TestTransportFactory,
         events: EventLog,
-        exitProver: TestExitProver? = nil
+        exitProver: TestExitProver? = nil,
+        deadline: (any GemmaClientDeadline)? = nil,
+        activationDeadline: (any GemmaClientDeadline)? = nil
     ) throws -> GemmaClientController {
-        try GemmaClientController(
+        let requestDeadline = deadline ?? ManualDeadline()
+        return try GemmaClientController(
             maximumInFlightRequests: 2,
             transportFactory: factory,
             exitProver: exitProver ?? TestExitProver(events: events),
-            deadline: ManualDeadline()
+            deadline: requestDeadline,
+            activationDeadline: activationDeadline ?? requestDeadline
         )
     }
 }
@@ -675,6 +774,7 @@ private final class TestTransportPreparation:
 private final class TestTransport: GemmaClientTransport, @unchecked Sendable {
     private let events: EventLog
     private let helperInstanceID: UUID
+    private let bindGate: AsyncGate<Void>?
     private let applicationGate: AsyncGate<GemmaIPCResponseBody>?
     private let shutdownGate: AsyncGate<GemmaIPCResponseBody>?
     private let quiescenceGate: AsyncGate<Void>?
@@ -685,6 +785,7 @@ private final class TestTransport: GemmaClientTransport, @unchecked Sendable {
     init(
         events: EventLog,
         helperInstance: UUID = UUID(),
+        bindGate: AsyncGate<Void>? = nil,
         applicationGate: AsyncGate<GemmaIPCResponseBody>? = nil,
         shutdownGate: AsyncGate<GemmaIPCResponseBody>? = nil,
         quiescenceGate: AsyncGate<Void>? = nil,
@@ -694,12 +795,20 @@ private final class TestTransport: GemmaClientTransport, @unchecked Sendable {
     ) {
         self.events = events
         self.helperInstanceID = helperInstance
+        self.bindGate = bindGate
         self.applicationGate = applicationGate
         self.shutdownGate = shutdownGate
         self.quiescenceGate = quiescenceGate
         self.prepareGate = prepareGate
         self.armReturnsMismatch = armReturnsMismatch
         self.applicationShouldFail = applicationShouldFail
+    }
+
+    func bindSession() async throws {
+        events.record("bindSession")
+        if let bindGate {
+            await bindGate.wait()
+        }
     }
 
     func send(_ encodedRequest: Data, requestID: UUID) async throws -> Data {
@@ -784,6 +893,7 @@ private final class TestTransport: GemmaClientTransport, @unchecked Sendable {
 
     func invalidate() {
         events.record("invalidate")
+        bindGate?.resolve(())
         applicationGate?.resolve(.failure(GemmaIPCFailure(code: .cancelled)))
         shutdownGate?.resolve(
             .acknowledgement(

@@ -1,13 +1,13 @@
 # Steno for macOS - Architecture
 
-Status: 30 August 2026.
+Status: 31 August 2026.
 Labels in this document: **[Fact]** was verified against a local source, **[Assumption]** is plausible but unmeasured, and **[Recommendation]** is a decision made by this design.
 
 ## 1. Overall decision
 
 Steno is a native Swift app in a single repository, with a local SwiftPM package named `StenoKit`, clearly separated targets, and a thin macOS app target.
-The experimental `GemmaService` package is a separate macOS 27 build boundary and is not part of the application dependency graph.
-Its dependency-free strict-concurrency IPC module is used by the separate Xcode 27 project variant, which embeds a signed, sandboxed, model-free XPC helper with incoming and outgoing network access disabled.
+The experimental `GemmaService` package is a separate macOS 27 build boundary whose MLX runtime is linked only into the embedded helper, never into the application process or `StenoKit`.
+Its dependency-free strict-concurrency IPC module is used by the separate Xcode 27 project variant, which embeds a signed, sandboxed XPC helper with incoming and outgoing network access disabled and an intentionally empty production activation catalog.
 Its core is a **file-based, versioned library** with immutable originals, append-only processing runs, and explicit revisions, without a database dependency in the initial implementation.
 Transcription primarily uses Apple's `SpeechAnalyzer` and `SpeechTranscriber` APIs, verified in the macOS 26 SDK, including `audioTimeRange` for word timestamps and `volatileResults` for provisional live results.
 Diarization uses the existing Sortformer and WeSpeaker code from the sidecar as an internal Swift target, in process rather than as a subprocess.
@@ -45,8 +45,8 @@ The speaker-identity logic from `speaker_suggestions.py` is reshaped as a Swift 
 ## 2. Modules and dependencies
 
 The shipping application contains one local SwiftPM package, `StenoKit`, with several targets and one Xcode app target.
-The separate experimental `GemmaService` package remains outside that graph.
-The separate Xcode 27 project variant adds only the dependency-free IPC module and embeds the model-free XPC helper; it does not activate the MLX model runtime in the app.
+The separate experimental `GemmaService` package remains outside the supported Xcode 26 graph.
+The separate Xcode 27 application process adds only the MLX-free client and store boundaries, while its embedded XPC helper alone links the MLX runtime.
 [Recommendation] Use one package with multiple targets instead of many packages: target dependencies provide real boundaries without versioning and release overhead between artificial packages.
 
 ```text
@@ -296,9 +296,10 @@ The order follows the handoff with one correction: milestone 1 already needs min
    The helper performs descriptor-rooted verification at bind time, retains the root capability, and binds every model request to the exact session model pin.
    The consented local importer, app import facade, and content-addressed model store are implemented as an MLX-free boundary and documented in `docs/NATIVE-GEMMA-MODEL-STORE.md`; the production checkpoint catalog remains empty.
    The exact MLX dependency snapshot builds with Xcode 27 Beta 6 and its matching Metal Toolchain component without loading a model.
-   The model-free adapter seam now accepts a prebuilt `ModelContainer` with an immutable `ModelDescriptor`, while the existing production factory remains deferred, path-backed, and unwired to the helper.
+   The stored adapter seam accepts a prebuilt `ModelContainer` with an immutable `ModelDescriptor`, while the path-backed factory is isolated in a CLI-only prototype target that is not linked into the helper.
    A one-shot child-file activation boundary retains exact shard descriptors and immutable non-shard bytes, strictly parses every verified shard before the trusted callback, and rejects duplicate raw tensor names across shards.
-   MLX materialization from those parsed verified bytes remains unresolved.
+   The helper now materializes MLX only from those verified bytes for an exact helper-controlled activation profile, atomically binds the executor before acknowledgement, uses one processor for prompt counting and generation preparation, and creates a fresh Foundation Models session per generation.
+   The production activation catalog remains empty, so no installed checkpoint can currently create an executor and the app-facing provider remains unavailable.
    Whole-shard `Data` has caller-provided bounds, and checkpoint fit remains unknown until an exact reviewed checkpoint is selected.
-   A reviewed production checkpoint, user-facing import flow, explicit recovery for retained corrupt installs or crash-orphaned staging, production Hardened Runtime validation, and verified model-runtime activation remain unresolved.
+   A reviewed production checkpoint and resource profile, user-facing import and provider-selection flows, explicit recovery for retained corrupt installs or crash-orphaned staging, production Hardened Runtime validation, negative signed abuse coverage, and a measured real offline run remain unresolved.
 9. Whether a speaker-count field should ever exist. If it does, ask "how many people spoke?", not "how many people attended?".

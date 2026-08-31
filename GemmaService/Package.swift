@@ -8,6 +8,10 @@ let package = Package(
         .macOS(.v27),
     ],
     products: [
+        .library(
+            name: "StenoGemmaRuntime",
+            targets: ["StenoGemmaRuntime"]
+        ),
         .executable(
             name: "steno-gemma-service",
             targets: ["steno-gemma-service"]
@@ -49,6 +53,7 @@ let package = Package(
             dependencies: [
                 .product(name: "StenoGemmaIPC", package: "ipc"),
                 .product(name: "StenoGemmaModelStore", package: "ipc"),
+                .product(name: "StenoGemmaServiceCore", package: "ipc"),
                 "StenoMLXFoundationModels",
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXNN", package: "mlx-swift"),
@@ -62,10 +67,26 @@ let package = Package(
                 .enableExperimentalFeature("StrictConcurrency"),
             ]
         ),
+        .target(
+            name: "StenoGemmaPrototypeCLI",
+            dependencies: [
+                "StenoGemmaRuntime",
+                "StenoMLXFoundationModels",
+                .product(name: "StenoGemmaModelStore", package: "ipc"),
+                .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
+                .product(name: "MLXLLM", package: "mlx-swift-lm"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+                .product(name: "Tokenizers", package: "swift-transformers"),
+            ],
+            swiftSettings: [
+                .enableExperimentalFeature("StrictConcurrency"),
+            ]
+        ),
         .executableTarget(
             name: "steno-gemma-service",
             dependencies: [
                 "StenoGemmaRuntime",
+                "StenoGemmaPrototypeCLI",
                 .product(name: "StenoGemmaModelStore", package: "ipc"),
             ],
             swiftSettings: [
@@ -76,6 +97,7 @@ let package = Package(
             name: "StenoGemmaRuntimeTests",
             dependencies: [
                 "StenoGemmaRuntime",
+                "StenoGemmaPrototypeCLI",
                 .product(name: "StenoGemmaModelStore", package: "ipc"),
             ],
             swiftSettings: [

@@ -2,6 +2,7 @@ import CryptoKit
 import Darwin
 import Foundation
 import StenoGemmaModelStore
+import StenoGemmaPrototypeCLI
 import Testing
 @testable import StenoGemmaRuntime
 

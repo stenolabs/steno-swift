@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import StenoGemmaModelStore
+import StenoGemmaPrototypeCLI
 import StenoGemmaRuntime
 
 @main

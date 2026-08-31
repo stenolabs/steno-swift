@@ -3,13 +3,13 @@ import Dispatch
 import Foundation
 import Security
 import StenoGemmaIPC
-import StenoGemmaModelStore
+@_spi(StenoGemmaRuntime) import StenoGemmaModelStore
 import StenoGemmaProcessGate
+@_spi(StenoGemmaRuntime) import StenoGemmaRuntime
 import StenoGemmaServiceCore
 import XPC
 
-/// Raw XPC service shell. It has no model-loading, network, or audio capability.
-/// A verified descriptor-rooted model capability is retained only for the bound session.
+/// Raw XPC service shell. Approved model loading exists only in this sandboxed, networkless target.
 final class StenoGemmaXPCService: @unchecked Sendable {
     private enum AuthenticationState: Equatable {
         case unbound
@@ -36,7 +36,6 @@ final class StenoGemmaXPCService: @unchecked Sendable {
     private var helperExecutionLease: GemmaModelExecutionLease?
     private var executionGateMonitor: GemmaHelperExecutionGateMonitor?
     private var boundSession: GemmaIPCBindSessionRequest?
-    private var verifiedModelDirectory: VerifiedGemmaModelDirectory?
 
     init?(connection: xpc_connection_t) {
         guard let configuration = StenoGemmaXPCProcessConfiguration.current else { return nil }
@@ -226,14 +225,18 @@ final class StenoGemmaXPCService: @unchecked Sendable {
         requestID: UUID,
         reply: GemmaXPCReplyHandle
     ) {
+        let activationProfile = NativeGemmaActivationCatalog.production.profile(
+            for: binding.model
+        )
+        let authoritativePin = activationProfile?.pin ?? binding.model
         let requirements: GemmaModelRequirements
         do {
             requirements = try GemmaModelRequirements(
-                modelIdentifier: binding.model.modelIdentifier,
-                checkpointRevision: binding.model.checkpointRevision,
-                adapterRevision: binding.model.adapterRevision,
-                licenseIdentifier: binding.model.licenseIdentifier,
-                expectedManifestSHA256: binding.model.manifestSHA256
+                modelIdentifier: authoritativePin.modelIdentifier,
+                checkpointRevision: authoritativePin.checkpointRevision,
+                adapterRevision: authoritativePin.adapterRevision,
+                licenseIdentifier: authoritativePin.licenseIdentifier,
+                expectedManifestSHA256: authoritativePin.manifestSHA256
             )
         } catch {
             _ = Darwin.close(modelDirectoryFD)
@@ -253,6 +256,33 @@ final class StenoGemmaXPCService: @unchecked Sendable {
             terminateInvalidPeer()
         }
 
+        if let activationProfile {
+            let activationAssets: VerifiedGemmaModelActivationAssets
+            do {
+                activationAssets = try verified.consumeActivationAssets(
+                    limits: activationProfile.activationLimits
+                )
+            } catch {
+                terminateInvalidPeer()
+            }
+            let executor: GemmaBoundModelExecutor
+            do {
+                executor = try NativeGemmaExecutorFactory.makeBoundExecutor(
+                    consuming: activationAssets,
+                    profile: activationProfile
+                )
+            } catch {
+                terminateInvalidPeer()
+            }
+            guard StenoGemmaXPCProcessRuntime.bindModelExecutor(executor) else {
+                terminateInvalidPeer()
+            }
+        } else {
+            // An installed but not helper-approved pin remains model-free and does not retain a
+            // filesystem capability after its exact descriptor-rooted verification completes.
+            verified.close()
+        }
+
         do {
             if try GemmaProcessGate.helperObservesRecordingIntent(for: lease) {
                 terminateForRecordingIntent()
@@ -266,12 +296,10 @@ final class StenoGemmaXPCService: @unchecked Sendable {
             helperExecutionLease = lease
             executionGateMonitor = monitor
             boundSession = binding
-            verifiedModelDirectory = verified
             executionGateState = .bound
             return true
         }
         guard didBind else {
-            verified.close()
             terminateInvalidPeer()
         }
 
@@ -751,59 +779,32 @@ private enum StenoGemmaXPCProcessLifecycle {
 
 /// Model state is created lazily only after an authenticated peer has bound its execution gate.
 private enum StenoGemmaXPCProcessRuntime {
-    final class Runtime: @unchecked Sendable {
-        let registry: GemmaServiceRequestRegistry
-        let core: GemmaServiceCore
-
-        init(identity: GemmaIPCBoundHelperIdentity) {
-            registry = GemmaServiceRequestRegistry(
-                helperIdentity: GemmaIPCPreparedHelperExit(
-                    helperInstanceID: identity.helperInstanceID,
-                    processIdentifier: identity.processIdentifier
-                )
-            )
-            core = GemmaServiceCore(buildInfo: .current)
-        }
-    }
-
-    private final class Storage: @unchecked Sendable {
-        let lock = NSLock()
-        var runtime: Runtime?
-    }
-
     static let boundHelperIdentity = GemmaIPCBoundHelperIdentity(
         helperInstanceID: UUID(),
         processIdentifier: getpid()
     )
-    private static let storage = Storage()
+    private static let processRuntime = GemmaServiceProcessRuntime(
+        boundHelperIdentity: boundHelperIdentity
+    )
 
     static var registry: GemmaServiceRequestRegistry {
-        runtime().registry
+        processRuntime.registry
     }
 
     static var core: GemmaServiceCore {
-        runtime().core
+        processRuntime.core
+    }
+
+    static func bindModelExecutor(_ executor: GemmaBoundModelExecutor) -> Bool {
+        processRuntime.bindModelExecutor(executor)
     }
 
     static func closeAdmissionIfCreated() {
-        let runtime = storage.lock.withLock { storage.runtime }
-        _ = runtime?.registry.closeForShutdown()
+        processRuntime.closeAdmissionIfCreated()
     }
 
     static func markTerminatingAndReturnWasArmedIfCreated() -> Bool {
-        let runtime = storage.lock.withLock { storage.runtime }
-        return runtime?.registry.markTerminatingAndReturnWasArmed() ?? false
-    }
-
-    private static func runtime() -> Runtime {
-        storage.lock.withLock {
-            if let runtime = storage.runtime {
-                return runtime
-            }
-            let runtime = Runtime(identity: boundHelperIdentity)
-            storage.runtime = runtime
-            return runtime
-        }
+        processRuntime.markTerminatingAndReturnWasArmedIfCreated()
     }
 }
 

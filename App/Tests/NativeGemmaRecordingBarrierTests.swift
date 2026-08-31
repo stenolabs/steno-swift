@@ -489,6 +489,48 @@ struct NativeGemmaRecordingBarrierTests {
         modelLease.close()
     }
 
+    @Test("an activation fault does not relaunch until recording proves helper absence")
+    func activationFaultRequiresRecordingCycleBeforeRetry() async throws {
+        let fixture = try NativeGemmaRecordingFixture()
+        defer { fixture.cleanUp() }
+        let firstClient = NativeGemmaClientProbe(
+            sendError: GemmaClientControllerError.operationFailed(.sessionActivation)
+        )
+        let replacementClient = NativeGemmaClientProbe()
+        let initializer = NativeGemmaClientSequenceProbe(
+            clients: [firstClient, replacementClient]
+        )
+        let coordinator = NativeGemmaRecordingBarrierFactory.testing(
+            processGate: try fixture.processGate(),
+            controllerInitializer: {
+                try await initializer.initialize()
+            }
+        )
+        let request = GemmaIPCRequestBody.handshake(.init(model: try testModelPin()))
+        let expectedResponse = GemmaIPCResponseBody.handshake(
+            .init(
+                serviceIdentifier: GemmaIPCBuildInfo.serviceIdentifier,
+                adapterRevision: GemmaIPCBuildInfo.adapterRevision,
+                supportedOperations: [.handshake, .cancel, .shutdown]
+            )
+        )
+
+        await #expect(throws: GemmaClientControllerError.operationFailed(.sessionActivation)) {
+            _ = try await coordinator.send(request)
+        }
+        await #expect(throws: NativeGemmaCoordinatorError.unavailable) {
+            _ = try await coordinator.send(request)
+        }
+        #expect(await initializer.initializationCount() == 1)
+        #expect(await firstClient.sendCount() == 1)
+
+        try await coordinator.acquire()
+        try await coordinator.release()
+
+        #expect(try await coordinator.send(request) == expectedResponse)
+        #expect(await initializer.initializationCount() == 2)
+    }
+
     @Test("a release fault is discarded before the next model request")
     func releaseFaultCreatesFreshControllerBeforeNextModelRequest() async throws {
         let fixture = try NativeGemmaRecordingFixture()
@@ -818,16 +860,20 @@ private actor NativeGemmaClientInitializationProbe {
 private actor NativeGemmaClientProbe: NativeGemmaClientControlling {
     private let acquireError: (any Error)?
     private let releaseError: (any Error)?
+    private let sendError: (any Error)?
     private var activeLease: GemmaRecordingLease?
     private var acquisitions = 0
     private var releases = 0
+    private var sends = 0
 
     init(
         acquireError: (any Error)? = nil,
-        releaseError: (any Error)? = nil
+        releaseError: (any Error)? = nil,
+        sendError: (any Error)? = nil
     ) {
         self.acquireError = acquireError
         self.releaseError = releaseError
+        self.sendError = sendError
     }
 
     func acquireRecordingLease(
@@ -853,6 +899,10 @@ private actor NativeGemmaClientProbe: NativeGemmaClientControlling {
     }
 
     func send(_ body: GemmaIPCRequestBody) throws -> GemmaIPCResponseBody {
+        sends += 1
+        if let sendError {
+            throw sendError
+        }
         guard activeLease == nil else {
             throw NativeGemmaRecordingTestError.recordingActive
         }
@@ -874,6 +924,10 @@ private actor NativeGemmaClientProbe: NativeGemmaClientControlling {
 
     func releaseCount() -> Int {
         releases
+    }
+
+    func sendCount() -> Int {
+        sends
     }
 }
 
