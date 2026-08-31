@@ -16,7 +16,7 @@ struct StenoGemmaProcessGateProbe {
               )
         else {
             fputs(
-                "usage: steno-gemma-gate-probe <model|recording|adopt-model-stdin> <gate-directory>\n",
+                "usage: steno-gemma-gate-probe <model|mutation|recording|adopt-model-stdin> <gate-directory>\n",
                 stderr
             )
             exit(EXIT_FAILURE)
@@ -28,6 +28,12 @@ struct StenoGemmaProcessGateProbe {
             switch arguments[1] {
             case "model":
                 let lease = try gate.acquireModelExecution()
+                print("ready")
+                fflush(stdout)
+                _ = readLine()
+                lease.close()
+            case "mutation":
+                let lease = try gate.acquireStoreMutation()
                 print("ready")
                 fflush(stdout)
                 _ = readLine()

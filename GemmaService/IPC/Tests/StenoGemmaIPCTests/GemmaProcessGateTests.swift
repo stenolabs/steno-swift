@@ -41,6 +41,43 @@ struct GemmaProcessGateTests {
         }
     }
 
+    @Test("a store mutation excludes recording, model execution, and another mutation")
+    func storeMutationExcludesOtherGateUsers() async throws {
+        try await withGate { gate in
+            let clock = ContinuousClock()
+            let mutation = try gate.acquireStoreMutation()
+            #expect(throws: GemmaProcessGateError.busy) {
+                _ = try gate.acquireModelExecution()
+            }
+            #expect(throws: GemmaProcessGateError.busy) {
+                _ = try gate.acquireStoreMutation()
+            }
+            await #expect(throws: GemmaProcessGateError.timedOut) {
+                _ = try await gate.acquireRecordingLease(
+                    until: clock.now.advanced(by: .milliseconds(40))
+                )
+            }
+            mutation.close()
+        }
+    }
+
+    @Test("a store mutation observes a pending recording transition")
+    func storeMutationObservesRecordingIntent() async throws {
+        try await withGate { gate in
+            let clock = ContinuousClock()
+            let mutation = try gate.acquireStoreMutation()
+            let transition = try await gate.beginRecordingTransition(
+                until: clock.now.advanced(by: .seconds(1))
+            )
+            #expect(try mutation.recordingIntentIsPending())
+            transition.close()
+            mutation.close()
+            #expect(throws: GemmaProcessGateError.unsafeGateFile) {
+                _ = try mutation.recordingIntentIsPending()
+            }
+        }
+    }
+
     @Test("a duplicated helper descriptor retains the model lock after the sender closes")
     func helperDescriptorRetainsModelLock() async throws {
         try await withGate { gate in
@@ -226,6 +263,23 @@ struct GemmaProcessGateTests {
         }
     }
 
+    @Test("SIGKILL releases a store-mutation owner after waitpid")
+    func sigkillReleasesStoreMutationLease() async throws {
+        try await withGateDirectory { directory in
+            let owner = try launchProbe(mode: "mutation", directory: directory)
+            defer { owner.terminate() }
+            try await expectReady(owner)
+            #expect(Darwin.kill(owner.processIdentifier, SIGKILL) == 0)
+            owner.waitUntilExit()
+
+            let gate = GemmaProcessGate(configuration: try GemmaProcessGateConfiguration(
+                directoryURL: directory
+            ))
+            let model = try gate.acquireModelExecution()
+            model.close()
+        }
+    }
+
     @Test("two independent recording processes hold compatible shared execution locks")
     func independentRecordingProcessesAreCompatible() async throws {
         try await withGateDirectory { directory in
@@ -271,18 +325,26 @@ private func launchProbe(
     standardInput: Any = Pipe()
 ) throws -> Process {
     let process = Process()
-    let sourcePackageURL = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .appendingPathComponent("steno-gemma-gate-probe")
-    let swiftPMProbeURL = sourcePackageURL
+    let packageURL = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
         .deletingLastPathComponent()
         .deletingLastPathComponent()
-        .appendingPathComponent(".build/out/Products/Debug/steno-gemma-gate-probe")
+    let buildDirectory = packageURL.appendingPathComponent(".build/out", isDirectory: true)
+    let platformProbeURLs = (try? FileManager.default.contentsOfDirectory(
+        at: buildDirectory,
+        includingPropertiesForKeys: [.isDirectoryKey],
+        options: [.skipsHiddenFiles]
+    ))?.filter {
+        $0.lastPathComponent.hasSuffix("-apple-macosx")
+    }.map {
+        $0.appendingPathComponent("debug/steno-gemma-gate-probe")
+    } ?? []
+    let swiftPMProbeURL = buildDirectory
+        .appendingPathComponent("Products/Debug/steno-gemma-gate-probe")
     let bundleProbeURL = Bundle.main.bundleURL
         .deletingLastPathComponent()
         .appendingPathComponent("steno-gemma-gate-probe")
-    let probeURL = [swiftPMProbeURL, bundleProbeURL].first {
+    let probeURL = (platformProbeURLs + [bundleProbeURL, swiftPMProbeURL]).first {
         FileManager.default.isExecutableFile(atPath: $0.path)
     }
     guard let probeURL else {

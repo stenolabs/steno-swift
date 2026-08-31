@@ -2,6 +2,7 @@ import CryptoKit
 import Darwin
 import Dispatch
 import Foundation
+import StenoGemmaProcessGate
 import Testing
 @_spi(StenoApp) @testable import StenoGemmaModelStore
 
@@ -34,13 +35,102 @@ struct NativeGemmaModelImporterTests {
         _ = try await fixture.run(importer)
         let originalIdentity = try fixture.identity(of: fixture.targetURL)
         let originalListing = try fixture.storeListing()
+        let synchronizedExistingTarget = LockedValue(false)
+        let retryImporter = try fixture.importer { checkpoint in
+            if checkpoint == .existingSnapshotSynchronized {
+                synchronizedExistingTarget.withLock { $0 = true }
+            }
+        }
 
-        let second = try await fixture.run(importer)
+        let second = try await fixture.run(retryImporter)
 
         #expect(second.rootIdentity.deviceID == originalIdentity.deviceID)
         #expect(second.rootIdentity.fileID == originalIdentity.inode)
         #expect(try fixture.identity(of: fixture.targetURL) == originalIdentity)
         #expect(try fixture.storeListing() == originalListing)
+        #expect(synchronizedExistingTarget.withLock { $0 })
+    }
+
+    @Test("a recording lease makes a new import report unavailable store mutation")
+    func recordingLeaseMapsNewImportToStoreMutationUnavailable() async throws {
+        let fixture = try ImportFixture.make()
+        let gate = GemmaProcessGate(configuration: try GemmaProcessGateConfiguration(
+            directoryURL: fixture.storeRootURL
+        ))
+        let recording = try await gate.acquireRecordingLease(
+            until: ContinuousClock().now.advanced(by: .seconds(1))
+        )
+        defer { recording.close() }
+
+        await #expect(throws: NativeGemmaModelImportError.storeMutationUnavailable) {
+            _ = try await fixture.run(try fixture.importer())
+        }
+
+        #expect(!FileManager.default.fileExists(atPath: fixture.modelsURL.path))
+    }
+
+    @Test("an unsafe process gate is reported as an unsafe store")
+    func unsafeProcessGateIsNotReportedAsContention() async throws {
+        let fixture = try ImportFixture.make()
+        try FileManager.default.createSymbolicLink(
+            at: fixture.storeRootURL.appendingPathComponent("gate-v1.lock"),
+            withDestinationURL: fixture.baseURL.appendingPathComponent("missing-gate-target")
+        )
+
+        await #expect(throws: NativeGemmaModelImportError.unsafeStore) {
+            _ = try await fixture.run(try fixture.importer())
+        }
+
+        #expect(!FileManager.default.fileExists(atPath: fixture.modelsURL.path))
+    }
+
+    @Test("an active import excludes another store mutation and model execution")
+    func activeImportExcludesOtherExclusiveGateUsers() async throws {
+        let fixture = try ImportFixture.make(
+            weightsData: Data(repeating: 0x5a, count: 2 << 20)
+        )
+        let reachedFirstChunk = LockedValue(false)
+        let blockedOnce = LockedValue(false)
+        let releaseWorker = DispatchSemaphore(value: 0)
+        let importer = try fixture.importer { checkpoint in
+            guard case .copiedChunk = checkpoint else { return }
+            let shouldBlock = blockedOnce.withLock { blocked -> Bool in
+                if blocked { return false }
+                blocked = true
+                return true
+            }
+            guard shouldBlock else { return }
+            reachedFirstChunk.withLock { $0 = true }
+            releaseWorker.wait()
+        }
+        let run = Task {
+            try await fixture.run(importer)
+        }
+        let deadline = ContinuousClock().now.advanced(by: .seconds(5))
+        while !reachedFirstChunk.withLock({ $0 }), ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+        guard reachedFirstChunk.withLock({ $0 }) else {
+            releaseWorker.signal()
+            _ = await run.result
+            Issue.record("The import did not reach its first copied chunk")
+            return
+        }
+
+        let gate = GemmaProcessGate(configuration: try GemmaProcessGateConfiguration(
+            directoryURL: fixture.storeRootURL
+        ))
+        #expect(throws: GemmaProcessGateError.busy) {
+            _ = try gate.acquireStoreMutation()
+        }
+        #expect(throws: GemmaProcessGateError.busy) {
+            _ = try gate.acquireModelExecution()
+        }
+
+        releaseWorker.signal()
+        let verified = try await run.value
+        #expect(verified.manifestSHA256 == fixture.requirements.expectedManifestSHA256)
+        #expect(try fixture.stagingNames().isEmpty)
     }
 
     @Test("installed resolver returns a descriptor capability without changing the store")
@@ -224,8 +314,60 @@ struct NativeGemmaModelImporterTests {
         #expect(try fixture.stagingNames().isEmpty)
     }
 
-    @Test("cancellation after atomic publication returns the committed snapshot")
-    func cancellationAfterPublishReturnsCommittedSnapshot() async throws {
+    @Test("recording intent preempts an active import before publication")
+    func recordingIntentPreemptsImportBeforePublication() async throws {
+        let fixture = try ImportFixture.make(
+            weightsData: Data(repeating: 0x5a, count: 3 << 20)
+        )
+        let reachedFirstChunk = LockedValue(false)
+        let blockedOnce = LockedValue(false)
+        let releaseWorker = DispatchSemaphore(value: 0)
+        let importer = try fixture.importer { checkpoint in
+            guard case .copiedChunk = checkpoint else { return }
+            let shouldBlock = blockedOnce.withLock { blocked -> Bool in
+                if blocked { return false }
+                blocked = true
+                return true
+            }
+            guard shouldBlock else { return }
+            reachedFirstChunk.withLock { $0 = true }
+            releaseWorker.wait()
+        }
+        let run = Task {
+            try await fixture.run(importer)
+        }
+        let deadline = ContinuousClock().now.advanced(by: .seconds(5))
+        while !reachedFirstChunk.withLock({ $0 }), ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+        guard reachedFirstChunk.withLock({ $0 }) else {
+            releaseWorker.signal()
+            _ = await run.result
+            Issue.record("The import did not reach its first copied chunk")
+            return
+        }
+
+        let gate = GemmaProcessGate(configuration: try GemmaProcessGateConfiguration(
+            directoryURL: fixture.storeRootURL
+        ))
+        let transition = try await gate.beginRecordingTransition(until: deadline)
+        releaseWorker.signal()
+
+        switch await run.result {
+        case .success:
+            Issue.record("The import ignored recording intent from a separate gate owner")
+        case .failure(let error):
+            #expect(error as? NativeGemmaModelImportError == .preemptedByRecording)
+        }
+        #expect(!FileManager.default.fileExists(atPath: fixture.targetURL.path))
+        #expect(try fixture.stagingNames().isEmpty)
+
+        let recording = try await transition.acquireRecordingLease(until: deadline)
+        recording.close()
+    }
+
+    @Test("a committed import releases the gate and finishes after cancellation")
+    func committedImportReleasesGateAndFinishesAfterCancellation() async throws {
         let fixture = try ImportFixture.make(weightsData: Data(repeating: 0x5a, count: 2 << 20))
         let reachedCommit = LockedValue(false)
         let releaseWorker = DispatchSemaphore(value: 0)
@@ -243,6 +385,10 @@ struct NativeGemmaModelImporterTests {
         }
         #expect(reachedCommit.withLock { $0 })
 
+        let gate = GemmaProcessGate(configuration: try GemmaProcessGateConfiguration(
+            directoryURL: fixture.storeRootURL
+        ))
+        let recording = try await gate.acquireRecordingLease(until: deadline)
         run.cancel()
         releaseWorker.signal()
         let result = await run.result
@@ -253,6 +399,7 @@ struct NativeGemmaModelImporterTests {
         case .failure(let error):
             Issue.record("Committed import reported cancellation: \(error)")
         }
+        recording.close()
         #expect(FileManager.default.fileExists(atPath: fixture.targetURL.path))
         #expect(try fixture.stagingNames().isEmpty)
     }

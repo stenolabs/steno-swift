@@ -24,6 +24,9 @@ targets:
       - target: StenoGemmaXPC
         embed: true
         codeSign: true
+        # The XPC contains signed SwiftPM frameworks. Stripping their Modules
+        # after signing invalidates their sealed resources in the app copy.
+        removeHeaders: false
         link: false
       - package: GemmaClient
         product: StenoGemmaClient

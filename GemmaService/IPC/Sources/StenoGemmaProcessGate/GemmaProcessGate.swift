@@ -130,6 +130,38 @@ public final class GemmaModelExecutionLease: @unchecked Sendable {
     }
 }
 
+/// A store-mutation description holding byte 1 exclusively.
+///
+/// This deliberately has no descriptor-borrowing API, so a store-mutation lease cannot be
+/// transferred to or bound by the native Gemma helper. Its lock is released if its process
+/// crashes because the owned open file description is closed by the kernel.
+public final class GemmaStoreMutationLease: @unchecked Sendable {
+    private let state = GemmaProcessGateLeaseState()
+
+    fileprivate init(fileDescriptor: Int32) {
+        state.fileDescriptor = fileDescriptor
+    }
+
+    deinit {
+        close()
+    }
+
+    /// Releases this lease by closing its owned open file description.
+    public func close() {
+        state.close()
+    }
+
+    /// Returns true only when the kernel reports an exclusive recording-intent lock on byte 0.
+    public func recordingIntentIsPending() throws -> Bool {
+        guard let result = try state.withOpenDescriptor({ descriptor in
+            try GemmaProcessGate.observesRecordingIntent(on: descriptor)
+        }) else {
+            throw GemmaProcessGateError.unsafeGateFile
+        }
+        return result
+    }
+}
+
 /// A recording-lifetime description holding byte 1 shared.
 ///
 /// It is intentionally a different type from `GemmaModelExecutionLease`, so a recording
@@ -207,28 +239,14 @@ public struct GemmaProcessGate: Sendable {
 
     /// Acquires one complete model session: byte 0 shared while admitting, then byte 1 exclusive.
     public func acquireModelExecution() throws -> GemmaModelExecutionLease {
-        let descriptor = try openValidatedDescription()
-        do {
-            try Self.setLock(
-                fileDescriptor: descriptor,
-                type: Int16(F_RDLCK),
-                byte: Self.admissionByte
-            )
-            try Self.setLock(
-                fileDescriptor: descriptor,
-                type: Int16(F_WRLCK),
-                byte: Self.executionByte
-            )
-            try Self.setLock(
-                fileDescriptor: descriptor,
-                type: Int16(F_UNLCK),
-                byte: Self.admissionByte
-            )
-            return GemmaModelExecutionLease(fileDescriptor: descriptor)
-        } catch {
-            _ = Darwin.close(descriptor)
-            throw error
-        }
+        GemmaModelExecutionLease(fileDescriptor: try acquireExclusiveExecutionDescription())
+    }
+
+    /// Acquires one store mutation: byte 0 shared while admitting, then byte 1 exclusively.
+    ///
+    /// The returned lease intentionally cannot be used at the helper binding boundary.
+    public func acquireStoreMutation() throws -> GemmaStoreMutationLease {
+        GemmaStoreMutationLease(fileDescriptor: try acquireExclusiveExecutionDescription())
     }
 
     /// Starts a recording transition by acquiring byte 0 exclusively with bounded retry.
@@ -287,15 +305,36 @@ public struct GemmaProcessGate: Sendable {
         for lease: GemmaModelExecutionLease
     ) throws -> Bool {
         guard let result = try lease.withBorrowedFileDescriptor({ descriptor in
-            var lock = makeLock(type: Int16(F_RDLCK), byte: admissionByte)
-            guard Darwin.fcntl(descriptor, F_OFD_GETLK, &lock) != -1 else {
-                throw GemmaProcessGateError.infrastructureFailure
-            }
-            return lock.l_type == Int16(F_WRLCK)
+            try observesRecordingIntent(on: descriptor)
         }) else {
             throw GemmaProcessGateError.unsafeGateFile
         }
         return result
+    }
+
+    private func acquireExclusiveExecutionDescription() throws -> Int32 {
+        let descriptor = try openValidatedDescription()
+        do {
+            try Self.setLock(
+                fileDescriptor: descriptor,
+                type: Int16(F_RDLCK),
+                byte: Self.admissionByte
+            )
+            try Self.setLock(
+                fileDescriptor: descriptor,
+                type: Int16(F_WRLCK),
+                byte: Self.executionByte
+            )
+            try Self.setLock(
+                fileDescriptor: descriptor,
+                type: Int16(F_UNLCK),
+                byte: Self.admissionByte
+            )
+            return descriptor
+        } catch {
+            _ = Darwin.close(descriptor)
+            throw error
+        }
     }
 
     private func openValidatedDescription() throws -> Int32 {
@@ -422,6 +461,14 @@ public struct GemmaProcessGate: Sendable {
                 throw GemmaProcessGateError.infrastructureFailure
             }
         }
+    }
+
+    fileprivate static func observesRecordingIntent(on fileDescriptor: Int32) throws -> Bool {
+        var lock = makeLock(type: Int16(F_RDLCK), byte: admissionByte)
+        guard Darwin.fcntl(fileDescriptor, F_OFD_GETLK, &lock) != -1 else {
+            throw GemmaProcessGateError.infrastructureFailure
+        }
+        return lock.l_type == Int16(F_WRLCK)
     }
 
     private static func makeLock(type: Int16, byte: off_t) -> flock {

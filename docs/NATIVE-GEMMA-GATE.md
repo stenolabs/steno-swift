@@ -4,7 +4,7 @@ Status: implemented and covered by gate-only and signed XPC integration tests.
 
 The global crash-releasing gate is the implemented exclusion boundary.
 The signed XPC binding, session-scoped client lifecycle, and helper self-exit path are implemented.
-The native provider remains inactive until model import, MLX activation, and a real model run are complete.
+The native provider remains inactive until one exact reviewed production checkpoint, user-facing consent and selection, recovery behavior, and a bounded real-model run are accepted.
 
 This contract defines the macOS 27 exclusion boundary between audio capture and native Gemma work.
 It is intentionally independent of the model checkpoint, MLX, the meeting library, and the configured model directory.
@@ -13,7 +13,7 @@ It is intentionally independent of the model checkpoint, MLX, the meeting librar
 
 No gate-bound Gemma helper may accept or execute model work while any Steno process owns a recording lease.
 Several Steno processes may record concurrently.
-At most one native Gemma helper session may own model execution at a time.
+At most one exclusive byte 1 owner may exist at a time: either one native Gemma helper session or one model-store mutation.
 
 The operating-system lock is the source of truth.
 An app actor, an XPC reply, a process identifier, and a notification are not sufficient proof on their own.
@@ -47,13 +47,17 @@ Classic POSIX record locks, `flock`, and unrelated `FileHandle` access are forbi
 
 The same fresh open file description contains two one-byte ranges.
 
-| Byte | Purpose | Model session | Recording transition or lease |
-|---|---|---|---|
-| 0 | Admission turnstile | Shared while admitting, then unlocked | Exclusive while excluding new models and draining helpers, then unlocked |
-| 1 | Execution boundary | Exclusive for the complete bound-helper session | Shared for the complete recording lifetime |
+| Byte | Purpose | Model session | Store mutation | Recording transition or lease |
+|---|---|---|---|---|
+| 0 | Admission turnstile | Shared while admitting, then unlocked | Shared while admitting, then unlocked | Exclusive while excluding new exclusive users and draining current work, then unlocked |
+| 1 | Execution boundary | Exclusive for the complete bound-helper session | Exclusive through pre-commit cleanup or committed-parent synchronization | Shared for the complete recording lifetime |
 
 The inverted execution lock is deliberate.
 It permits multiple recordings while serializing memory-heavy native Gemma sessions across all Steno processes.
+
+A store mutation uses the same byte 1 execution boundary exclusively and shares byte 0 only during admission.
+The mutation lease is a distinct type without a descriptor-borrowing API, so it cannot be transferred to or bound by the native Gemma helper.
+The importer observes byte 0 through that lease at bounded checkpoints and treats an exclusive holder as recording intent.
 
 A fresh file description is required for every model session and every recording lease.
 Recording and model locks must never share one open file description because OFD operations on the same description convert its existing locks.
@@ -93,6 +97,28 @@ The session-scoped client retires automatically after the final high-level reque
 
 The XPC fileport or helper duplicate retains the same open file description if the app exits after sending the binding frame.
 The helper exits on peer disconnect, which releases its final reference and therefore the execution lock.
+
+## Store mutation admission
+
+Model import uses the same stable gate without transferring its lease to the helper:
+
+1. Verify and bind the complete approved source tree before opening the model store.
+2. Resolve one gate configuration as the source of truth for both the store root and gate file.
+3. Acquire byte 0 shared, acquire byte 1 exclusively, then unlock byte 0.
+4. Open or create `Models/v1` through retained no-follow descriptors and synchronize every hierarchy parent, including on an idempotent retry.
+5. Check byte 0 for recording intent at every bounded cancellation checkpoint during pre-publication work.
+6. On a pre-publication failure, remove only the exact staging tree owned by this import while the mutation lease remains held.
+7. Publish with the no-replace rename, synchronize the destination parent namespace, and close the mutation lease.
+8. Complete final inode-bound verification without honoring cancellation after publication.
+
+If recording intent is observed before publication, the import reports explicit recording preemption and finishes its owned cleanup before releasing byte 1.
+Intent arriving after the final pre-publication check may wait through the short rename-and-parent-sync critical section, but capture still cannot begin until byte 1 is released.
+The final full hash no longer holds the cross-process mutation lease after the committed namespace is durable.
+
+The app-process coordinator remains a separate stricter boundary.
+It cancels and drains the exact active import task, including final post-publication verification, before that same process requests recording permission or starts capture.
+Another Steno process relies on the kernel gate and may acquire its recording lease after committed-parent synchronization releases byte 1.
+Store mutation, model execution, and recording therefore cannot overlap globally even though the local task may continue read-only verification after the mutation lease closes.
 
 ## Recording acquisition
 
@@ -186,14 +212,19 @@ The gate suite proves:
 
 - one model lease excludes a recording lease until the model descriptor closes;
 - one recording lease rejects model admission;
+- one store-mutation lease excludes recording, model execution, and another mutation;
+- a store-mutation lease observes a pending recording transition and fails closed after close;
 - two independent recording processes hold compatible shared execution locks;
 - an exclusive turnstile blocks new model admission while an existing helper drains;
 - a helper observes recording intent and releases its lock by exiting;
 - `SIGKILL` of a recording owner releases its lease after `waitpid`;
+- `SIGKILL` of a store-mutation owner releases its lease after `waitpid`;
 - a descriptor transferred to another process keeps the model lock after the sender dies and releases it only after the receiver exits;
 - the deadline loop is bounded and cancellable;
 - concurrent creation converges on one inode; and
 - symlinks, wrong ownership, extra hard links, unsafe permissions, and non-regular files fail closed.
+
+The importer integration suite additionally proves that an active import excludes a second mutation and model execution, recording intent preempts and cleans an uncommitted staging tree, and a committed-parent synchronization releases byte 1 before final verification.
 
 The signed XPC integration suite additionally proves:
 

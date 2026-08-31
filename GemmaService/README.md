@@ -63,6 +63,13 @@ The production-intended loader instead consumes one-shot activation bytes and co
 That loader is wired into the helper only behind an exact helper-controlled activation profile.
 An unapproved pin is verified, closed without retaining a filesystem capability, and kept model-free.
 
+Store mutation and native Gemma execution share byte 1 of the same crash-releasing gate exclusively, while recording intent uses byte 0.
+The importer verifies the source before store access, acquires a mutation lease before touching `Models/v1`, observes recording intent at bounded checkpoints, removes its own staging tree before a namespace commit, and closes the lease before its final non-cancellable verification after no-replace publication.
+The store root and gate-file path come from the same gate configuration.
+Each store hierarchy parent is synchronized even on an idempotent retry, so a later authorized import can complete namespace durability after an earlier crash.
+The app-level coordinator still drains the exact active import task before it grants the recording lease.
+Explicit recovery for retained corrupt installs and crash-orphaned staging remains open.
+
 ## Model boundary
 
 The production-intended loader never accepts a Hub model identifier or filesystem URL as a loading source.
