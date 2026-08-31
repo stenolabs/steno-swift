@@ -130,4 +130,25 @@ extension LocaleResolverTests {
         #expect(first?.identifier == "de_DE")
         #expect(second?.identifier == "de_DE")
     }
+
+    @Test("Traditional Chinese resolves to zh_TW when available")
+    func traditionalChineseResolvesToTaiwan() {
+        let supported = [
+            Locale(identifier: "zh_CN"),
+            Locale(identifier: "zh_TW"),
+            Locale(identifier: "zh_HK"),
+        ]
+
+        let tw = LocaleResolver.select(
+            requested: Locale(identifier: "zh-Hant"),
+            supported: supported
+        )
+        #expect(tw?.identifier == "zh_TW")
+
+        let hk = LocaleResolver.select(
+            requested: Locale(identifier: "zh-HK"),
+            supported: supported
+        )
+        #expect(hk?.identifier == "zh_HK")
+    }
 }

@@ -5,8 +5,8 @@ import Testing
 
 @Suite("macOS localization catalogs")
 struct LocalizationCatalogTests {
-    @Test("catalogs use English as source and provide German translations")
-    func catalogsHaveCompleteGermanTranslations() throws {
+    @Test("catalogs use English as source and provide German and Traditional Chinese translations")
+    func catalogsHaveCompleteTranslations() throws {
         let localizable = try catalog(named: "Localizable")
         let infoPlist = try catalog(named: "InfoPlist")
 
@@ -16,19 +16,36 @@ struct LocalizationCatalogTests {
         #expect(infoPlist.version == "1.0")
         expectGermanTranslations(in: localizable)
         expectGermanTranslations(in: infoPlist)
+        expectTraditionalChineseTranslations(in: localizable)
+        expectTraditionalChineseTranslations(in: infoPlist)
+
+        let installed = try #require(
+            localizable.strings["demo.data.status.installed"],
+            "Missing demo.data.status.installed"
+        )
+        #expect(
+            installed.localizations["en"]?.stringUnit?.value
+                == "All three demo meetings are installed."
+        )
+        #expect(
+            installed.localizations["zh-Hant"]?.stringUnit?.value
+                == "三個示範會議皆已安裝。"
+        )
     }
 
     @Test("InfoPlist catalog contains macOS privacy usage descriptions")
     func infoPlistContainsPlatformPrivacyKeys() throws {
         let catalog = try catalog(named: "InfoPlist")
-        let expected: [String: (english: String, german: String)] = [
+        let expected: [String: (english: String, german: String, traditionalChinese: String)] = [
             "NSMicrophoneUsageDescription": (
                 "Steno records your microphone so it can transcribe conversations locally on this Mac.",
-                "Steno verwendet dein Mikrofon, um Gespräche lokal auf diesem Mac zu transkribieren."
+                "Steno verwendet dein Mikrofon, um Gespräche lokal auf diesem Mac zu transkribieren.",
+                "Steno 使用您的麥克風在 Mac 本機轉錄對話。"
             ),
             "NSAudioCaptureUsageDescription": (
                 "Steno records system audio so it can transcribe the people you talk to in calls, locally on this Mac.",
-                "Steno zeichnet Systemaudio auf, um die Personen in deinen Gesprächen lokal auf diesem Mac zu transkribieren."
+                "Steno zeichnet Systemaudio auf, um die Personen in deinen Gesprächen lokal auf diesem Mac zu transkribieren.",
+                "Steno 錄製系統音訊以在 Mac 本機轉錄通話中的與會者發言。"
             ),
         ]
 
@@ -36,6 +53,7 @@ struct LocalizationCatalogTests {
             let entry = try #require(catalog.strings[key], "Missing InfoPlist key: \(key)")
             #expect(entry.localizations["en"]?.stringUnit?.value == values.english)
             #expect(entry.localizations["de"]?.stringUnit?.value == values.german)
+            #expect(entry.localizations["zh-Hant"]?.stringUnit?.value == values.traditionalChinese)
         }
     }
 
@@ -85,8 +103,30 @@ struct LocalizationCatalogTests {
             localized(DemoDataPresentation.installAction, locale: german)
                 == "Demo-Meetings installieren"
         )
-    }
 
+        let traditionalChinese = Locale(identifier: "zh-Hant")
+        #expect(
+            localized(
+                MacStartupFailure.runtimeOpening("磁碟錯誤").title,
+                locale: traditionalChinese
+            ) == "無法開啟資料庫"
+        )
+        #expect(
+            localized(
+                DemoDataPresentation.installAction,
+                locale: traditionalChinese
+            ) == "安裝示範會議"
+        )
+        #expect(
+            localized(
+                LocalizedStringResource(
+                    "demo.data.status.installed",
+                    defaultValue: "All three demo meetings are installed."
+                ),
+                locale: traditionalChinese
+            ) == "三個示範會議皆已安裝。"
+        )
+    }
     private func expectGermanTranslations(in catalog: StringCatalog) {
         for (key, entry) in catalog.strings where entry.shouldTranslate != false {
             let german = entry.localizations["de"]?.stringUnit
@@ -101,6 +141,19 @@ struct LocalizationCatalogTests {
         }
     }
 
+    private func expectTraditionalChineseTranslations(in catalog: StringCatalog) {
+        for (key, entry) in catalog.strings where entry.shouldTranslate != false {
+            let zhHant = entry.localizations["zh-Hant"]?.stringUnit
+            #expect(
+                zhHant?.state == "translated",
+                "Missing translated Traditional Chinese value for \(key)"
+            )
+            #expect(
+                !(zhHant?.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true),
+                "Traditional Chinese value is empty for \(key)"
+            )
+        }
+    }
     private func catalog(named name: String) throws -> StringCatalog {
         let resources = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

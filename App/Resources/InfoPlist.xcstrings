@@ -1,96 +1,132 @@
 {
-  "sourceLanguage":  "en",
-  "strings":  {
-    "CFBundleDisplayName":  {
-      "comment":  "Bundle display name",
-      "extractionState":  "extracted_with_value",
-      "localizations":  {
-        "en":  {
-          "stringUnit":  {
-            "state":  "new",
-            "value":  "steno-macos"
+  "sourceLanguage": "en",
+  "strings": {
+    "CFBundleDisplayName": {
+      "comment": "Bundle display name",
+      "extractionState": "extracted_with_value",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steno"
           }
         },
-        "de":  {
-          "stringUnit":  {
-            "state":  "translated",
-            "value":  "Steno"
-          }
-        }
-      }
-    },
-    "CFBundleName":  {
-      "comment":  "Bundle name",
-      "extractionState":  "extracted_with_value",
-      "localizations":  {
-        "en":  {
-          "stringUnit":  {
-            "state":  "new",
-            "value":  "steno-macos"
+        "en": {
+          "stringUnit": {
+            "state": "new",
+            "value": "steno-macos"
           }
         },
-        "de":  {
-          "stringUnit":  {
-            "state":  "translated",
-            "value":  "Steno"
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steno"
           }
         }
       }
     },
-    "NSAudioCaptureUsageDescription":  {
-      "extractionState":  "manual",
-      "localizations":  {
-        "de":  {
-          "stringUnit":  {
-            "state":  "translated",
-            "value":  "Steno zeichnet Systemaudio auf, um die Personen in deinen Gesprächen lokal auf diesem Mac zu transkribieren."
+    "CFBundleName": {
+      "comment": "Bundle name",
+      "extractionState": "extracted_with_value",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steno"
           }
         },
-        "en":  {
-          "stringUnit":  {
-            "state":  "translated",
-            "value":  "Steno records system audio so it can transcribe the people you talk to in calls, locally on this Mac."
-          }
-        }
-      }
-    },
-    "NSMicrophoneUsageDescription":  {
-      "extractionState":  "manual",
-      "localizations":  {
-        "de":  {
-          "stringUnit":  {
-            "state":  "translated",
-            "value":  "Steno verwendet dein Mikrofon, um Gespräche lokal auf diesem Mac zu transkribieren."
+        "en": {
+          "stringUnit": {
+            "state": "new",
+            "value": "steno-macos"
           }
         },
-        "en":  {
-          "stringUnit":  {
-            "state":  "translated",
-            "value":  "Steno records your microphone so it can transcribe conversations locally on this Mac."
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steno"
           }
         }
       }
     },
-    "Steno Meeting":  {
-      "localizations":  {
-        "de":  {
-          "stringUnit":  {
-            "state":  "translated",
-            "value":  "Steno-Meeting"
+    "NSAudioCaptureUsageDescription": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steno zeichnet Systemaudio auf, um die Personen in deinen Gesprächen lokal auf diesem Mac zu transkribieren."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steno records system audio so it can transcribe the people you talk to in calls, locally on this Mac."
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steno 錄製系統音訊以在 Mac 本機轉錄通話中的與會者發言。"
           }
         }
       }
     },
-    "Steno Sidebar Item":  {
-      "localizations":  {
-        "de":  {
-          "stringUnit":  {
-            "state":  "translated",
-            "value":  "Steno-Seitenleistenelement"
+    "NSMicrophoneUsageDescription": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steno verwendet dein Mikrofon, um Gespräche lokal auf diesem Mac zu transkribieren."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steno records your microphone so it can transcribe conversations locally on this Mac."
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steno 使用您的麥克風在 Mac 本機轉錄對話。"
+          }
+        }
+      }
+    },
+    "Steno Meeting": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steno-Meeting"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steno 會議"
+          }
+        }
+      }
+    },
+    "Steno Sidebar Item": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steno-Seitenleistenelement"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steno 側邊欄項目"
           }
         }
       }
     }
   },
-  "version":  "1.0"
+  "version": "1.0"
 }
