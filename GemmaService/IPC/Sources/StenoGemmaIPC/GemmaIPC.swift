@@ -917,6 +917,13 @@ public enum GemmaXPCControlCodec {
 
 /// Foundation's JSON decoders keep one value when an object repeats a key.
 /// IPC treats duplicate keys as malformed because their meaning is ambiguous.
+@_spi(StenoGemmaRuntime)
+public enum GemmaStrictJSONValidation {
+    public static func validateNoDuplicateObjectKeys(_ data: Data) throws {
+        try GemmaJSONDuplicateKeyValidator.validate(data)
+    }
+}
+
 private struct GemmaJSONDuplicateKeyValidator {
     private static let maximumNestingDepth = 64
 

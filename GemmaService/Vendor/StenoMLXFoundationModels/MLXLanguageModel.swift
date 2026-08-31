@@ -678,6 +678,37 @@ public struct MLXLanguageModel: FoundationModels.LanguageModel, Sendable {
             derivedCache: DerivedArtifactCache())
     }
 
+    /// Creates a stored adapter and its container from one already-correlated context.
+    ///
+    /// This synchronous form is the activation-boundary initializer. It lets a trusted loader
+    /// finish model construction while verified bytes are still borrowed, without publishing an
+    /// intermediate container or suspending across the one-shot verification callback.
+    package init(
+        configuration: ModelConfiguration,
+        capabilities: [LanguageModelCapabilities.Capability] = [.guidedGeneration],
+        configurationResolver: any ModelConfigurationResolver =
+            DefaultConfigurationResolver(),
+        context: consuming ModelContext,
+        descriptorModelType: String,
+        descriptorConfigData: Data?
+    ) throws {
+        guard context.configuration == configuration else {
+            throw StoredContainerInitializationError.containerConfigurationMismatch
+        }
+        let descriptor = ModelDescriptor(
+            modelType: descriptorModelType,
+            modelId: configuration.name,
+            configData: descriptorConfigData,
+            tokenizer: context.tokenizer)
+        self.configuration = configuration
+        self.capabilities = LanguageModelCapabilities(capabilities)
+        self.configurationResolver = configurationResolver
+        self.source = .stored(
+            container: ModelContainer(context: context),
+            descriptor: descriptor,
+            derivedCache: DerivedArtifactCache())
+    }
+
     /// Downloads the model and loads its weights into memory.
     ///
     /// This is a weights-only load: it runs no forward pass, compiles no Metal

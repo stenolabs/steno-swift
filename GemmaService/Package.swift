@@ -50,10 +50,12 @@ let package = Package(
                 .product(name: "StenoGemmaIPC", package: "ipc"),
                 .product(name: "StenoGemmaModelStore", package: "ipc"),
                 "StenoMLXFoundationModels",
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
                 .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
-                .product(name: "MLXVLM", package: "mlx-swift-lm"),
+                .product(name: "Hub", package: "swift-transformers"),
                 .product(name: "Tokenizers", package: "swift-transformers"),
             ],
             swiftSettings: [

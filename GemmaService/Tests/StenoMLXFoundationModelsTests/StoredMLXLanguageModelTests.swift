@@ -156,6 +156,47 @@ struct StoredMLXLanguageModelTests {
         }
     }
 
+    @Test("activation initializer synchronously consumes one correlated context")
+    func activationInitializerConsumesCorrelatedContext() async throws {
+        let configuration = ModelConfiguration(id: "test/activation-context")
+        let counter = InvocationCounter()
+        let context = ModelContext(
+            configuration: configuration,
+            model: StoredTestModel(counter: counter),
+            processor: CountingProcessor(counter: counter),
+            tokenizer: StoredTokenizer()
+        )
+
+        let model = try MLXLanguageModel(
+            configuration: configuration,
+            context: context,
+            descriptorModelType: "gemma4",
+            descriptorConfigData: Data("verified-config".utf8)
+        )
+        let container = try await model.loadContainer()
+        #expect(await container.configuration == configuration)
+        #expect(model.storedDescriptor?.modelType == "gemma4")
+        #expect(model.storedDescriptor?.configData == Data("verified-config".utf8))
+        #expect(model.weightsLocation == nil)
+
+        let mismatchedContext = ModelContext(
+            configuration: configuration,
+            model: StoredTestModel(counter: counter),
+            processor: CountingProcessor(counter: counter),
+            tokenizer: StoredTokenizer()
+        )
+        #expect(throws: MLXLanguageModel.StoredContainerInitializationError
+            .containerConfigurationMismatch)
+        {
+            _ = try MLXLanguageModel(
+                configuration: ModelConfiguration(id: "test/different-activation-context"),
+                context: mismatchedContext,
+                descriptorModelType: "gemma4",
+                descriptorConfigData: nil
+            )
+        }
+    }
+
     @Test("generation routing and framed protocol gates follow the active path")
     func generationRouteAndFramedProtocolGate() throws {
         #expect(MLXLanguageModel.generationRoute(
