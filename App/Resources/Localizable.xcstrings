@@ -2558,7 +2558,7 @@
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "已安裝 %1$lld 個示範會議。"
+            "value": "三個示範會議皆已安裝。"
           }
         }
       }

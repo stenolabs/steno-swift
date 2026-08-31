@@ -18,6 +18,19 @@ struct LocalizationCatalogTests {
         expectGermanTranslations(in: infoPlist)
         expectTraditionalChineseTranslations(in: localizable)
         expectTraditionalChineseTranslations(in: infoPlist)
+
+        let installed = try #require(
+            localizable.strings["demo.data.status.installed"],
+            "Missing demo.data.status.installed"
+        )
+        #expect(
+            installed.localizations["en"]?.stringUnit?.value
+                == "All three demo meetings are installed."
+        )
+        #expect(
+            installed.localizations["zh-Hant"]?.stringUnit?.value
+                == "三個示範會議皆已安裝。"
+        )
     }
 
     @Test("InfoPlist catalog contains macOS privacy usage descriptions")
@@ -103,6 +116,15 @@ struct LocalizationCatalogTests {
                 DemoDataPresentation.installAction,
                 locale: traditionalChinese
             ) == "安裝示範會議"
+        )
+        #expect(
+            localized(
+                LocalizedStringResource(
+                    "demo.data.status.installed",
+                    defaultValue: "All three demo meetings are installed."
+                ),
+                locale: traditionalChinese
+            ) == "三個示範會議皆已安裝。"
         )
     }
     private func expectGermanTranslations(in catalog: StringCatalog) {
