@@ -1,4 +1,8 @@
 import Foundation
+#if STENO_NATIVE_GEMMA_MODEL_STORE
+import StenoDomain
+import StenoPipeline
+#endif
 import StenoLibrary
 import StenoMacAudio
 import StenoGemmaProcessGate
@@ -145,6 +149,218 @@ struct NativeGemmaRecordingBarrierTests {
         try await coordinator.acquire()
         try await coordinator.release()
     }
+
+    #if STENO_NATIVE_GEMMA_MODEL_STORE
+    @Test("recording waits for exact import quiescence before requesting permission")
+    func recordingWaitsForExactImportQuiescence() async throws {
+        let fixture = try NativeGemmaRecordingFixture()
+        let events = NativeGemmaRecordingEventLog()
+        let coordinator = NativeGemmaRecordingBarrierFactory.testing(
+            processGate: try fixture.processGate(),
+            recordingGateTimeout: .seconds(10)
+        )
+        let importProbe = NativeGemmaImportDrainProbe(events: events)
+        let snapshot = nativeGemmaTestSnapshot()
+        var model: AppModel? = AppModel(
+            recordingPermissionClient: permissionClient(
+                status: .denied,
+                events: events
+            ),
+            nativeGemmaRecordingBarrier: coordinator,
+            libraryURL: fixture.libraryURL
+        )
+        await model?.bootstrap()
+
+        let importTask = Task {
+            try await coordinator.performModelImport {
+                try await importProbe.run(outcome: .success(snapshot))
+            }
+        }
+        await importProbe.waitUntilStarted()
+
+        let app = model
+        let recordingTask = Task {
+            await app?.startRecording()
+        }
+        await importProbe.waitUntilCancellationWasObserved()
+
+        #expect(await events.snapshot() == [
+            "import.started",
+            "import.cancelled",
+        ])
+        await #expect(throws: NativeGemmaCoordinatorError.unavailable) {
+            _ = try await coordinator.performModelImport { snapshot }
+        }
+
+        await importProbe.finish()
+        await recordingTask.value
+        #expect(try await importTask.value == snapshot)
+        #expect(await events.snapshot() == [
+            "import.started",
+            "import.cancelled",
+            "import.finished",
+            "permission.requestMicrophone",
+        ])
+        #expect(model?.isRecording == false)
+
+        let retry = try await coordinator.performModelImport { snapshot }
+        #expect(retry == snapshot)
+        await model?.runtime?.coordinator.stop()
+        await model?.stopBackgroundLibraryTasksForTesting()
+        model = nil
+        fixture.cleanUp()
+    }
+
+    @Test("a held recording lease rejects imports until release")
+    func heldRecordingLeaseRejectsImports() async throws {
+        let fixture = try NativeGemmaRecordingFixture()
+        defer { fixture.cleanUp() }
+        #if canImport(StenoGemmaClient)
+        let coordinator = NativeGemmaRecordingBarrierFactory.testing(
+            processGate: try fixture.processGate(),
+            controllerInitializer: { NativeGemmaClientProbe() }
+        )
+        #else
+        let coordinator = NativeGemmaRecordingBarrierFactory.testing(
+            processGate: try fixture.processGate()
+        )
+        #endif
+        let snapshot = nativeGemmaTestSnapshot()
+
+        try await coordinator.acquire()
+        await #expect(throws: NativeGemmaCoordinatorError.unavailable) {
+            _ = try await coordinator.performModelImport { snapshot }
+        }
+        try await coordinator.release()
+
+        #expect(try await coordinator.performModelImport { snapshot } == snapshot)
+    }
+
+    @Test("an import failure after cancellation cannot block recording")
+    func importFailureAfterCancellationCannotBlockRecording() async throws {
+        let fixture = try NativeGemmaRecordingFixture()
+        let events = NativeGemmaRecordingEventLog()
+        let coordinator = NativeGemmaRecordingBarrierFactory.testing(
+            processGate: try fixture.processGate(),
+            recordingGateTimeout: .seconds(10)
+        )
+        let importProbe = NativeGemmaImportDrainProbe(events: events)
+        var model: AppModel? = AppModel(
+            recordingPermissionClient: permissionClient(
+                status: .denied,
+                events: events
+            ),
+            nativeGemmaRecordingBarrier: coordinator,
+            libraryURL: fixture.libraryURL
+        )
+        await model?.bootstrap()
+
+        let importTask = Task {
+            try await coordinator.performModelImport {
+                try await importProbe.run(outcome: .failure)
+            }
+        }
+        await importProbe.waitUntilStarted()
+
+        let app = model
+        let recordingTask = Task {
+            await app?.startRecording()
+        }
+        await importProbe.waitUntilCancellationWasObserved()
+        await importProbe.finish()
+        await recordingTask.value
+
+        await #expect(throws: NativeGemmaRecordingTestError.expectedFailure) {
+            _ = try await importTask.value
+        }
+        #expect(await events.snapshot() == [
+            "import.started",
+            "import.cancelled",
+            "import.failed",
+            "permission.requestMicrophone",
+        ])
+        #expect(model?.isRecording == false)
+
+        let snapshot = nativeGemmaTestSnapshot()
+        #expect(try await coordinator.performModelImport { snapshot } == snapshot)
+        await model?.runtime?.coordinator.stop()
+        await model?.stopBackgroundLibraryTasksForTesting()
+        model = nil
+        fixture.cleanUp()
+    }
+
+    @Test("cancelling recording admission still drains the exact import")
+    func cancelledRecordingAdmissionStillDrainsExactImport() async throws {
+        let fixture = try NativeGemmaRecordingFixture()
+        defer { fixture.cleanUp() }
+        let events = NativeGemmaRecordingEventLog()
+        let coordinator = NativeGemmaRecordingBarrierFactory.testing(
+            processGate: try fixture.processGate(),
+            recordingGateTimeout: .seconds(10)
+        )
+        let importProbe = NativeGemmaImportDrainProbe(events: events)
+        let snapshot = nativeGemmaTestSnapshot()
+        let importTask = Task {
+            try await coordinator.performModelImport {
+                try await importProbe.run(outcome: .success(snapshot))
+            }
+        }
+        await importProbe.waitUntilStarted()
+
+        let recordingAdmission = Task {
+            try await coordinator.acquire()
+        }
+        await importProbe.waitUntilCancellationWasObserved()
+        recordingAdmission.cancel()
+
+        await #expect(throws: NativeGemmaCoordinatorError.unavailable) {
+            _ = try await coordinator.performModelImport { snapshot }
+        }
+        await importProbe.finish()
+        await #expect(throws: (any Error).self) {
+            try await recordingAdmission.value
+        }
+        #expect(try await importTask.value == snapshot)
+
+        try await coordinator.acquire()
+        try await coordinator.release()
+        #expect(try await coordinator.performModelImport { snapshot } == snapshot)
+    }
+
+    @Test("the app import facade releases admission when consent is missing")
+    func appImportFacadeReleasesAdmissionWhenConsentIsMissing() async throws {
+        let fixture = try NativeGemmaRecordingFixture()
+        defer { fixture.cleanUp() }
+        let coordinator = NativeGemmaRecordingBarrierFactory.testing(
+            processGate: try fixture.processGate()
+        )
+        let importer = NativeGemmaModelImportProbe()
+        let facade = NativeGemmaModelImportFacade(
+            installationCoordinator: ModelInstallationCoordinator(installers: []),
+            safetyCoordinator: coordinator,
+            importer: importer
+        )
+        let pin = try ApprovedNativeGemmaModelPin(
+            modelIdentifier: "google/gemma-4-test",
+            checkpointRevision: String(repeating: "a", count: 40),
+            adapterRevision: String(repeating: "b", count: 40),
+            licenseIdentifier: "Gemma-Terms",
+            manifestSHA256: String(repeating: "c", count: 64)
+        )
+
+        await #expect(throws: ModelInstallationError.consentMissing) {
+            _ = try await facade.importModel(
+                pin: pin,
+                sourceRoot: fixture.root,
+                consentGranted: false
+            )
+        }
+        #expect(await importer.invocationCount() == 0)
+
+        try await coordinator.acquire()
+        try await coordinator.release()
+    }
+    #endif
 
     #if canImport(StenoGemmaClient)
     @Test("the live factory returns one process-wide coordinator")
@@ -341,6 +557,18 @@ struct NativeGemmaRecordingBarrierTests {
     }
 }
 
+#if STENO_NATIVE_GEMMA_MODEL_STORE
+private func nativeGemmaTestSnapshot() -> NativeGemmaModelSnapshot {
+    NativeGemmaModelSnapshot(
+        modelIdentifier: "google/gemma-4-test",
+        checkpointRevision: String(repeating: "a", count: 40),
+        adapterRevision: String(repeating: "b", count: 40),
+        licenseIdentifier: "Gemma-Terms",
+        manifestSHA256: String(repeating: "c", count: 64)
+    )
+}
+#endif
+
 private struct NativeGemmaRecordingFixture {
     let root: URL
     let libraryURL: URL
@@ -398,6 +626,14 @@ private actor NativeGemmaRecordingBarrierProbe: NativeGemmaCoordinator {
     func release() async throws {
         await events.record("barrier.release")
     }
+
+    #if STENO_NATIVE_GEMMA_MODEL_STORE
+    func performModelImport(
+        _ operation: @escaping @Sendable () async throws -> NativeGemmaModelSnapshot
+    ) async throws -> NativeGemmaModelSnapshot {
+        try await operation()
+    }
+    #endif
 }
 
 private actor NativeGemmaRecordingEventLog {
@@ -411,6 +647,110 @@ private actor NativeGemmaRecordingEventLog {
         events
     }
 }
+
+#if STENO_NATIVE_GEMMA_MODEL_STORE
+private actor NativeGemmaImportDrainProbe {
+    enum Outcome: Sendable {
+        case success(NativeGemmaModelSnapshot)
+        case failure
+    }
+
+    private let events: NativeGemmaRecordingEventLog
+    private var didStart = false
+    private var didObserveCancellation = false
+    private var mayFinish = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var cancellationWaiters: [CheckedContinuation<Void, Never>] = []
+    private var finishWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init(events: NativeGemmaRecordingEventLog) {
+        self.events = events
+    }
+
+    func run(outcome: Outcome) async throws -> NativeGemmaModelSnapshot {
+        await events.record("import.started")
+        didStart = true
+        let pendingStartWaiters = startWaiters
+        startWaiters.removeAll()
+        for waiter in pendingStartWaiters {
+            waiter.resume()
+        }
+
+        return try await withTaskCancellationHandler {
+            if !mayFinish {
+                await withCheckedContinuation { continuation in
+                    if mayFinish {
+                        continuation.resume()
+                    } else {
+                        finishWaiters.append(continuation)
+                    }
+                }
+            }
+            switch outcome {
+            case .success(let snapshot):
+                await events.record("import.finished")
+                return snapshot
+            case .failure:
+                await events.record("import.failed")
+                throw NativeGemmaRecordingTestError.expectedFailure
+            }
+        } onCancel: {
+            Task { await self.observeCancellation() }
+        }
+    }
+
+    func waitUntilStarted() async {
+        if didStart { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func waitUntilCancellationWasObserved() async {
+        if didObserveCancellation { return }
+        await withCheckedContinuation { continuation in
+            cancellationWaiters.append(continuation)
+        }
+    }
+
+    func finish() {
+        mayFinish = true
+        let waiters = finishWaiters
+        finishWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    private func observeCancellation() async {
+        guard !didObserveCancellation else { return }
+        await events.record("import.cancelled")
+        didObserveCancellation = true
+        let waiters = cancellationWaiters
+        cancellationWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+}
+
+private actor NativeGemmaModelImportProbe: NativeGemmaModelImporting {
+    private var count = 0
+
+    func importApprovedNativeGemmaModel(
+        pin: ApprovedNativeGemmaModelPin,
+        sourceRoot: URL,
+        sourceIdentity: NativeGemmaSourceIdentity
+    ) async throws -> NativeGemmaModelSnapshot {
+        count += 1
+        return pin.snapshot
+    }
+
+    func invocationCount() -> Int {
+        count
+    }
+}
+#endif
 
 private enum NativeGemmaRecordingTestError: Error {
     case expectedFailure

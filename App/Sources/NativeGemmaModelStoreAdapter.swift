@@ -4,6 +4,7 @@ import StenoDomain
 import StenoGemmaIPC
 @_spi(StenoApp) import StenoGemmaModelStore
 import StenoGemmaProcessGate
+import StenoPipeline
 
 enum NativeGemmaModelStoreAdapterError: Error, Equatable, Sendable {
     case adapterRevisionMismatch(expected: String, actual: String)
@@ -66,6 +67,46 @@ struct NativeGemmaModelStoreAdapter: NativeGemmaModelImporting, Sendable {
             licenseIdentifier: pin.licenseIdentifier,
             expectedManifestSHA256: pin.manifestSHA256
         )
+    }
+}
+
+/// The sole app-level entry point for an explicitly approved native Gemma import.
+///
+/// The safety coordinator reserves import admission before consent is consumed or the store is
+/// touched. Recording intent can therefore reject a new import or cancel and drain the exact
+/// admitted task before microphone permission and capture begin.
+struct NativeGemmaModelImportFacade: Sendable {
+    private let installationCoordinator: ModelInstallationCoordinator
+    private let safetyCoordinator: any NativeGemmaCoordinator
+    private let importer: any NativeGemmaModelImporting
+
+    init(
+        installationCoordinator: ModelInstallationCoordinator,
+        safetyCoordinator: any NativeGemmaCoordinator = NativeGemmaRecordingBarrierFactory.live(),
+        importer: any NativeGemmaModelImporting = NativeGemmaModelStoreAdapter()
+    ) {
+        self.installationCoordinator = installationCoordinator
+        self.safetyCoordinator = safetyCoordinator
+        self.importer = importer
+    }
+
+    func importModel(
+        pin: ApprovedNativeGemmaModelPin,
+        sourceRoot: URL,
+        consentGranted: Bool
+    ) async throws -> NativeGemmaModelSnapshot {
+        try await safetyCoordinator.performModelImport {
+            let confirmation = try await installationCoordinator
+                .mintNativeGemmaImportConfirmation(
+                    pin: pin,
+                    sourceRoot: sourceRoot,
+                    consentGranted: consentGranted
+                )
+            return try await installationCoordinator.importNativeGemmaModel(
+                using: confirmation,
+                importer: importer
+            )
+        }
     }
 }
 #endif

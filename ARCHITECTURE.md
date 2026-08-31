@@ -291,7 +291,8 @@ The order follows the handoff with one correction: milestone 1 already needs min
    Apple's framework does not load the external checkpoint.
    The separate Xcode 27 project variant now embeds a signed App Sandbox XPC helper with incoming and outgoing network access disabled.
    Mutual caller authentication, strict IPC correlation, bounded client deadlines, a server-side request registry with targeted cancellation and true task-and-reply quiescence, exact helper-process exit proof, and one app-process-wide recording coordinator are implemented and covered by model-free tests.
+   That coordinator also excludes model import from recording, requests cancellation of the exact active import, and waits for complete import quiescence before recording permission or capture.
    The crash-releasing cross-process gate and first-frame file-descriptor binding are implemented and documented in `docs/NATIVE-GEMMA-GATE.md`.
-   The consented local importer and content-addressed model store are implemented as an MLX-free boundary and documented in `docs/NATIVE-GEMMA-MODEL-STORE.md`; the production checkpoint catalog remains empty.
+   The consented local importer, app import facade, and content-addressed model store are implemented as an MLX-free boundary and documented in `docs/NATIVE-GEMMA-MODEL-STORE.md`; the production checkpoint catalog remains empty.
    An authenticated model-directory descriptor handoff into the sandboxed helper, descriptor-rooted helper verification, a reviewed checkpoint, user-facing import flow, explicit recovery for retained corrupt installs or crash-orphaned staging, production Hardened Runtime validation, a buildable matched MLX dependency snapshot, and verified model-runtime activation remain unresolved.
 9. Whether a speaker-count field should ever exist. If it does, ask "how many people spoke?", not "how many people attended?".

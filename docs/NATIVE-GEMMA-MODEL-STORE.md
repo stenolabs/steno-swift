@@ -87,11 +87,16 @@ The actual integrity controls are exact pins, retained descriptors, no-follow op
 
 The Xcode 27 app links the MLX-free store adapter, while the normal Xcode 26 application remains unchanged.
 The adapter maps only a coordinator-approved pin and source identity into store requirements and maps only verified fields back into `NativeGemmaModelSnapshot`.
+One app facade now acquires import admission from the same process-wide coordinator used by recording before it mints and consumes the coordinator confirmation or invokes the adapter.
 
 Neither the coordinator, adapter, nor store can download a model, launch the helper, create an MLX runtime, select Ollama, select `SystemLanguageModel`, or fall back to another provider.
-Before any import UI is activated, model import must join the app-wide recording coordination so it cannot consume substantial I/O or storage while recording and is cancelled before recording permission is awaited.
-That coordination must cancel pre-commit work where possible and await the exact import task's full quiescence, including uncancellable post-publication synchronization and verification, before requesting recording permission or starting capture.
-The user-facing import path must expose one app facade that keeps coordinator confirmation and adapter invocation together rather than making the internal adapter a general app service.
+Model import now joins the app-wide recording coordination.
+Publishing recording intent atomically excludes new imports, requests cancellation of the exact active import, and awaits that task's full quiescence, including uncancellable post-publication synchronization and verification, before the existing helper gate is acquired and before recording permission or capture is requested.
+Ordinary import failure is intentionally ignored by recording admission after the task is quiescent, because a model-store failure must not endanger audio capture.
+The safe availability trade-off is explicit: an operating-system I/O operation that never returns also prevents recording admission because proceeding without proof of import quiescence would violate the exclusion contract.
+That condition lasts for the remaining app-process lifetime, keeps the recording start state occupied, and currently requires restarting Steno before recording can be attempted again.
+A follow-up user-facing path must explain the blocked state and offer a safe restart, but it must never turn a timeout or cancellation request into permission to begin capture while import quiescence remains unproven.
+The user-facing import path must use the app facade rather than making the internal adapter a general app service.
 The sandboxed helper cannot reopen the user store by path.
 Provider activation therefore also requires an authenticated XPC handoff of a verified model-directory descriptor and a descriptor-rooted verifier entry point that preserves the pinned root identity inside the helper.
-Provider activation remains unavailable until that recording/import exclusion, facade, descriptor handoff, a reviewed production checkpoint, user-facing consent flow, buildable matched MLX dependency set, signed helper runtime path, and real offline model run are accepted.
+Provider activation remains unavailable until that descriptor handoff, a reviewed production checkpoint, user-facing consent flow, buildable matched MLX dependency set, signed helper runtime path, and real offline model run are accepted.
