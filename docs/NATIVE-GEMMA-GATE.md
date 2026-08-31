@@ -1,6 +1,10 @@
 # Native Gemma cross-process gate
 
-Status: approved mechanism with implementation pending.
+Status: implemented and covered by gate-only and signed XPC integration tests.
+
+The global crash-releasing gate is the implemented exclusion boundary.
+The signed XPC binding, session-scoped client lifecycle, and helper self-exit path are implemented.
+The native provider remains inactive until model import, MLX activation, and a real model run are complete.
 
 This contract defines the macOS 27 exclusion boundary between audio capture and native Gemma work.
 It is intentionally independent of the model checkpoint, MLX, the meeting library, and the configured model directory.
@@ -65,7 +69,7 @@ A model session performs these steps without creating or activating a transport 
 3. Acquire an exclusive nonblocking OFD lock on byte 1.
 4. Unlock byte 0.
 5. Create the XPC transport.
-6. Send a strict gate-binding control frame as the first XPC message.
+6. Send a strict gate-binding control frame carrying the descriptor as the first XPC control frame.
 7. Wait for the authenticated binding acknowledgement before sending any model frame.
 
 Failure to acquire byte 0 means a recording transition is in progress.
@@ -77,6 +81,7 @@ The helper adopts it with `xpc_fd_dup`, validates its structure with `fstat`, an
 The helper cannot prove the descriptor path, so correctness also relies on mutual code-signature authentication of the app and helper.
 The helper retains its duplicate until process exit.
 The client closes its own reference on every terminal path, including cancellation, infrastructure failure, retirement failure, and recording preemption.
+The session-scoped client retires automatically after the final high-level request reaches a terminal state.
 
 The XPC fileport or helper duplicate retains the same open file description if the app exits after sending the binding frame.
 The helper exits on peer disconnect, which releases its final reference and therefore the execution lock.
@@ -102,6 +107,7 @@ The byte 0 wait and byte 1 wait use nonblocking `F_OFD_SETLK` attempts with a ca
 Other errors are infrastructure failures.
 
 Failure of cooperative retirement in step 4 faults the model side but does not abort recording acquisition.
+Local retirement is best effort because the kernel execution lock remains the authoritative boundary.
 The recording transition continues to step 5, where the kernel execution lock remains the fail-closed authority.
 Cancellation or deadline failure while acquiring either range closes the fresh description and leaves no controller stranded in `drainingForRecording`.
 
@@ -123,6 +129,7 @@ The recorder continues to wait for its shared byte 1 lock and cannot report succ
 A Darwin notification may be used only as a wake-up hint.
 It must never replace the file-lock query and must never be trusted as proof of recording state.
 If a broken or suspended helper cannot exit within the deadline, recording acquisition fails closed instead of overlapping model work.
+The helper's self-exit on a byte 0 recording-intent observation is an expected fail-closed safeguard.
 
 ## Controller states
 
@@ -178,14 +185,15 @@ The gate suite proves:
 
 The signed XPC integration suite additionally proves:
 
-- the sandboxed, networkless helper accepts the transferred descriptor without new entitlements;
-- model and lifecycle frames before binding are rejected;
-- a malformed or second binding terminates the helper;
-- the helper retains the execution lock after the client closes its copy;
-- peer disconnect and recording-intent preemption terminate the exact bound helper and release the lock;
-- automatic retirement returns the controller to idle before its lease is released;
-- recording can recover from a model-only fault once the kernel lock is available; and
-- protocol version skew fails before model work.
+- the signed, sandboxed, networkless helper accepts and acknowledges the transferred descriptor;
+- the bound model-free helper answers the handshake and rejects token counting and generation as unavailable;
+- handshake, token counting, and generation share one high-level session;
+- automatic retirement completes before the following recording lease is granted;
+- recording release returns the controller to idle; and
+- a later explicit request can establish a fresh signed session.
+
+Signed negative tests for pre-bind frames, malformed or repeated binding, descriptor retention after the client closes its copy, peer disconnect, recording-intent preemption, model-only fault recovery, and protocol version skew remain open.
+Multiprocess XPC coverage also remains open.
 
 ## Future sandbox constraint
 

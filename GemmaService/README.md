@@ -28,16 +28,19 @@ This first slice provides:
 - a process-wide server request registry with unique active request IDs, targeted cancellation outside the model actor, one inference-like task at a time, and prepare/arm quiescence only after tasks return and replies finish;
 - one app-process-wide recording coordinator that closes native Gemma admission before the first recording permission await and retains the lease through capture cleanup;
 - an exact-process exit protocol in which the authenticated helper arms itself, the client closes that exact connection without another message, and recording proceeds only after the observed helper PID exits; and
-- real signed XPC integration and app tests that verify fail-closed inference, exact helper absence within the owning app process before a recording lease, failure before permission UI, permission-denial release, and concurrent first-use initialization.
+- a global crash-releasing recording and model gate, with the file descriptor bound in the first XPC control frame;
+- a session-scoped client with automatic terminal retirement; and
+- signed positive XPC integration and app tests that verify fail-closed inference, exact helper absence within the owning app process before a recording lease, failure before permission UI, permission-denial release, and concurrent first-use initialization.
 
 It does not yet provide:
 
-- an app setting or production model installer or importer;
+- an app setting or production model installer or importer and store;
 - automatic checkpoint downloads;
 - report generation from the Steno app;
-- a crash-releasing cross-process gate shared by recording and native Gemma admission, with a two-process integration test;
 - Hardened Runtime validation for the production app and a Release-specific entitlement policy;
-- activation of the verified model runtime through the XPC helper; or
+- negative signed abuse and multiprocess XPC integration coverage;
+- activation of the MLX provider through the XPC helper;
+- a real model run; or
 - a production support commitment for any specific converted checkpoint.
 
 The standalone SwiftPM package contains the verified local model-loading path, while the Xcode 27 variant currently exercises only the model-free XPC boundary.
@@ -124,8 +127,8 @@ It must not be read from the same untrusted checkpoint directory it is meant to 
 
 ## Remaining production work
 
-The remaining production work is to add a crash-releasing cross-process recording and helper gate, validate Hardened Runtime and the Release entitlement policy, implement the consented immutable model importer, select a buildable matched MLX dependency snapshot, and connect the verified model runtime to the helper.
-Cross-process exclusion requires a two-process integration test and must be complete before native Gemma is activated.
+The remaining production work is to validate Hardened Runtime and the Release entitlement policy, implement the consented immutable model importer and store, select a buildable matched MLX dependency snapshot, activate the MLX provider through the helper, and complete a real model run.
+Negative signed abuse and multiprocess XPC coverage must be complete before native Gemma is activated.
 The normative design for that boundary is [Native Gemma cross-process gate](../docs/NATIVE-GEMMA-GATE.md).
 Approved manifests and expected digests must live in Steno-controlled metadata, and installation must route through `ModelInstallationCoordinator` with explicit consent.
 The provider must remain unavailable in the app until those conditions, the exact checkpoint licensing, and the associated recovery behavior are accepted.

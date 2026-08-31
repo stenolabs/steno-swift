@@ -120,7 +120,10 @@ public struct GemmaContinuousClockDeadline: GemmaClientDeadline, Sendable {
 
 public enum GemmaClientControllerState: Equatable, Sendable {
     case idle
+    /// Retained for source compatibility. A closure-scoped controller never exposes this state.
     case connected
+    case active
+    case retiring
     case drainingForRecording
     case recording
     case faulted
@@ -145,6 +148,30 @@ public enum GemmaClientControllerError: Error, Equatable, Sendable {
     case exitArmMismatch
     case authenticatedExitProofMismatch
     case invalidRecordingLease
+    case modelSessionActive
+    case modelSessionRetiring
+    case modelSessionInactive
+    case modelAdmissionBusy
+}
+
+/// A closure-scoped capability for one native Gemma helper session.
+///
+/// The capability is valid only while the controller owns the exact active session identifier.
+/// Retaining it after `GemmaClientController.withModelSession` returns cannot reopen or reuse the
+/// helper.
+public struct GemmaClientModelSession: Sendable {
+    fileprivate let identifier: UUID
+    private let controller: GemmaClientController
+
+    fileprivate init(identifier: UUID, controller: GemmaClientController) {
+        self.identifier = identifier
+        self.controller = controller
+    }
+
+    /// Sends one application request through this exact high-level session.
+    public func send(_ body: GemmaIPCRequestBody) async throws -> GemmaIPCResponseBody {
+        try await controller.send(body, in: self)
+    }
 }
 
 /// An opaque capability proving that the helper teardown barrier completed successfully.
@@ -171,16 +198,27 @@ public actor GemmaClientController {
 
     private enum Phase: Equatable {
         case available
+        case active(UUID)
+        case retiring(UUID)
         case drainingForRecording
         case recording(UUID)
         case faulted
     }
 
     private struct InFlightRequest: Sendable {
+        let sessionID: UUID
         let requestID: UUID
         let actionTask: Task<Void, Never>
         let deadlineTask: Task<Void, Never>
         let completion: GemmaOneShot<GemmaIPCResponseBody>
+    }
+
+    private struct Retirement: Sendable {
+        let identifier: UUID
+        let sessionID: UUID
+        let transport: (any GemmaClientTransport)?
+        let requestIDs: [UUID]
+        let completion: GemmaOneShot<Void>
     }
 
     private let transportFactory: any GemmaClientTransportFactory
@@ -191,6 +229,10 @@ public actor GemmaClientController {
     private var phase: Phase = .available
     private var transport: (any GemmaClientTransport)?
     private var inFlightRequests: [UUID: InFlightRequest] = [:]
+    private var retirement: Retirement?
+    private var pendingRecordingLease: GemmaRecordingLease?
+    private var modelFaulted = false
+    private var lastCompletedRetirement: (sessionID: UUID, result: Result<Void, GemmaClientControllerError>)?
 
     public init(
         maximumInFlightRequests: Int,
@@ -211,7 +253,11 @@ public actor GemmaClientController {
     public func lifecycleState() -> GemmaClientControllerState {
         switch phase {
         case .available:
-            transport == nil ? .idle : .connected
+            .idle
+        case .active:
+            .active
+        case .retiring:
+            .retiring
         case .drainingForRecording:
             .drainingForRecording
         case .recording:
@@ -225,15 +271,50 @@ public actor GemmaClientController {
         inFlightRequests.count
     }
 
-    /// Sends one application request after lazy admission.
-    ///
-    /// Cancellation and shutdown are controller-owned operations and cannot be sent through this
-    /// API. A transport is not created until this method admits an explicit request.
+    /// Compatibility convenience that creates and retires one high-level model session.
     public func send(_ body: GemmaIPCRequestBody) async throws -> GemmaIPCResponseBody {
+        try await withModelSession { session in
+            try await session.send(body)
+        }
+    }
+
+    /// Creates one closure-scoped model session and retires its helper before returning or
+    /// throwing. A second session is never admitted while this session is active or retiring.
+    public func withModelSession<Value: Sendable>(
+        _ operation: @Sendable (GemmaClientModelSession) async throws -> Value
+    ) async throws -> Value {
+        guard !Task.isCancelled else {
+            throw GemmaClientControllerError.requestCancelled
+        }
+        let sessionID = try beginModelSession()
+        let session = GemmaClientModelSession(identifier: sessionID, controller: self)
+
+        do {
+            let value = try await operation(session)
+            let retirementResult = await finishModelSession(sessionID)
+            try retirementResult.get()
+            return value
+        } catch {
+            // The caller's error remains authoritative, but helper retirement is still terminal
+            // and completes before this method throws.
+            _ = await finishModelSession(sessionID)
+            throw error
+        }
+    }
+
+    /// Sends one application request after the exact session has been admitted.
+    fileprivate func send(
+        _ body: GemmaIPCRequestBody,
+        in session: GemmaClientModelSession
+    ) async throws -> GemmaIPCResponseBody {
         guard Self.isApplicationRequest(body) else {
             throw GemmaClientControllerError.controlOperationNotAllowed
         }
-        try requireRequestAdmission()
+        guard case .active(let activeSessionID) = phase,
+              activeSessionID == session.identifier
+        else {
+            throw GemmaClientControllerError.modelSessionInactive
+        }
         guard inFlightRequests.count < maximumInFlightRequests else {
             throw GemmaClientControllerError.busy(limit: maximumInFlightRequests)
         }
@@ -246,8 +327,11 @@ public actor GemmaClientController {
                 let createdTransport = try transportFactory.makeTransport()
                 transport = createdTransport
                 activeTransport = createdTransport
+            } catch GemmaRawXPCTransportError.executionGateBusy {
+                throw GemmaClientControllerError.modelAdmissionBusy
             } catch {
                 phase = .faulted
+                modelFaulted = true
                 throw GemmaClientControllerError.connectionFailed
             }
         }
@@ -287,6 +371,7 @@ public actor GemmaClientController {
             await self?.requestDeadlineExpired(requestID: requestID)
         }
         inFlightRequests[request.requestID] = InFlightRequest(
+            sessionID: session.identifier,
             requestID: request.requestID,
             actionTask: actionTask,
             deadlineTask: deadlineTask,
@@ -312,7 +397,8 @@ public actor GemmaClientController {
 
         if case .failure(let error) = result,
            Self.isInfrastructureFailure(error),
-           phase == .available
+           case .active(let activeSessionID) = phase,
+           activeSessionID == request.sessionID
         {
             faultOutstandingRequests(current: request, error: error)
             return
@@ -321,7 +407,10 @@ public actor GemmaClientController {
     }
 
     private func requestDeadlineExpired(requestID: UUID) {
-        guard let request = inFlightRequests[requestID], phase == .available else { return }
+        guard let request = inFlightRequests[requestID],
+              case .active(let activeSessionID) = phase,
+              activeSessionID == request.sessionID
+        else { return }
         request.actionTask.cancel()
         faultOutstandingRequests(
             current: request,
@@ -344,6 +433,7 @@ public actor GemmaClientController {
         transport?.invalidate()
         transport = nil
         phase = .faulted
+        modelFaulted = true
 
         current.completion.resolve(.failure(error))
         for request in outstandingRequests where request.requestID != current.requestID {
@@ -353,10 +443,9 @@ public actor GemmaClientController {
         }
     }
 
-    /// Closes model admission and returns a lease only after the helper is proven absent.
-    ///
-    /// The caller creates and retains `lease` before awaiting this method, so cancellation cannot
-    /// lose the only capability able to release an ambiguously completed acquisition.
+    /// Closes model admission and returns a lease only after an already-active retirement reaches
+    /// its terminal state. A failed cooperative retirement faults model use but never strands the
+    /// recording path, whose outer process gate remains the authoritative exclusion boundary.
     public func acquireRecordingLease(
         _ lease: GemmaRecordingLease
     ) async throws -> GemmaRecordingLease {
@@ -365,7 +454,83 @@ public actor GemmaClientController {
         }
         switch phase {
         case .available:
+            phase = .drainingForRecording
+            phase = .recording(lease.identifier)
+            return lease
+        case .active:
             break
+        case .retiring:
+            break
+        case .drainingForRecording:
+            throw GemmaClientControllerError.recordingTransitionInProgress
+        case .recording:
+            throw GemmaClientControllerError.recordingActive
+        case .faulted:
+            // A previous model-side fault cannot veto recording. The process gate is still the
+            // fail-closed authority for byte 1.
+            phase = .drainingForRecording
+            phase = .recording(lease.identifier)
+            return lease
+        }
+
+        let completion: GemmaOneShot<Void>
+        switch phase {
+        case .active:
+            completion = beginRetirement(requestError: .cancelledForRecording)
+        case .retiring:
+            guard let retirement else {
+                throw GemmaClientControllerError.faulted
+            }
+            completion = retirement.completion
+        case .available, .drainingForRecording, .recording, .faulted:
+            preconditionFailure("recording admission was handled before retirement")
+        }
+        guard pendingRecordingLease == nil else {
+            throw GemmaClientControllerError.recordingTransitionInProgress
+        }
+        pendingRecordingLease = lease
+        _ = await completion.wait()
+
+        guard case .recording(let activeIdentifier) = phase,
+              activeIdentifier == lease.identifier,
+              !Task.isCancelled
+        else {
+            if case .recording(let activeIdentifier) = phase,
+               activeIdentifier == lease.identifier {
+                phase = modelFaulted ? .faulted : .available
+            }
+            throw GemmaClientControllerError.requestCancelled
+        }
+        return lease
+    }
+
+    /// Releases the exact active lease without creating a replacement transport.
+    public func releaseRecordingLease(_ lease: GemmaRecordingLease) throws {
+        guard case .recording(let activeIdentifier) = phase,
+              activeIdentifier == lease.identifier
+        else {
+            throw GemmaClientControllerError.invalidRecordingLease
+        }
+        if modelFaulted {
+            phase = .faulted
+            throw GemmaClientControllerError.faulted
+        }
+        phase = .available
+    }
+
+    private func beginModelSession() throws -> UUID {
+        switch phase {
+        case .available:
+            guard !modelFaulted else {
+                throw GemmaClientControllerError.faulted
+            }
+            let identifier = UUID()
+            phase = .active(identifier)
+            return identifier
+        case .active:
+            throw GemmaClientControllerError.modelSessionActive
+        case .retiring:
+            throw GemmaClientControllerError.modelSessionRetiring
         case .drainingForRecording:
             throw GemmaClientControllerError.recordingTransitionInProgress
         case .recording:
@@ -373,34 +538,85 @@ public actor GemmaClientController {
         case .faulted:
             throw GemmaClientControllerError.faulted
         }
+    }
 
-        // Closing this gate is deliberately the first state change in the teardown barrier.
-        phase = .drainingForRecording
+    private func finishModelSession(
+        _ sessionID: UUID
+    ) async -> Result<Void, GemmaClientControllerError> {
+        switch phase {
+        case .active(let activeSessionID) where activeSessionID == sessionID:
+            return await beginRetirement(requestError: .requestCancelled).wait()
+        case .retiring:
+            guard let retirement, retirement.sessionID == sessionID else {
+                return .failure(.modelSessionInactive)
+            }
+            return await retirement.completion.wait()
+        case .available, .drainingForRecording, .recording:
+            // Recording preemption may have completed the same session's retirement before the
+            // closure unwound. Its token has already become invalid and nothing remains bound.
+            guard let lastCompletedRetirement,
+                  lastCompletedRetirement.sessionID == sessionID
+            else {
+                return .failure(.modelSessionInactive)
+            }
+            return lastCompletedRetirement.result
+        case .active, .faulted:
+            return .failure(.modelSessionInactive)
+        }
+    }
 
+    /// Publishes a distinct retirement identity before the first suspension point. The unstructured
+    /// worker is intentionally independent of a cancelled client closure, so cancellation still
+    /// waits for terminal helper retirement rather than abandoning a bound model lease.
+    private func beginRetirement(
+        requestError: GemmaClientControllerError
+    ) -> GemmaOneShot<Void> {
+        guard case .active(let sessionID) = phase else {
+            preconditionFailure("retirement requires an active model session")
+        }
+        let identifier = UUID()
+        let completion = GemmaOneShot<Void>()
         let trackedRequests = Array(inFlightRequests.values)
         inFlightRequests.removeAll(keepingCapacity: true)
-        for trackedRequest in trackedRequests {
-            trackedRequest.completion.resolve(.failure(.cancelledForRecording))
-            trackedRequest.actionTask.cancel()
-            trackedRequest.deadlineTask.cancel()
+        for request in trackedRequests {
+            request.completion.resolve(.failure(requestError))
+            request.actionTask.cancel()
+            request.deadlineTask.cancel()
         }
 
-        guard let activeTransport = transport else {
-            guard !Task.isCancelled else {
-                phase = .available
-                throw GemmaClientControllerError.requestCancelled
-            }
-            phase = .recording(lease.identifier)
-            return lease
+        let retiringTransport = transport
+        transport = nil
+        retirement = Retirement(
+            identifier: identifier,
+            sessionID: sessionID,
+            transport: retiringTransport,
+            requestIDs: trackedRequests.map(\.requestID),
+            completion: completion
+        )
+        phase = .retiring(identifier)
+        Task.detached { [weak self] in
+            await self?.performRetirement(identifier)
+        }
+        return completion
+    }
+
+    private func performRetirement(_ identifier: UUID) async {
+        guard let retirement,
+              retirement.identifier == identifier,
+              case .retiring(let currentIdentifier) = phase,
+              currentIdentifier == identifier
+        else {
+            return
+        }
+        guard let activeTransport = retirement.transport else {
+            completeRetirement(identifier, result: .success(()))
+            return
         }
 
-        // Every path beyond this point discards the transport. Successful exit proof must be
-        // consumed before this defer runs; failure remains permanently faulted.
         var exitObservationToInvalidate: (any GemmaAuthenticatedHelperExitObservation)?
         defer {
             exitObservationToInvalidate?.invalidate()
             activeTransport.invalidate()
-            transport = nil
         }
 
         let preparedHelper: GemmaPreparedHelperExit
@@ -415,8 +631,8 @@ public actor GemmaClientController {
                 throw GemmaClientControllerError.invalidExitPreparation
             }
         } catch {
-            phase = .faulted
-            throw Self.sanitized(error, for: .prepareForExit)
+            completeRetirement(identifier, result: .failure(Self.sanitized(error, for: .prepareForExit)))
+            return
         }
 
         let exitObservation: any GemmaAuthenticatedHelperExitObservation
@@ -433,12 +649,15 @@ public actor GemmaClientController {
             }
             exitObservationToInvalidate = exitObservation
         } catch {
-            phase = .faulted
-            throw Self.sanitized(error, for: .exitObservationRegistration)
+            completeRetirement(
+                identifier,
+                result: .failure(Self.sanitized(error, for: .exitObservationRegistration))
+            )
+            return
         }
 
         await attemptBestEffortQuiescence(
-            requestIDs: trackedRequests.map(\.requestID),
+            requestIDs: retirement.requestIDs,
             using: activeTransport
         )
 
@@ -454,8 +673,8 @@ public actor GemmaClientController {
                 throw GemmaClientControllerError.exitArmMismatch
             }
         } catch {
-            phase = .faulted
-            throw Self.sanitized(error, for: .armAndExit)
+            completeRetirement(identifier, result: .failure(Self.sanitized(error, for: .armAndExit)))
+            return
         }
 
         do {
@@ -471,39 +690,41 @@ public actor GemmaClientController {
                 throw GemmaClientControllerError.authenticatedExitProofMismatch
             }
         } catch {
-            phase = .faulted
-            throw Self.sanitized(error, for: .authenticatedHelperExit)
+            completeRetirement(
+                identifier,
+                result: .failure(Self.sanitized(error, for: .authenticatedHelperExit))
+            )
+            return
         }
 
-        guard !Task.isCancelled else {
-            phase = .available
-            throw GemmaClientControllerError.requestCancelled
-        }
-        phase = .recording(lease.identifier)
-        return lease
+        completeRetirement(identifier, result: .success(()))
     }
 
-    /// Releases the exact active lease without creating a replacement transport.
-    public func releaseRecordingLease(_ lease: GemmaRecordingLease) throws {
-        guard case .recording(let activeIdentifier) = phase,
-              activeIdentifier == lease.identifier
+    private func completeRetirement(
+        _ identifier: UUID,
+        result: Result<Void, GemmaClientControllerError>
+    ) {
+        guard let retirement,
+              retirement.identifier == identifier,
+              case .retiring(let currentIdentifier) = phase,
+              currentIdentifier == identifier
         else {
-            throw GemmaClientControllerError.invalidRecordingLease
+            return
         }
-        phase = .available
-    }
-
-    private func requireRequestAdmission() throws {
-        switch phase {
-        case .available:
-            break
-        case .drainingForRecording:
-            throw GemmaClientControllerError.recordingTransitionInProgress
-        case .recording:
-            throw GemmaClientControllerError.recordingActive
-        case .faulted:
-            throw GemmaClientControllerError.faulted
+        self.retirement = nil
+        if case .failure = result {
+            modelFaulted = true
         }
+        if let recordingLease = pendingRecordingLease {
+            pendingRecordingLease = nil
+            // This direct transition deliberately has no available state between retirement and
+            // recording admission, so another model session cannot slip through the gap.
+            phase = .recording(recordingLease.identifier)
+        } else {
+            phase = modelFaulted ? .faulted : .available
+        }
+        lastCompletedRetirement = (sessionID: retirement.sessionID, result: result)
+        retirement.completion.resolve(result)
     }
 
     private func attemptBestEffortQuiescence(

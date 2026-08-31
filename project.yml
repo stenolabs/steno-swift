@@ -11,6 +11,8 @@ options:
 packages:
   StenoKit:
     path: StenoKit
+  GemmaIPC:
+    path: GemmaService/IPC
 targets:
   Steno:
     type: application
@@ -40,6 +42,8 @@ targets:
         product: StenoExchange
       - package: StenoKit
         product: StenoDemo
+      - package: GemmaIPC
+        product: StenoGemmaProcessGate
     info:
       path: App/Info.plist
       properties:
@@ -105,6 +109,8 @@ targets:
       - App/Tests
     dependencies:
       - target: Steno
+      - package: GemmaIPC
+        product: StenoGemmaProcessGate
     settings:
       base:
         ARCHS: arm64

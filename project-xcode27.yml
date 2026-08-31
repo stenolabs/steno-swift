@@ -56,6 +56,8 @@ targets:
         product: StenoGemmaIPC
       - package: GemmaIPC
         product: StenoGemmaServiceCore
+      - package: GemmaIPC
+        product: StenoGemmaProcessGate
     info:
       path: .build/XcodeGen/StenoGemmaXPC/Info.plist
       properties:

@@ -2254,6 +2254,12 @@ final class AppModel {
         do {
             try await nativeGemmaRecordingBarrier.acquire()
             nativeGemmaRecordingBarrierIsHeld = true
+        } catch NativeGemmaCoordinatorError.gateUnavailable {
+            _ = recordingStartState.fail()
+            report(
+                "The recording could not be started because Steno could not establish its local model safety gate."
+            )
+            return
         } catch {
             _ = recordingStartState.fail()
             report(Self.message(

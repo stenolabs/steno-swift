@@ -3,6 +3,7 @@ import Dispatch
 import Foundation
 import Security
 import StenoGemmaIPC
+import StenoGemmaProcessGate
 import XPC
 
 public enum GemmaRawXPCTransportError: Error, Equatable, Sendable {
@@ -21,23 +22,42 @@ public enum GemmaRawXPCTransportError: Error, Equatable, Sendable {
     case remoteFailure(GemmaIPCErrorCode)
     case exitObservationRegistrationFailed
     case exitObservationInvalidated
+    /// Another recording or model session owns the process gate. This is normal contention and
+    /// must not be treated as a permanently unsafe controller fault.
+    case executionGateBusy
 }
 
 /// Creates one single-use raw XPC connection for an embedded Gemma helper.
 public struct GemmaRawXPCTransportFactory: GemmaClientTransportFactory, Sendable {
     private let expectedHelperIdentity: GemmaExpectedHelperIdentity
+    private let processGate: GemmaProcessGate
 
     /// Validates the embedded helper and derives its Mach service name before this factory is
     /// passed into `GemmaClientController`.
     ///
     /// Keeping code-signature and bundle inspection out of `makeTransport()` ensures the
     /// controller's actor-isolated admission path only reserves and activates one connection.
-    public init(helperBundleURL: URL) throws {
+    public init(helperBundleURL: URL, processGate: GemmaProcessGate) throws {
         expectedHelperIdentity = try GemmaExpectedHelperIdentity(bundleURL: helperBundleURL)
+        self.processGate = processGate
     }
 
     public func makeTransport() throws -> any GemmaClientTransport {
-        try GemmaRawXPCTransport(expectedHelperIdentity: expectedHelperIdentity)
+        let executionLease: GemmaModelExecutionLease
+        do {
+            executionLease = try processGate.acquireModelExecution()
+        } catch GemmaProcessGateError.busy {
+            throw GemmaRawXPCTransportError.executionGateBusy
+        }
+        do {
+            return try GemmaRawXPCTransport(
+                expectedHelperIdentity: expectedHelperIdentity,
+                executionLease: executionLease
+            )
+        } catch {
+            executionLease.close()
+            throw error
+        }
     }
 }
 
@@ -49,6 +69,8 @@ public struct GemmaRawXPCTransportFactory: GemmaClientTransportFactory, Sendable
 /// to `GemmaClientController`.
 public final class GemmaRawXPCTransport: GemmaClientTransport, @unchecked Sendable {
     private enum Lifecycle: Equatable {
+        case awaitingExecutionGateBind
+        case bindingExecutionGate
         case open
         case prepared(GemmaIPCPreparedHelperExit)
         case arming(GemmaIPCPreparedHelperExit)
@@ -60,15 +82,22 @@ public final class GemmaRawXPCTransport: GemmaClientTransport, @unchecked Sendab
     private let callbackQueue: DispatchQueue
     private let expectedHelperURL: URL
     private let expectedRequirement: SecRequirement
+    private let executionGateBind = GemmaRawOneShot<GemmaIPCBoundHelperIdentity>()
     private let lock = NSLock()
 
-    private var lifecycle: Lifecycle = .open
+    private var lifecycle: Lifecycle = .awaitingExecutionGateBind
+    private var executionLease: GemmaModelExecutionLease?
+    private var boundHelperIdentity: GemmaIPCBoundHelperIdentity?
     private var authenticatedPeerPID: pid_t?
     private var pendingReplies: [UUID: CheckedContinuation<Data, any Error>] = [:]
 
-    fileprivate init(expectedHelperIdentity: GemmaExpectedHelperIdentity) throws {
+    fileprivate init(
+        expectedHelperIdentity: GemmaExpectedHelperIdentity,
+        executionLease: GemmaModelExecutionLease
+    ) throws {
         expectedHelperURL = expectedHelperIdentity.bundleURL
         expectedRequirement = expectedHelperIdentity.requirement
+        self.executionLease = executionLease
         callbackQueue = DispatchQueue(
             label: "org.stenolabs.steno.gemma-xpc-client.\(UUID().uuidString)"
         )
@@ -103,6 +132,7 @@ public final class GemmaRawXPCTransport: GemmaClientTransport, @unchecked Sendab
         guard encodedRequest.count <= GemmaIPCProtocol.maximumEncodedMessageBytes else {
             throw GemmaRawXPCTransportError.invalidOuterFrame
         }
+        try await ensureExecutionGateBound()
         return try await sendFrame(
             encodedRequest,
             requestID: requestID,
@@ -111,15 +141,29 @@ public final class GemmaRawXPCTransport: GemmaClientTransport, @unchecked Sendab
     }
 
     public func prepareForExit() async throws -> GemmaPreparedHelperExit {
+        try await ensureExecutionGateBound()
         guard lock.withLock({ lifecycle == .open }) else {
             throw GemmaRawXPCTransportError.invalidLifecycle
         }
 
-        let response = try await sendControl(.prepareForExit)
+        let response: GemmaXPCControlResponseBody
+        do {
+            response = try await sendControl(.prepareForExit)
+        } catch {
+            invalidate(with: .invalidControlResponse)
+            throw error
+        }
+        let boundIdentity = lock.withLock { boundHelperIdentity }
         guard case .prepared(let prepared) = response,
+              let boundIdentity,
+              GemmaRawXPCIdentityValidation.matches(
+                  prepared: prepared,
+                  bound: boundIdentity
+              ),
               prepared.processIdentifier > 0,
               peerProcessMatches(prepared.processIdentifier)
         else {
+            invalidate(with: .invalidControlResponse)
             throw GemmaRawXPCTransportError.invalidControlResponse
         }
 
@@ -160,6 +204,7 @@ public final class GemmaRawXPCTransport: GemmaClientTransport, @unchecked Sendab
         guard case .armed(let echoedHelper) = response,
               echoedHelper == preparedHelper
         else {
+            invalidate(with: .invalidControlResponse)
             throw GemmaRawXPCTransportError.invalidControlResponse
         }
 
@@ -172,7 +217,8 @@ public final class GemmaRawXPCTransport: GemmaClientTransport, @unchecked Sendab
                 // The authenticated armed reply was already delivered. An immediate connection
                 // interruption is the expected consequence of this exact helper self-exiting.
                 return true
-            case .open, .prepared, .arming, .exitSent:
+            case .awaitingExecutionGateBind, .bindingExecutionGate,
+                 .open, .prepared, .arming, .exitSent:
                 return false
             }
         }
@@ -181,6 +227,7 @@ public final class GemmaRawXPCTransport: GemmaClientTransport, @unchecked Sendab
         }
         // Cancellation is terminal for this named connection and sends no message. The armed
         // helper owns the other endpoint and exits when that exact authenticated peer disconnects.
+        closeClientExecutionLease()
         xpc_connection_cancel(connection)
         return GemmaArmedHelperExit(preparedHelper: preparedHelper)
     }
@@ -215,18 +262,112 @@ public final class GemmaRawXPCTransport: GemmaClientTransport, @unchecked Sendab
         return response.body
     }
 
+    private func ensureExecutionGateBound() async throws {
+        enum Admission {
+            case leader
+            case waiter
+            case alreadyBound
+            case invalidated
+        }
+
+        let admission: Admission = lock.withLock {
+            switch lifecycle {
+            case .awaitingExecutionGateBind:
+                lifecycle = .bindingExecutionGate
+                return .leader
+            case .bindingExecutionGate:
+                return .waiter
+            case .open, .prepared, .arming, .exitSent:
+                return .alreadyBound
+            case .invalidated:
+                return .invalidated
+            }
+        }
+        switch admission {
+        case .alreadyBound:
+            return
+        case .invalidated:
+            throw GemmaRawXPCTransportError.connectionInvalidated
+        case .waiter:
+            _ = try await executionGateBind.wait().get()
+            return
+        case .leader:
+            break
+        }
+
+        do {
+            let request = GemmaXPCControlRequestEnvelope(body: .bindExecutionGate)
+            let encodedRequest = try GemmaXPCControlCodec.encode(request)
+            let encodedResponse = try await sendFrame(
+                encodedRequest,
+                requestID: request.requestID,
+                channel: .control,
+                carriesExecutionGate: true
+            )
+            let response = try GemmaXPCControlCodec.decodeResponse(
+                encodedResponse,
+                expectedRequestID: request.requestID,
+                expectedOperation: .bindExecutionGate
+            )
+            if case .failure(let failure) = response.body {
+                throw GemmaRawXPCTransportError.remoteFailure(failure.code)
+            }
+            guard case .executionGateBound(let identity) = response.body,
+                  identity.processIdentifier > 0,
+                  peerProcessMatches(identity.processIdentifier)
+            else {
+                throw GemmaRawXPCTransportError.invalidControlResponse
+            }
+            let accepted = lock.withLock {
+                guard lifecycle == .bindingExecutionGate else { return false }
+                boundHelperIdentity = identity
+                lifecycle = .open
+                return true
+            }
+            guard accepted else {
+                throw GemmaRawXPCTransportError.connectionInvalidated
+            }
+            executionGateBind.resolve(.success(identity))
+        } catch {
+            let transportError = error as? GemmaRawXPCTransportError
+                ?? .invalidControlResponse
+            executionGateBind.resolve(.failure(transportError))
+            invalidate(with: transportError)
+            throw transportError
+        }
+    }
+
     private func sendFrame(
         _ frame: Data,
         requestID: UUID,
-        channel: GemmaXPCChannel
+        channel: GemmaXPCChannel,
+        carriesExecutionGate: Bool = false
     ) async throws -> Data {
-        guard frame.count <= GemmaIPCProtocol.maximumEncodedMessageBytes,
-              let message = GemmaRawXPCOuterFrame.make(
-                  frame: frame,
-                  requestID: requestID,
-                  channel: channel
-              )
-        else {
+        guard frame.count <= GemmaIPCProtocol.maximumEncodedMessageBytes else {
+            throw GemmaRawXPCTransportError.invalidOuterFrame
+        }
+
+        let message: xpc_object_t?
+        if carriesExecutionGate {
+            guard let executionLease = lock.withLock({ self.executionLease }) else {
+                throw GemmaRawXPCTransportError.connectionInvalidated
+            }
+            message = executionLease.withBorrowedFileDescriptor { descriptor -> xpc_object_t? in
+                GemmaRawXPCOuterFrame.make(
+                    frame: frame,
+                    requestID: requestID,
+                    channel: channel,
+                    executionGateDescriptor: descriptor
+                )
+            } ?? nil
+        } else {
+            message = GemmaRawXPCOuterFrame.make(
+                frame: frame,
+                requestID: requestID,
+                channel: channel
+            )
+        }
+        guard let message else {
             throw GemmaRawXPCTransportError.invalidOuterFrame
         }
 
@@ -234,6 +375,19 @@ public final class GemmaRawXPCTransport: GemmaClientTransport, @unchecked Sendab
             let registrationError: GemmaRawXPCTransportError? = lock.withLock {
                 guard lifecycle != .invalidated else {
                     return .connectionInvalidated
+                }
+                if carriesExecutionGate {
+                    guard channel == .control,
+                          lifecycle == .bindingExecutionGate
+                    else {
+                        return .invalidLifecycle
+                    }
+                } else {
+                    guard lifecycle != .awaitingExecutionGateBind,
+                          lifecycle != .bindingExecutionGate
+                    else {
+                        return .invalidLifecycle
+                    }
                 }
                 switch channel {
                 case .model:
@@ -345,6 +499,15 @@ public final class GemmaRawXPCTransport: GemmaClientTransport, @unchecked Sendab
         invalidate(with: .connectionInvalidated)
     }
 
+    private func closeClientExecutionLease() {
+        let lease = lock.withLock {
+            let lease = executionLease
+            executionLease = nil
+            return lease
+        }
+        lease?.close()
+    }
+
     private func finishPending(
         _ requestID: UUID,
         result: Result<Data, any Error>
@@ -356,15 +519,23 @@ public final class GemmaRawXPCTransport: GemmaClientTransport, @unchecked Sendab
     }
 
     private func invalidate(with error: GemmaRawXPCTransportError) {
-        let continuations: [CheckedContinuation<Data, any Error>] = lock.withLock {
-            guard lifecycle != .invalidated else { return [] }
+        let invalidation: (
+            [CheckedContinuation<Data, any Error>],
+            GemmaModelExecutionLease?
+        ) = lock.withLock {
+            guard lifecycle != .invalidated else { return ([], nil) }
             lifecycle = .invalidated
             let continuations = Array(pendingReplies.values)
             pendingReplies.removeAll()
-            return continuations
+            let lease = executionLease
+            executionLease = nil
+            boundHelperIdentity = nil
+            return (continuations, lease)
         }
+        executionGateBind.resolve(.failure(error))
+        invalidation.1?.close()
         xpc_connection_cancel(connection)
-        for continuation in continuations {
+        for continuation in invalidation.0 {
             continuation.resume(throwing: error)
         }
     }
@@ -566,7 +737,17 @@ enum GemmaRawXPCSecurityProfile {
     }
 }
 
-private struct GemmaRawXPCOuterFrame {
+enum GemmaRawXPCIdentityValidation {
+    static func matches(
+        prepared: GemmaIPCPreparedHelperExit,
+        bound: GemmaIPCBoundHelperIdentity
+    ) -> Bool {
+        prepared.helperInstanceID == bound.helperInstanceID
+            && prepared.processIdentifier == bound.processIdentifier
+    }
+}
+
+struct GemmaRawXPCOuterFrame {
     let frame: Data
     let requestID: UUID
     let channel: GemmaXPCChannel
@@ -574,11 +755,13 @@ private struct GemmaRawXPCOuterFrame {
     private static let channelKey = "channel"
     private static let frameKey = "frame"
     private static let requestIDKey = "requestID"
+    static let executionGateFDKey = "executionGateFD"
 
     static func make(
         frame: Data,
         requestID: UUID,
-        channel: GemmaXPCChannel
+        channel: GemmaXPCChannel,
+        executionGateDescriptor: Int32? = nil
     ) -> xpc_object_t? {
         guard frame.count <= GemmaIPCProtocol.maximumEncodedMessageBytes else { return nil }
         let dictionary = xpc_dictionary_create(nil, nil, 0)
@@ -594,6 +777,12 @@ private struct GemmaRawXPCOuterFrame {
                 bytes.baseAddress,
                 frame.count
             )
+        }
+        if let executionGateDescriptor {
+            guard let descriptorObject = xpc_fd_create(executionGateDescriptor) else {
+                return nil
+            }
+            xpc_dictionary_set_value(dictionary, executionGateFDKey, descriptorObject)
         }
         return dictionary
     }
