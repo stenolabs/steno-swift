@@ -13,6 +13,13 @@ public struct GemmaModelRootIdentity: Sendable, Equatable {
     }
 }
 
+struct GemmaModelVerificationHooks: Sendable {
+    var didCompleteMetadataPreflight: @Sendable () throws -> Void = {}
+    var beforeReadingModelContent: @Sendable (String) throws -> Void = { _ in }
+    var beforeFinalMetadataPass: @Sendable () throws -> Void = {}
+    var beforeCompletingFinalMetadataPass: @Sendable () throws -> Void = {}
+}
+
 /// Verifies installed Gemma trees without downloading, resolving, or loading a model.
 public struct GemmaModelVerifier: Sendable {
     public let requirements: GemmaModelRequirements
@@ -30,6 +37,20 @@ public struct GemmaModelVerifier: Sendable {
         expectedRootIdentity: GemmaModelRootIdentity? = nil,
         cancellationCheck: @Sendable () throws -> Void = { try Task.checkCancellation() }
     ) throws -> VerifiedGemmaModel {
+        try verify(
+            directory: directory,
+            expectedRootIdentity: expectedRootIdentity,
+            cancellationCheck: cancellationCheck,
+            hooks: GemmaModelVerificationHooks()
+        )
+    }
+
+    func verify(
+        directory: URL,
+        expectedRootIdentity: GemmaModelRootIdentity? = nil,
+        cancellationCheck: @Sendable () throws -> Void = { try Task.checkCancellation() },
+        hooks: GemmaModelVerificationHooks
+    ) throws -> VerifiedGemmaModel {
         try cancellationCheck()
         let root = directory.standardizedFileURL
         let descriptor = try Self.openRoot(root)
@@ -38,7 +59,8 @@ public struct GemmaModelVerifier: Sendable {
         let result = try verifiedRoot(
             descriptor: descriptor,
             expectedRootIdentity: expectedRootIdentity,
-            cancellationCheck: cancellationCheck
+            cancellationCheck: cancellationCheck,
+            hooks: hooks
         )
         try Self.requirePath(root, names: result.status, path: ".")
         return VerifiedGemmaModel(
@@ -57,6 +79,20 @@ public struct GemmaModelVerifier: Sendable {
         expectedRootIdentity: GemmaModelRootIdentity? = nil,
         cancellationCheck: @Sendable () throws -> Void = { try Task.checkCancellation() }
     ) throws -> VerifiedGemmaModelDirectory {
+        try verify(
+            adoptingDirectoryDescriptor: descriptor,
+            expectedRootIdentity: expectedRootIdentity,
+            cancellationCheck: cancellationCheck,
+            hooks: GemmaModelVerificationHooks()
+        )
+    }
+
+    func verify(
+        adoptingDirectoryDescriptor descriptor: Int32,
+        expectedRootIdentity: GemmaModelRootIdentity? = nil,
+        cancellationCheck: @Sendable () throws -> Void = { try Task.checkCancellation() },
+        hooks: GemmaModelVerificationHooks
+    ) throws -> VerifiedGemmaModelDirectory {
         var ownsDescriptor = descriptor >= 0
         defer {
             if ownsDescriptor {
@@ -68,7 +104,8 @@ public struct GemmaModelVerifier: Sendable {
         let result = try verifiedRoot(
             descriptor: descriptor,
             expectedRootIdentity: expectedRootIdentity,
-            cancellationCheck: cancellationCheck
+            cancellationCheck: cancellationCheck,
+            hooks: hooks
         )
         let capability = VerifiedGemmaModelDirectory(
             fileDescriptor: descriptor,
@@ -82,7 +119,8 @@ public struct GemmaModelVerifier: Sendable {
     fileprivate func verifiedRoot(
         descriptor: Int32,
         expectedRootIdentity: GemmaModelRootIdentity?,
-        cancellationCheck: @Sendable () throws -> Void
+        cancellationCheck: @Sendable () throws -> Void,
+        hooks: GemmaModelVerificationHooks = GemmaModelVerificationHooks()
     ) throws -> VerifiedDescriptorRoot {
         try cancellationCheck()
 
@@ -93,85 +131,59 @@ public struct GemmaModelVerifier: Sendable {
             throw GemmaModelVerificationError.rootIdentityMismatch
         }
 
-        var scan = SnapshotScan()
-        try Self.scanDirectory(
-            descriptor,
-            relativePrefix: "",
+        let manifestRead = try Self.readPinnedManifest(
+            from: descriptor,
             manifestPath: requirements.manifestFileName,
-            cancellationCheck: cancellationCheck,
-            into: &scan
+            expectedSHA256: requirements.expectedManifestSHA256,
+            cancellationCheck: cancellationCheck
         )
-
-        guard let manifestFile = scan.files[requirements.manifestFileName] else {
-            throw GemmaModelVerificationError.manifestFileMissing(requirements.manifestFileName)
-        }
-        guard manifestFile.size <= Int64(GemmaModelManifest.maximumManifestByteCount),
-              let manifestData = manifestFile.capturedData,
-              manifestData.count <= GemmaModelManifest.maximumManifestByteCount
-        else {
-            throw GemmaModelVerificationError.manifestTooLarge(
-                limit: GemmaModelManifest.maximumManifestByteCount,
-                actualAtLeast: Int(min(manifestFile.size, Int64(Int.max)))
-            )
-        }
-        guard manifestFile.sha256 == requirements.expectedManifestSHA256 else {
-            throw GemmaModelVerificationError.manifestDigestMismatch(
-                expected: requirements.expectedManifestSHA256,
-                actual: manifestFile.sha256
-            )
-        }
-
-        let manifest = try GemmaModelManifest.decode(from: manifestData)
+        let manifest = try GemmaModelManifest.decode(from: manifestRead.data)
         try manifest.validate(against: requirements)
 
         let expectedFiles = Dictionary(uniqueKeysWithValues: manifest.files.map {
             ($0.relativePath, $0)
         })
-        let expectedPaths = Set(expectedFiles.keys).union([requirements.manifestFileName])
         let expectedDirectories = Set(
             expectedFiles.keys.flatMap(GemmaModelManifest.parentDirectories(of:))
                 + GemmaModelManifest.parentDirectories(of: requirements.manifestFileName)
         )
+        let expectedTree = ExpectedTree(
+            manifestPath: requirements.manifestFileName,
+            manifestStatus: manifestRead.status,
+            files: expectedFiles,
+            directories: expectedDirectories,
+            expectedFilePaths: Set(expectedFiles.keys).union([requirements.manifestFileName])
+        )
+        let snapshot = try Self.captureMetadataSnapshot(
+            descriptor,
+            initialRootStatus: initialStatus,
+            expectedTree: expectedTree,
+            expectedSnapshot: nil,
+            cancellationCheck: cancellationCheck,
+            beforeRootRevalidation: {}
+        )
+        try hooks.didCompleteMetadataPreflight()
 
-        for path in scan.files.keys.sorted() where !expectedPaths.contains(path) {
-            throw GemmaModelVerificationError.unexpectedFile(path)
-        }
-        for path in scan.directories.sorted() where !expectedDirectories.contains(path) {
-            throw GemmaModelVerificationError.unexpectedDirectory(path)
-        }
-        for path in expectedFiles.keys.sorted() where scan.files[path] == nil {
-            throw GemmaModelVerificationError.missingFile(path)
-        }
-
-        for path in expectedFiles.keys.sorted() {
-            guard let expected = expectedFiles[path], let actual = scan.files[path] else {
-                throw GemmaModelVerificationError.missingFile(path)
-            }
-            guard actual.size == expected.size else {
-                throw GemmaModelVerificationError.fileSizeMismatch(
-                    path: path,
-                    expected: expected.size,
-                    actual: actual.size
-                )
-            }
-            guard actual.sha256 == expected.sha256 else {
-                throw GemmaModelVerificationError.fileHashMismatch(
-                    path: path,
-                    expected: expected.sha256,
-                    actual: actual.sha256
-                )
-            }
-        }
-
-        try Self.validateSafetensorsIndex(scan.files, expectedFiles: expectedFiles)
+        let indexData = try Self.verifyExpectedContents(
+            from: descriptor,
+            expectedTree: expectedTree,
+            snapshot: snapshot,
+            cancellationCheck: cancellationCheck,
+            beforeReadingModelContent: hooks.beforeReadingModelContent
+        )
+        try Self.validateSafetensorsIndex(indexData, expectedFiles: expectedFiles)
         try cancellationCheck()
+        try hooks.beforeFinalMetadataPass()
+        let finalSnapshot = try Self.captureMetadataSnapshot(
+            descriptor,
+            initialRootStatus: initialStatus,
+            expectedTree: expectedTree,
+            expectedSnapshot: snapshot,
+            cancellationCheck: cancellationCheck,
+            beforeRootRevalidation: hooks.beforeCompletingFinalMetadataPass
+        )
 
-        let finalStatus = try Self.status(of: descriptor, path: ".")
-        guard Self.sameStableState(initialStatus, finalStatus) else {
-            throw GemmaModelVerificationError.entryChanged(".")
-        }
-
-        return VerifiedDescriptorRoot(identity: rootIdentity, status: finalStatus)
+        return VerifiedDescriptorRoot(identity: rootIdentity, status: finalSnapshot.rootStatus)
     }
 
     fileprivate func makeActivationAssets(
@@ -372,6 +384,7 @@ public struct GemmaModelVerifier: Sendable {
     private static func openVerifiedRegularFile(
         from rootDescriptor: Int32,
         relativePath: String,
+        missingFileError: GemmaModelVerificationError? = nil,
         // This closer owns only the leaf file descriptor returned to the caller or rejected after
         // it opens. Directory-walking duplicates stay private to this helper and close directly.
         openedDescriptorCloser: @Sendable (Int32) -> Void = {
@@ -390,6 +403,21 @@ public struct GemmaModelVerifier: Sendable {
         var directoryDescriptor = initialDirectory
         do {
             for component in components.dropLast() {
+                var namedBefore = stat()
+                let namedResult = component.withCString {
+                    Darwin.fstatat(directoryDescriptor, $0, &namedBefore, AT_SYMLINK_NOFOLLOW)
+                }
+                let namedErrno = errno
+                guard namedResult == 0 else {
+                    if namedErrno == ENOENT, let missingFileError {
+                        throw missingFileError
+                    }
+                    throw GemmaModelVerificationError.entryChanged(relativePath)
+                }
+                if namedBefore.st_mode & S_IFMT == S_IFLNK {
+                    throw GemmaModelVerificationError.symbolicLinkNotAllowed(relativePath)
+                }
+                try validateDirectory(namedBefore, path: relativePath)
                 let child = component.withCString {
                     Darwin.openat(
                         directoryDescriptor,
@@ -400,6 +428,17 @@ public struct GemmaModelVerifier: Sendable {
                 guard child >= 0 else {
                     throw GemmaModelVerificationError.entryChanged(relativePath)
                 }
+                let opened: stat
+                do {
+                    opened = try status(of: child, path: relativePath)
+                    guard sameStableState(namedBefore, opened) else {
+                        throw GemmaModelVerificationError.entryChanged(relativePath)
+                    }
+                    try validateDirectory(opened, path: relativePath)
+                } catch {
+                    _ = Darwin.close(child)
+                    throw error
+                }
                 _ = Darwin.close(directoryDescriptor)
                 directoryDescriptor = child
             }
@@ -407,8 +446,15 @@ public struct GemmaModelVerifier: Sendable {
             let namedResult = fileName.withCString {
                 Darwin.fstatat(directoryDescriptor, $0, &namedBefore, AT_SYMLINK_NOFOLLOW)
             }
+            let namedErrno = errno
             guard namedResult == 0 else {
+                if namedErrno == ENOENT, let missingFileError {
+                    throw missingFileError
+                }
                 throw GemmaModelVerificationError.entryChanged(relativePath)
+            }
+            if namedBefore.st_mode & S_IFMT == S_IFLNK {
+                throw GemmaModelVerificationError.symbolicLinkNotAllowed(relativePath)
             }
             let fileDescriptor = fileName.withCString {
                 Darwin.openat(
@@ -576,12 +622,136 @@ public struct GemmaModelVerifier: Sendable {
         }
     }
 
-    private static func scanDirectory(
+    private static func readPinnedManifest(
+        from rootDescriptor: Int32,
+        manifestPath: String,
+        expectedSHA256: String,
+        cancellationCheck: @Sendable () throws -> Void
+    ) throws -> ManifestRead {
+        let opened = try openVerifiedRegularFile(
+            from: rootDescriptor,
+            relativePath: manifestPath,
+            missingFileError: .manifestFileMissing(manifestPath)
+        )
+        defer { _ = Darwin.close(opened.descriptor) }
+
+        guard opened.status.st_size >= 0 else {
+            throw GemmaModelVerificationError.entryChanged(manifestPath)
+        }
+        guard opened.status.st_size <= Int64(GemmaModelManifest.maximumManifestByteCount) else {
+            throw GemmaModelVerificationError.manifestTooLarge(
+                limit: GemmaModelManifest.maximumManifestByteCount,
+                actualAtLeast: Int(min(opened.status.st_size, Int64(Int.max)))
+            )
+        }
+
+        let data: Data
+        do {
+            data = try readVerifiedData(
+                descriptor: opened.descriptor,
+                expectedStatus: opened.status,
+                path: manifestPath,
+                expectedSHA256: expectedSHA256,
+                maximumBytes: GemmaModelManifest.maximumManifestByteCount,
+                cancellationCheck: cancellationCheck
+            )
+        } catch GemmaModelVerificationError.fileHashMismatch(_, _, let actual) {
+            throw GemmaModelVerificationError.manifestDigestMismatch(
+                expected: expectedSHA256,
+                actual: actual
+            )
+        }
+        return ManifestRead(data: data, status: opened.status)
+    }
+
+    private static func captureMetadataSnapshot(
+        _ rootDescriptor: Int32,
+        initialRootStatus: stat,
+        expectedTree: ExpectedTree,
+        expectedSnapshot: MetadataSnapshot?,
+        cancellationCheck: @Sendable () throws -> Void,
+        beforeRootRevalidation: @Sendable () throws -> Void
+    ) throws -> MetadataSnapshot {
+        try cancellationCheck()
+        let rootStatus = try status(of: rootDescriptor, path: ".")
+        try validateDirectory(rootStatus, path: ".")
+        guard sameStableState(initialRootStatus, rootStatus),
+              expectedSnapshot.map({ sameStableState($0.rootStatus, rootStatus) }) ?? true
+        else {
+            throw GemmaModelVerificationError.entryChanged(".")
+        }
+
+        var scan = MetadataScan()
+        try scanMetadataDirectory(
+            rootDescriptor,
+            relativePrefix: "",
+            expectedTree: expectedTree,
+            expectedSnapshot: expectedSnapshot,
+            cancellationCheck: cancellationCheck,
+            into: &scan
+        )
+        try requireExpectedFilesPresent(
+            in: scan,
+            expectedTree: expectedTree,
+            isRevalidation: expectedSnapshot != nil
+        )
+
+        try beforeRootRevalidation()
+        if let expectedSnapshot {
+            var confirmation = MetadataScan()
+            try scanMetadataDirectory(
+                rootDescriptor,
+                relativePrefix: "",
+                expectedTree: expectedTree,
+                expectedSnapshot: expectedSnapshot,
+                cancellationCheck: cancellationCheck,
+                into: &confirmation
+            )
+            try requireExpectedFilesPresent(
+                in: confirmation,
+                expectedTree: expectedTree,
+                isRevalidation: true
+            )
+            scan = confirmation
+        }
+        let finalRootStatus = try status(of: rootDescriptor, path: ".")
+        guard sameStableState(rootStatus, finalRootStatus),
+              sameStableState(initialRootStatus, finalRootStatus),
+              expectedSnapshot.map({ sameStableState($0.rootStatus, finalRootStatus) }) ?? true
+        else {
+            throw GemmaModelVerificationError.entryChanged(".")
+        }
+
+        return MetadataSnapshot(
+            rootStatus: finalRootStatus,
+            directoryStatuses: scan.directories,
+            fileStatuses: scan.files
+        )
+    }
+
+    private static func requireExpectedFilesPresent(
+        in scan: MetadataScan,
+        expectedTree: ExpectedTree,
+        isRevalidation: Bool
+    ) throws {
+        for path in expectedTree.expectedFilePaths.sorted() where scan.files[path] == nil {
+            if isRevalidation {
+                throw GemmaModelVerificationError.entryChanged(path)
+            }
+            if path == expectedTree.manifestPath {
+                throw GemmaModelVerificationError.manifestFileMissing(path)
+            }
+            throw GemmaModelVerificationError.missingFile(path)
+        }
+    }
+
+    private static func scanMetadataDirectory(
         _ directoryDescriptor: Int32,
         relativePrefix: String,
-        manifestPath: String,
+        expectedTree: ExpectedTree,
+        expectedSnapshot: MetadataSnapshot?,
         cancellationCheck: @Sendable () throws -> Void,
-        into scan: inout SnapshotScan
+        into scan: inout MetadataScan
     ) throws {
         let enumerationDescriptor = Darwin.openat(
             directoryDescriptor,
@@ -639,6 +809,9 @@ public struct GemmaModelVerifier: Sendable {
             case S_IFLNK:
                 throw GemmaModelVerificationError.symbolicLinkNotAllowed(path)
             case S_IFDIR:
+                guard expectedTree.directories.contains(path) else {
+                    throw GemmaModelVerificationError.unexpectedDirectory(path)
+                }
                 try validateDirectory(before, path: path)
                 let child = name.withCString {
                     Darwin.openat(
@@ -655,17 +828,22 @@ public struct GemmaModelVerifier: Sendable {
                     guard sameStableState(before, opened) else {
                         throw GemmaModelVerificationError.entryChanged(path)
                     }
-                    scan.directories.insert(path)
+                    if let expected = expectedSnapshot?.directoryStatuses[path],
+                       !sameStableState(expected, opened) {
+                        throw GemmaModelVerificationError.entryChanged(path)
+                    }
+                    scan.directories[path] = opened
                     guard scan.directories.count <= GemmaModelManifest.maximumDirectoryCount else {
                         throw GemmaModelVerificationError.tooManyDirectories(
                             limit: GemmaModelManifest.maximumDirectoryCount,
                             actual: scan.directories.count
                         )
                     }
-                    try scanDirectory(
+                    try scanMetadataDirectory(
                         child,
                         relativePrefix: path,
-                        manifestPath: manifestPath,
+                        expectedTree: expectedTree,
+                        expectedSnapshot: expectedSnapshot,
                         cancellationCheck: cancellationCheck,
                         into: &scan
                     )
@@ -691,6 +869,9 @@ public struct GemmaModelVerifier: Sendable {
                 }
                 _ = Darwin.close(child)
             case S_IFREG:
+                guard expectedTree.expectedFilePaths.contains(path) else {
+                    throw GemmaModelVerificationError.unexpectedFile(path)
+                }
                 try validateFile(before, path: path)
                 scan.fileCount += 1
                 guard scan.fileCount <= GemmaModelManifest.maximumFileCount + 1 else {
@@ -699,113 +880,87 @@ public struct GemmaModelVerifier: Sendable {
                         actual: scan.fileCount
                     )
                 }
-                let captureLimit: Int? = if path == manifestPath
-                    || path == "model.safetensors.index.json"
-                {
-                    GemmaModelManifest.maximumManifestByteCount + 1
-                } else {
-                    nil
+                if let expectedSnapshot {
+                    guard let expected = expectedSnapshot.fileStatuses[path],
+                          sameStableState(expected, before)
+                    else {
+                        throw GemmaModelVerificationError.entryChanged(path)
+                    }
+                } else if path == expectedTree.manifestPath {
+                    guard sameStableState(expectedTree.manifestStatus, before) else {
+                        throw GemmaModelVerificationError.entryChanged(path)
+                    }
+                } else if let expected = expectedTree.files[path], before.st_size != expected.size {
+                    throw GemmaModelVerificationError.fileSizeMismatch(
+                        path: path,
+                        expected: expected.size,
+                        actual: before.st_size
+                    )
                 }
-                scan.files[path] = try scanFile(
-                    directoryDescriptor: directoryDescriptor,
-                    name: name,
-                    path: path,
-                    before: before,
-                    captureLimit: captureLimit,
-                    cancellationCheck: cancellationCheck
-                )
+                scan.files[path] = before
             default:
                 throw GemmaModelVerificationError.unsupportedDirectoryEntry(path)
             }
         }
     }
 
-    private static func scanFile(
-        directoryDescriptor: Int32,
-        name: String,
-        path: String,
-        before: stat,
-        captureLimit: Int?,
-        cancellationCheck: @Sendable () throws -> Void
-    ) throws -> ScannedFile {
-        let descriptor = name.withCString {
-            Darwin.openat(
-                directoryDescriptor,
-                $0,
-                O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC
-            )
+    private static func verifyExpectedContents(
+        from rootDescriptor: Int32,
+        expectedTree: ExpectedTree,
+        snapshot: MetadataSnapshot,
+        cancellationCheck: @Sendable () throws -> Void,
+        beforeReadingModelContent: @Sendable (String) throws -> Void
+    ) throws -> Data? {
+        let indexPath = "model.safetensors.index.json"
+        if let index = expectedTree.files[indexPath],
+           index.size > Int64(GemmaModelManifest.maximumManifestByteCount) {
+            throw GemmaModelVerificationError.malformedSafetensorsIndex
         }
-        guard descriptor >= 0 else {
-            throw GemmaModelVerificationError.entryChanged(path)
-        }
-        defer { _ = Darwin.close(descriptor) }
 
-        let opened = try status(of: descriptor, path: path)
-        guard sameStableState(before, opened) else {
-            throw GemmaModelVerificationError.entryChanged(path)
-        }
-        try validateFile(opened, path: path)
-
-        var hasher = SHA256()
-        var captured = captureLimit == nil ? nil : Data()
-        var total: Int64 = 0
-        var offset: off_t = 0
-        var buffer = [UInt8](repeating: 0, count: 1 << 20)
-        while true {
+        var indexData: Data?
+        for path in expectedTree.files.keys.sorted() {
             try cancellationCheck()
-            let count: Int
-            while true {
-                let result = buffer.withUnsafeMutableBytes { bytes in
-                    Darwin.pread(descriptor, bytes.baseAddress, bytes.count, offset)
-                }
-                if result < 0, errno == EINTR { continue }
-                guard result >= 0 else {
-                    throw GemmaModelVerificationError.unreadableFile(path)
-                }
-                count = result
-                break
+            try beforeReadingModelContent(path)
+            guard let expected = expectedTree.files[path],
+                  let expectedStatus = snapshot.fileStatuses[path]
+            else {
+                throw GemmaModelVerificationError.missingFile(path)
             }
-            if count == 0 { break }
-            total += Int64(count)
-            offset += off_t(count)
-            let chunk = Data(buffer[0 ..< count])
-            hasher.update(data: chunk)
-            if let captureLimit, captured!.count < captureLimit {
-                captured!.append(chunk.prefix(captureLimit - captured!.count))
+            let retainData = path == indexPath
+            let data: Data
+            do {
+                let opened = try openVerifiedRegularFile(
+                    from: rootDescriptor,
+                    relativePath: path
+                )
+                defer { _ = Darwin.close(opened.descriptor) }
+                guard sameStableState(expectedStatus, opened.status) else {
+                    throw GemmaModelVerificationError.entryChanged(path)
+                }
+                data = try readVerifiedData(
+                    descriptor: opened.descriptor,
+                    expectedStatus: opened.status,
+                    path: path,
+                    expectedSHA256: expected.sha256,
+                    maximumBytes: retainData ? GemmaModelManifest.maximumManifestByteCount : 0,
+                    cancellationCheck: cancellationCheck,
+                    retainData: retainData
+                )
             }
+            if retainData { indexData = data }
         }
-
-        let after = try status(of: descriptor, path: path)
-        var namedAfter = stat()
-        let namedResult = name.withCString {
-            Darwin.fstatat(directoryDescriptor, $0, &namedAfter, AT_SYMLINK_NOFOLLOW)
-        }
-        guard namedResult == 0,
-              sameStableState(opened, after),
-              sameStableState(opened, namedAfter),
-              total == opened.st_size
-        else {
-            throw GemmaModelVerificationError.entryChanged(path)
-        }
-
-        return ScannedFile(
-            size: total,
-            sha256: hasher.finalize().map { String(format: "%02x", $0) }.joined(),
-            capturedData: captured
-        )
+        return indexData
     }
 
     private static func validateSafetensorsIndex(
-        _ actualFiles: [String: ScannedFile],
+        _ indexData: Data?,
         expectedFiles: [String: GemmaModelManifest.GemmaModelFile]
     ) throws {
         let indexPath = "model.safetensors.index.json"
         guard let expectedIndex = expectedFiles[indexPath] else { return }
         guard expectedIndex.size <= Int64(GemmaModelManifest.maximumManifestByteCount),
-              let actualIndex = actualFiles[indexPath],
-              let data = actualIndex.capturedData,
+              let data = indexData,
               Int64(data.count) == expectedIndex.size,
-              actualIndex.sha256 == expectedIndex.sha256,
               let index = try? JSONDecoder().decode(SafetensorsIndex.self, from: data),
               !index.weightMap.isEmpty
         else {
@@ -908,17 +1063,30 @@ public struct GemmaModelVerifier: Sendable {
         let status: stat
     }
 
-    private struct SnapshotScan {
-        var files: [String: ScannedFile] = [:]
-        var directories = Set<String>()
-        var fileCount = 0
-        var entryCount = 0
+    private struct ManifestRead {
+        let data: Data
+        let status: stat
     }
 
-    private struct ScannedFile {
-        let size: Int64
-        let sha256: String
-        let capturedData: Data?
+    private struct ExpectedTree {
+        let manifestPath: String
+        let manifestStatus: stat
+        let files: [String: GemmaModelManifest.GemmaModelFile]
+        let directories: Set<String>
+        let expectedFilePaths: Set<String>
+    }
+
+    private struct MetadataSnapshot {
+        let rootStatus: stat
+        let directoryStatuses: [String: stat]
+        let fileStatuses: [String: stat]
+    }
+
+    private struct MetadataScan {
+        var files: [String: stat] = [:]
+        var directories: [String: stat] = [:]
+        var fileCount = 0
+        var entryCount = 0
     }
 
     private struct SafetensorsIndex: Decodable {

@@ -1221,6 +1221,208 @@ struct GemmaModelVerifierTests {
         }
     }
 
+    @Test("metadata preflight rejects unexpected and wrongly-sized files before model reads")
+    func metadataPreflightPrecedesModelContentReads() throws {
+        let unexpectedFixture = try Fixture.make()
+        try unexpectedFixture.addSparseReadOnlyFile(
+            path: "unexpected-large.bin",
+            size: 8 * 1024 * 1024 * 1024
+        )
+        let unexpectedReads = VerificationReadRecorder()
+        #expect(throws: GemmaModelVerificationError.unexpectedFile("unexpected-large.bin")) {
+            _ = try unexpectedFixture.verifier.verify(
+                directory: unexpectedFixture.root,
+                hooks: GemmaModelVerificationHooks(
+                    beforeReadingModelContent: { unexpectedReads.record($0) }
+                )
+            )
+        }
+        #expect(unexpectedReads.paths() == [])
+
+        let wrongSizeFixture = try Fixture.make()
+        try wrongSizeFixture.replaceWeights(with: "changed length")
+        let wrongSizeReads = VerificationReadRecorder()
+        #expect(throws: GemmaModelVerificationError.fileSizeMismatch(
+            path: "weights.bin",
+            expected: 7,
+            actual: 14
+        )) {
+            _ = try wrongSizeFixture.verifier.verify(
+                directory: wrongSizeFixture.root,
+                hooks: GemmaModelVerificationHooks(
+                    beforeReadingModelContent: { wrongSizeReads.record($0) }
+                )
+            )
+        }
+        #expect(wrongSizeReads.paths() == [])
+    }
+
+    @Test("metadata preflight never enters an unexpected directory")
+    func metadataPreflightDoesNotEnterUnexpectedDirectories() throws {
+        let fixture = try Fixture.make()
+        try fixture.addUnexpectedDirectoryWithHiddenFile(path: "unexpected")
+
+        #expect(throws: GemmaModelVerificationError.unexpectedDirectory("unexpected")) {
+            _ = try fixture.verifier.verify(directory: fixture.root)
+        }
+    }
+
+    @Test("a file swap or symlink after metadata preflight fails closed")
+    func postPreflightFileChangesFailClosed() throws {
+        let swappedFixture = try Fixture.make()
+        #expect(throws: GemmaModelVerificationError.entryChanged("weights.bin")) {
+            _ = try swappedFixture.verifier.verify(
+                directory: swappedFixture.root,
+                hooks: GemmaModelVerificationHooks(
+                    didCompleteMetadataPreflight: {
+                        try swappedFixture.replaceWeightsAtomically(with: Data("payload".utf8))
+                    }
+                )
+            )
+        }
+
+        let symlinkFixture = try Fixture.make()
+        #expect(throws: GemmaModelVerificationError.symbolicLinkNotAllowed("weights.bin")) {
+            _ = try symlinkFixture.verifier.verify(
+                directory: symlinkFixture.root,
+                hooks: GemmaModelVerificationHooks(
+                    didCompleteMetadataPreflight: {
+                        try symlinkFixture.replaceWeightsWithSymlink()
+                    }
+                )
+            )
+        }
+    }
+
+    @Test("the final metadata pass rejects additions and replacements after hashing")
+    func finalMetadataPassRejectsPostHashChanges() throws {
+        let addedFixture = try Fixture.make()
+        #expect(throws: GemmaModelVerificationError.entryChanged(".")) {
+            _ = try addedFixture.verifier.verify(
+                directory: addedFixture.root,
+                hooks: GemmaModelVerificationHooks(
+                    beforeFinalMetadataPass: {
+                        try addedFixture.addReadOnlyFile(path: "late.bin", contents: "late")
+                    }
+                )
+            )
+        }
+
+        let replacedFixture = try Fixture.make()
+        #expect(throws: GemmaModelVerificationError.entryChanged("weights.bin")) {
+            _ = try replacedFixture.verifier.verify(
+                directory: replacedFixture.root,
+                hooks: GemmaModelVerificationHooks(
+                    beforeFinalMetadataPass: {
+                        try replacedFixture.replaceWeightsInPlace(with: Data("payloae".utf8))
+                    }
+                )
+            )
+        }
+    }
+
+    @Test("descriptor verification rechecks the root after the final traversal")
+    func adoptedDescriptorRechecksRootAfterFinalTraversal() throws {
+        let fixture = try Fixture.make()
+        let descriptor = Darwin.open(
+            fixture.root.path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        try #require(descriptor >= 0)
+
+        #expect(throws: GemmaModelVerificationError.unexpectedFile("late-root.bin")) {
+            _ = try fixture.verifier.verify(
+                adoptingDirectoryDescriptor: descriptor,
+                expectedRootIdentity: fixture.rootIdentity(),
+                hooks: GemmaModelVerificationHooks(
+                    beforeCompletingFinalMetadataPass: {
+                        try fixture.addReadOnlyFile(path: "late-root.bin", contents: "late")
+                    }
+                )
+            )
+        }
+    }
+
+    @Test("descriptor verification confirms nested entries after the final traversal")
+    func adoptedDescriptorConfirmsNestedEntriesAfterFinalTraversal() throws {
+        let addedFixture = try Fixture.make(
+            additionalFiles: ["nested/expected.bin": Data("nested".utf8)]
+        )
+        let addedDescriptor = Darwin.open(
+            addedFixture.root.path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        try #require(addedDescriptor >= 0)
+
+        #expect(throws: GemmaModelVerificationError.entryChanged("nested")) {
+            _ = try addedFixture.verifier.verify(
+                adoptingDirectoryDescriptor: addedDescriptor,
+                expectedRootIdentity: addedFixture.rootIdentity(),
+                hooks: GemmaModelVerificationHooks(
+                    beforeCompletingFinalMetadataPass: {
+                        try addedFixture.addReadOnlyFile(
+                            inDirectory: "nested",
+                            path: "late.bin",
+                            contents: "late"
+                        )
+                    }
+                )
+            )
+        }
+
+        let replacedFixture = try Fixture.make(
+            additionalFiles: ["nested/expected.bin": Data("nested".utf8)]
+        )
+        let replacedDescriptor = Darwin.open(
+            replacedFixture.root.path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        try #require(replacedDescriptor >= 0)
+
+        #expect(throws: GemmaModelVerificationError.entryChanged("nested/expected.bin")) {
+            _ = try replacedFixture.verifier.verify(
+                adoptingDirectoryDescriptor: replacedDescriptor,
+                expectedRootIdentity: replacedFixture.rootIdentity(),
+                hooks: GemmaModelVerificationHooks(
+                    beforeCompletingFinalMetadataPass: {
+                        try replacedFixture.replaceReadOnlyFileInPlace(
+                            path: "nested/expected.bin",
+                            contents: Data("nestee".utf8)
+                        )
+                    }
+                )
+            )
+        }
+    }
+
+    @Test("successful verification reads only manifest-listed model files once")
+    func successfulVerificationReadsOnlyExpectedModelContent() throws {
+        let index = Data(
+            "{\"weight_map\":{\"layer\":\"model-00001-of-00001.safetensors\"}}".utf8
+        )
+        let fixture = try Fixture.make(
+            primaryPath: "model-00001-of-00001.safetensors",
+            additionalFiles: [
+                "model.safetensors.index.json": index,
+                "tokenizer.json": Data("tokenizer".utf8),
+            ]
+        )
+        let reads = VerificationReadRecorder()
+
+        _ = try fixture.verifier.verify(
+            directory: fixture.root,
+            hooks: GemmaModelVerificationHooks(
+                beforeReadingModelContent: { reads.record($0) }
+            )
+        )
+
+        #expect(reads.paths() == [
+            "model-00001-of-00001.safetensors",
+            "model.safetensors.index.json",
+            "tokenizer.json",
+        ])
+    }
+
     @Test("a safetensors index cannot escape or reference an unmanifested shard")
     func safetensorsIndexIsBoundToManifest() throws {
         let escaping = Data("{\"weight_map\":{\"layer\":\"../outside.safetensors\"}}".utf8)
@@ -1257,6 +1459,19 @@ struct GemmaModelVerifierTests {
         )) {
             _ = try uppercaseFixture.verifier.verify(directory: uppercaseFixture.root)
         }
+    }
+}
+
+private final class VerificationReadRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedPaths: [String] = []
+
+    func record(_ path: String) {
+        lock.withLock { recordedPaths.append(path) }
+    }
+
+    func paths() -> [String] {
+        lock.withLock { recordedPaths }
     }
 }
 
@@ -1402,7 +1617,7 @@ private final class ShardCopyCheckpoint: @unchecked Sendable {
     }
 }
 
-private final class Fixture {
+private final class Fixture: @unchecked Sendable {
     static let modelIdentifier = "mlx-community/gemma-4-2b-it-4bit"
     static let checkpointRevision = "0123456789abcdef0123456789abcdef01234567"
     static let adapterRevision = "37688d2cf7d3906e08c74479c9d9949ce6b81136"
@@ -1560,6 +1775,54 @@ private final class Fixture {
         try Data(contents.utf8).write(to: url)
         try Self.chmod(url, 0o400)
         try Self.chmod(root, 0o500)
+    }
+
+    func addReadOnlyFile(inDirectory directoryPath: String, path: String, contents: String) throws {
+        let directory = root.appendingPathComponent(directoryPath, isDirectory: true)
+        try Self.chmod(directory, 0o700)
+        defer { _ = Darwin.chmod(directory.path, 0o500) }
+        let url = directory.appendingPathComponent(path)
+        try Data(contents.utf8).write(to: url)
+        try Self.chmod(url, 0o400)
+    }
+
+    func replaceReadOnlyFileInPlace(path: String, contents: Data) throws {
+        let url = root.appendingPathComponent(path)
+        try Self.chmod(url, 0o600)
+        defer { _ = Darwin.chmod(url.path, 0o400) }
+        try contents.write(to: url)
+    }
+
+    func addSparseReadOnlyFile(path: String, size: Int64) throws {
+        try Self.chmod(root, 0o700)
+        defer { _ = Darwin.chmod(root.path, 0o500) }
+        let url = root.appendingPathComponent(path)
+        let descriptor = Darwin.open(url.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        defer { _ = Darwin.close(descriptor) }
+        guard Darwin.ftruncate(descriptor, off_t(size)) == 0 else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        try Self.chmod(url, 0o400)
+    }
+
+    func addUnexpectedDirectoryWithHiddenFile(path: String) throws {
+        try Self.chmod(root, 0o700)
+        defer { _ = Darwin.chmod(root.path, 0o500) }
+        let directory = root.appendingPathComponent(path, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        try Data("hidden".utf8).write(to: directory.appendingPathComponent(".hidden"))
+        try Self.chmod(directory.appendingPathComponent(".hidden"), 0o400)
+        try Self.chmod(directory, 0o500)
+    }
+
+    func replaceWeightsWithSymlink() throws {
+        try Self.chmod(root, 0o700)
+        defer { _ = Darwin.chmod(root.path, 0o500) }
+        try FileManager.default.removeItem(at: weightsURL)
+        try FileManager.default.createSymbolicLink(at: weightsURL, withDestinationURL: manifestURL)
     }
 
     static func chmod(_ url: URL, _ mode: mode_t) throws {
