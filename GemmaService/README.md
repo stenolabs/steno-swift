@@ -7,7 +7,7 @@ The `MLXFoundationModels` adapter provides API compatibility with `LanguageModel
 
 It is intentionally a separate Swift package.
 The MLX runtime package is not a dependency of `StenoKit`, either supported Xcode 26 application target, or the model-free Xcode 27 application target.
-The Xcode 27 application target links only the dependency-free IPC client and embeds the model-free helper.
+The Xcode 27 application target links the MLX-free IPC client and model store and embeds the model-free helper.
 This keeps MLX and Metal out of the process that owns an irreplaceable recording and leaves the supported Xcode 26 build unchanged.
 
 ## Current status
@@ -30,11 +30,14 @@ This first slice provides:
 - an exact-process exit protocol in which the authenticated helper arms itself, the client closes that exact connection without another message, and recording proceeds only after the observed helper PID exits; and
 - a global crash-releasing recording and model gate, with the file descriptor bound in the first XPC control frame;
 - a session-scoped client with automatic terminal retirement; and
+- a consent chokepoint with one-shot, pin-bound, source-inode-bound confirmations and an empty production checkpoint catalog;
+- an MLX-free importer that copies only a fully pinned local manifest into a content-addressed Steno-controlled store, publishes without replacement, and returns path-free provenance;
+- descriptor-bound source and installed-tree verification with exact ownership, mode, hard-link, entry, size, checksum, and root-inode checks; and
 - signed positive XPC integration and app tests that verify fail-closed inference, exact helper absence within the owning app process before a recording lease, failure before permission UI, permission-denial release, and concurrent first-use initialization.
 
 It does not yet provide:
 
-- an app setting or production model installer or importer and store;
+- an app setting, an approved production checkpoint catalog, or a user-facing import flow;
 - automatic checkpoint downloads;
 - report generation from the Steno app;
 - Hardened Runtime validation for the production app and a Release-specific entitlement policy;
@@ -43,7 +46,7 @@ It does not yet provide:
 - a real model run; or
 - a production support commitment for any specific converted checkpoint.
 
-The standalone SwiftPM package contains the verified local model-loading path, while the Xcode 27 variant currently exercises only the model-free XPC boundary.
+The standalone SwiftPM package contains the verified local model-loading path, while the Xcode 27 variant currently exercises the model-free XPC, gate, consent, and store boundaries.
 The helper has no incoming or outgoing network entitlement in that project variant, and the app-facing provider remains deliberately unavailable.
 The verified model runtime is not yet activated through the helper, and the app does not expose this provider.
 A standalone SwiftPM executable has no operating-system network sandbox, so source-level absence of a download path must not be described as a hard network guarantee.
@@ -54,11 +57,12 @@ The service never accepts a Hub model identifier as a loading source.
 It gives the MLX adapter a cache identity derived from the pinned manifest, resolves model weights and the tokenizer from the verified directory, and defines no remote fallback in Steno's loading code.
 
 Before the directory can be used, every regular file must appear in a manifest with its exact byte count and SHA-256 digest.
-The verifier rejects traversal paths, absolute paths, a symbolic-link root, symbolic-link entries inside the snapshot, missing files, unexpected files, duplicate entries, size differences, hash differences, and an unpinned or mismatched manifest.
+The verifier rejects traversal paths, hidden components, non-ASCII paths, case or normalization collisions, absolute paths, a symbolic-link root, symbolic-link entries inside the snapshot, missing files, unexpected files, duplicate entries, hard-linked installed files, wrong ownership or modes, size differences, hash differences, and an unpinned or mismatched manifest.
 It also rejects safetensors indexes whose shard paths escape the snapshot or refer to files absent from the manifest.
-The factory revalidates the directory immediately before MLX loads it.
-This path-based revalidation narrows but cannot eliminate a time-of-check-to-time-of-use window if another process can mutate the directory concurrently.
-A production installer must therefore place the verified snapshot in a Steno-controlled location whose sandbox permissions prevent untrusted mutation while the helper can access it.
+The verifier holds directory descriptors, opens descendants with `openat` and `O_NOFOLLOW`, compares metadata before and after reads, binds the verified capability to the root device and inode, and repeats that complete check immediately before MLX loads it.
+The importer writes through retained descriptors into a private sibling staging directory, synchronizes files and directories, sets files to `0400` and directories to `0500`, and publishes to `~/Library/Application Support/Steno/NativeGemma/Models/v1/<manifest-sha256>` with a no-replace rename.
+Those modes prevent accidental changes and expose tampering, but they are not a security boundary against another process running as the same macOS user.
+The complete import and recovery contract is documented in [Native Gemma model store](../docs/NATIVE-GEMMA-MODEL-STORE.md).
 
 The manifest records model provenance and license metadata, but recording those strings is not a license review.
 Steno does not include or distribute Gemma weights in this repository.
@@ -112,6 +116,7 @@ swift run --package-path GemmaService steno-gemma-service --self-check
 
 Model verification requires a local checkpoint directory, its pinned identity and license metadata, and the SHA-256 digest of the exact manifest bytes.
 No model is loaded during verification.
+The command applies the installed-store contract: the root and nested directories must be owner-only `0500`, regular files must be owner-only `0400`, and the tree must contain no hidden or unlisted entries.
 
 ```bash
 swift run --package-path GemmaService steno-gemma-service \
@@ -127,7 +132,7 @@ It must not be read from the same untrusted checkpoint directory it is meant to 
 
 ## Remaining production work
 
-The remaining production work is to validate Hardened Runtime and the Release entitlement policy, implement the consented immutable model importer and store, select a buildable matched MLX dependency snapshot, activate the MLX provider through the helper, and complete a real model run.
+The remaining production work is to bind model import to the app-wide recording exclusion, review and add one exact checkpoint to the currently empty production catalog, expose the consented import flow, define explicit orphan and corrupt-install recovery, validate Hardened Runtime and the Release entitlement policy, select a buildable matched MLX dependency snapshot, activate the MLX provider through the helper, and complete a real model run.
 Negative signed abuse and multiprocess XPC coverage must be complete before native Gemma is activated.
 The normative design for that boundary is [Native Gemma cross-process gate](../docs/NATIVE-GEMMA-GATE.md).
 Approved manifests and expected digests must live in Steno-controlled metadata, and installation must route through `ModelInstallationCoordinator` with explicit consent.

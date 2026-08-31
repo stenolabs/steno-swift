@@ -27,9 +27,12 @@ targets:
         product: StenoGemmaClient
       - package: GemmaIPC
         product: StenoGemmaIPC
+      - package: GemmaIPC
+        product: StenoGemmaModelStore
     settings:
       base:
         MACOSX_DEPLOYMENT_TARGET: "27.0"
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) STENO_NATIVE_GEMMA_MODEL_STORE"
 
   StenoTests:
     sources:
@@ -39,9 +42,12 @@ targets:
         product: StenoGemmaIPC
       - package: GemmaClient
         product: StenoGemmaClient
+      - package: GemmaIPC
+        product: StenoGemmaModelStore
     settings:
       base:
         MACOSX_DEPLOYMENT_TARGET: "27.0"
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) STENO_NATIVE_GEMMA_MODEL_STORE"
 
   StenoGemmaXPC:
     type: xpc-service
