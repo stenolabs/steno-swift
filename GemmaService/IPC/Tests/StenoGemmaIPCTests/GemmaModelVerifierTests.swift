@@ -601,6 +601,85 @@ struct GemmaModelVerifierTests {
         )
     }
 
+    @Test("descriptor handoff retains exact files through ACK and builds path-free assets")
+    func descriptorHandoffBuildsDescriptorOnlyActivationAssets() throws {
+        let fixture = try Fixture.make(
+            primaryPath: "model-00001-of-00001.safetensors",
+            primaryContents: Fixture.validSafetensorsData(),
+            additionalFiles: ["tokenizer.json": Data("tokenizer".utf8)]
+        )
+        let handoff = try adoptedDirectory(from: fixture).consumeDescriptorHandoff()
+        #expect(handoff.files.map(\.relativePath) == [
+            "gemma-model-manifest.json",
+            "model-00001-of-00001.safetensors",
+            "tokenizer.json",
+        ])
+        #expect(handoff.files.first?.sha256 == fixture.manifestDigest)
+
+        var adoptedRoot = Int32(-1)
+        var adoptedFiles: [String: Int32] = [:]
+        try handoff.withBorrowedFileDescriptors { root, files in
+            adoptedRoot = Darwin.fcntl(root, F_DUPFD_CLOEXEC, 0)
+            for (path, descriptor) in files {
+                let duplicate = Darwin.fcntl(descriptor, F_DUPFD_CLOEXEC, 0)
+                try #require(duplicate >= 0)
+                adoptedFiles[path] = duplicate
+            }
+        }
+        try #require(adoptedRoot >= 0)
+        #expect(throws: GemmaModelVerificationError.activationAssetsUnavailable) {
+            try handoff.withBorrowedFileDescriptors { _, _ in () }
+        }
+
+        let assets = try fixture.verifier.makeActivationAssets(
+            adoptingDescriptorHandoffRootDescriptor: adoptedRoot,
+            fileDescriptorsByRelativePath: adoptedFiles,
+            expectedRootIdentity: try fixture.rootIdentity(),
+            limits: try activationLimits()
+        )
+        handoff.close()
+
+        try assets.consume { borrowed in
+            #expect(borrowed.data(forRelativePath: "tokenizer.json") == Data("tokenizer".utf8))
+            try borrowed.consumeSafetensorsFiles { shard in
+                #expect(shard.relativePath == "model-00001-of-00001.safetensors")
+            }
+        }
+    }
+
+    @Test("descriptor handoff adoption rejects duplicate descriptor identities")
+    func descriptorHandoffAdoptionRejectsDuplicateFileIdentities() throws {
+        let fixture = try Fixture.make()
+        let root = Darwin.open(fixture.root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        let manifest = Darwin.open(fixture.manifestURL.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        try #require(root >= 0)
+        try #require(manifest >= 0)
+        let duplicateManifest = Darwin.fcntl(manifest, F_DUPFD_CLOEXEC, 0)
+        try #require(duplicateManifest >= 0)
+
+        #expect(throws: GemmaModelVerificationError.entryChanged("weights.bin")) {
+            _ = try fixture.verifier.makeActivationAssets(
+                adoptingDescriptorHandoffRootDescriptor: root,
+                fileDescriptorsByRelativePath: [
+                    "gemma-model-manifest.json": manifest,
+                    "weights.bin": duplicateManifest,
+                ],
+                expectedRootIdentity: try fixture.rootIdentity(),
+                limits: try activationLimits()
+            )
+        }
+    }
+
+    private func activationLimits() throws -> VerifiedGemmaModelActivationLimits {
+        try VerifiedGemmaModelActivationLimits(
+            maximumSmallFileByteCount: 1024 * 1024,
+            maximumTotalSmallFileByteCount: 4 * 1024 * 1024,
+            maximumSafetensorsFileCount: 8,
+            maximumSafetensorsFileByteCount: 1024 * 1024,
+            maximumTotalSafetensorsByteCount: 8 * 1024 * 1024
+        )
+    }
+
     private func activatedAssets(
         from fixture: Fixture,
         maximumSafetensorsFileByteCount: Int64 = 1024 * 1024,

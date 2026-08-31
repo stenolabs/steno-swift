@@ -2,8 +2,9 @@ import Foundation
 
 /// The canonical version of Steno's narrow, local-only Gemma helper protocol.
 public enum GemmaIPCProtocol {
-    /// Version 4 atomically binds the exact model pin, verified root identity, and helper identity.
-    public static let currentVersion = 4
+    /// Version 5 atomically binds the exact model pin, verified root identity, file manifest,
+    /// and helper identity.
+    public static let currentVersion = 5
     public static let maximumEncodedMessageBytes = 256 * 1024
     public static let maximumTextBytes = 128 * 1024
     public static let maximumGenerationTokens = 4_096
@@ -143,7 +144,7 @@ public struct GemmaModelSnapshotPin: Codable, Sendable, Equatable {
         }
     }
 
-    private static func isSHA256(_ value: String) -> Bool {
+    fileprivate static func isSHA256(_ value: String) -> Bool {
         value.utf8.count == 64 && value.utf8.allSatisfy(Self.isLowercaseHexByte)
     }
 
@@ -166,6 +167,8 @@ public enum GemmaIPCValidationError: Error, Equatable, Sendable {
     case invalidPinValue(String)
     case invalidManifestSHA256
     case invalidModelRootIdentity
+    case invalidModelFileMetadata(String)
+    case invalidModelFileMetadataOrder
     case textTooLarge(limit: Int, actual: Int)
     case invalidMaximumGenerationTokens
 }
@@ -638,20 +641,111 @@ public struct GemmaIPCModelRootIdentity: Codable, Sendable, Equatable {
     }
 }
 
+/// The path-free descriptor metadata that must agree with every file descriptor in a model bind.
+///
+/// The name is a canonical relative name inside the already verified model root. It is metadata,
+/// not a path the helper is allowed to resolve. The actual bytes arrive only as XPC descriptors.
+public struct GemmaIPCModelFileMetadata: Codable, Sendable, Equatable {
+    public let relativePath: String
+    public let size: Int64
+    public let sha256: String
+
+    public init(relativePath: String, size: Int64, sha256: String) throws {
+        guard Self.isCanonicalRelativePath(relativePath) else {
+            throw GemmaIPCValidationError.invalidModelFileMetadata("relativePath")
+        }
+        guard size >= 0 else {
+            throw GemmaIPCValidationError.invalidModelFileMetadata("size")
+        }
+        guard GemmaModelSnapshotPin.isSHA256(sha256) else {
+            throw GemmaIPCValidationError.invalidModelFileMetadata("sha256")
+        }
+        self.relativePath = relativePath
+        self.size = size
+        self.sha256 = sha256
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case relativePath
+        case size
+        case sha256
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            relativePath: container.decode(String.self, forKey: .relativePath),
+            size: container.decode(Int64.self, forKey: .size),
+            sha256: container.decode(String.self, forKey: .sha256)
+        )
+    }
+
+    private static func isCanonicalRelativePath(_ value: String) -> Bool {
+        let bytes = value.utf8
+        guard !bytes.isEmpty,
+              bytes.count <= 1_024,
+              !value.hasPrefix("/"),
+              !value.hasPrefix("~"),
+              bytes.allSatisfy({ (0x21 ... 0x7e).contains($0) && $0 != 0x5c && $0 != 0x3a })
+        else {
+            return false
+        }
+        let components = value.split(separator: "/", omittingEmptySubsequences: false)
+        return components.count <= 8 && components.allSatisfy {
+            !$0.isEmpty && !$0.hasPrefix(".") && $0.utf8.count <= 255
+        }
+    }
+}
+
 /// The path-free portion of an atomic model-session bind request.
 ///
-/// The raw XPC frame carries the corresponding execution-gate and model-root descriptors,
-/// never JSON-encoded descriptor numbers.
+/// The raw XPC frame carries the corresponding execution-gate, model-root, and model-file
+/// descriptors, never JSON-encoded descriptor numbers.
 public struct GemmaIPCBindSessionRequest: Codable, Sendable, Equatable {
     public let model: GemmaModelSnapshotPin
     public let expectedModelRootIdentity: GemmaIPCModelRootIdentity
+    public let expectedModelFiles: [GemmaIPCModelFileMetadata]
 
     public init(
         model: GemmaModelSnapshotPin,
-        expectedModelRootIdentity: GemmaIPCModelRootIdentity
-    ) {
+        expectedModelRootIdentity: GemmaIPCModelRootIdentity,
+        expectedModelFiles: [GemmaIPCModelFileMetadata]
+    ) throws {
+        guard !expectedModelFiles.isEmpty,
+              expectedModelFiles.count <= 4_097,
+              expectedModelFiles.map(\.relativePath) == expectedModelFiles.map(\.relativePath).sorted(),
+              Set(expectedModelFiles.map(\.relativePath)).count == expectedModelFiles.count,
+              expectedModelFiles.contains(where: {
+                  $0.relativePath == "gemma-model-manifest.json"
+                      && $0.sha256 == model.manifestSHA256
+              })
+        else {
+            throw GemmaIPCValidationError.invalidModelFileMetadataOrder
+        }
         self.model = model
         self.expectedModelRootIdentity = expectedModelRootIdentity
+        self.expectedModelFiles = expectedModelFiles
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case model
+        case expectedModelRootIdentity
+        case expectedModelFiles
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            model: container.decode(GemmaModelSnapshotPin.self, forKey: .model),
+            expectedModelRootIdentity: container.decode(
+                GemmaIPCModelRootIdentity.self,
+                forKey: .expectedModelRootIdentity
+            ),
+            expectedModelFiles: container.decode(
+                [GemmaIPCModelFileMetadata].self,
+                forKey: .expectedModelFiles
+            )
+        )
     }
 }
 
@@ -970,7 +1064,10 @@ private struct GemmaJSONDuplicateKeyValidator {
         skipWhitespace()
         if consume(0x7D) { return }
 
-        var keys = Set<String>()
+        // JSON object names are equal by their decoded Unicode scalar sequence, not by
+        // Swift's canonical-equivalence String comparison. Tokenizer vocabularies may
+        // intentionally contain canonically equivalent but byte-distinct tokens.
+        var keys = Set<[UInt8]>()
         while true {
             skipWhitespace()
             guard currentByte == 0x22 else {
@@ -978,7 +1075,7 @@ private struct GemmaJSONDuplicateKeyValidator {
             }
             let keyRange = try parseString()
             let key = try JSONDecoder().decode(String.self, from: data.subdata(in: keyRange))
-            guard keys.insert(key).inserted else {
+            guard keys.insert(Array(key.utf8)).inserted else {
                 throw GemmaIPCCodecError.malformedMessage
             }
 
@@ -1173,7 +1270,9 @@ private enum GemmaXPCControlJSONSchema {
         "modelIdentifier", "checkpointRevision", "adapterRevision", "licenseIdentifier", "manifestSHA256",
     ]
     private static let modelRootIdentityKeys: Set<String> = ["deviceID", "fileID"]
-    private static let bindSessionRequestKeys: Set<String> = ["model", "expectedModelRootIdentity"]
+    private static let bindSessionRequestKeys: Set<String> = [
+        "model", "expectedModelRootIdentity", "expectedModelFiles",
+    ]
     private static let bindSessionResponseKeys: Set<String> = [
         "model", "expectedModelRootIdentity", "helperIdentity",
     ]
@@ -1189,6 +1288,13 @@ private enum GemmaXPCControlJSONSchema {
             let payload = try object(body["payload"], keys: bindSessionRequestKeys)
             _ = try object(payload["model"], keys: modelPinKeys)
             _ = try object(payload["expectedModelRootIdentity"], keys: modelRootIdentityKeys)
+            let files = try array(payload["expectedModelFiles"])
+            guard !files.isEmpty else {
+                throw GemmaIPCCodecError.malformedMessage
+            }
+            for file in files {
+                _ = try object(file, keys: ["relativePath", "size", "sha256"])
+            }
         case GemmaXPCControlOperation.prepareForExit.rawValue:
             _ = try object(body["payload"], keys: [])
         case GemmaXPCControlOperation.armAndExit.rawValue:
@@ -1229,6 +1335,13 @@ private enum GemmaXPCControlJSONSchema {
             throw GemmaIPCCodecError.malformedMessage
         }
         return object
+    }
+
+    private static func array(_ value: Any?) throws -> [Any] {
+        guard let array = value as? [Any] else {
+            throw GemmaIPCCodecError.malformedMessage
+        }
+        return array
     }
 }
 

@@ -9,10 +9,21 @@ import Testing
 
 @Suite("Native Gemma text-model provider")
 struct NativeGemmaTextModelProviderTests {
-    @Test("production remains unavailable while every native catalog is empty")
-    func productionCatalogIsEmpty() throws {
+    @Test("production approves only the exact Gemma 4 E2B snapshot")
+    func productionCatalogPinsGemma4E2B() throws {
+        let approved = NativeGemmaProviderCatalog.gemma4E2BSnapshot
+        let coordinator = NativeGemmaProviderCoordinatorProbe(responseText: "")
+        let provider = try NativeGemmaTextModelProvider(
+            snapshot: approved,
+            coordinator: coordinator
+        )
+
+        #expect(provider.descriptor == .mlxGemma(snapshot: approved))
         #expect(throws: NativeGemmaTextModelProviderError.modelNotApproved) {
-            _ = try NativeGemmaTextModelProvider(snapshot: snapshot())
+            _ = try NativeGemmaTextModelProvider(
+                snapshot: snapshot(),
+                coordinator: coordinator
+            )
         }
     }
 

@@ -1,12 +1,14 @@
 # Native Gemma model store
 
-Status: the model store and app-side text-model provider are implemented as inactive MLX-free app boundaries, and the byte-backed runtime is connected only inside the helper, as of 31 August 2026.
+Status: the model store, app-side text-model provider, and minimal import and selection UI are implemented as MLX-free app boundaries, and the byte-backed runtime is connected only inside the helper, as of 31 August 2026.
 
 The accepted recovery design is an explicit, manually invoked Native Gemma crash-recovery engine.
 Recovery is not automatic publication, startup wiring, UI wiring, or model execution.
 
-The independent production checkpoint, app-provider, and helper-activation catalogs are empty, no import or provider UI is exposed, no model is downloaded, and no imported model is activated.
-This document defines the boundary that must remain intact when a reviewed checkpoint and UI are added later.
+The independent production checkpoint, app-provider, and helper-activation catalogs pin the same reviewed Gemma 4 E2B snapshot.
+The Xcode 27 app exposes explicit local-folder import and provider selection, and the exact pinned checkpoint has completed that import, helper activation, and one real Standup report during development.
+Steno still does not download a checkpoint.
+This document defines the boundary that the pinned checkpoint and UI must preserve.
 
 ## Authorization boundary
 
@@ -120,12 +122,14 @@ For safetensors, the later synchronous consume operation makes one complete `Dat
 Thus, “one copy” does not mean “one read” or “one hash pass.”
 The capability exposes neither filesystem paths nor raw file-descriptor numbers, dynamically expires every borrowed view, revalidates every binding after the consumer returns, and closes all descriptors on success, error, cancellation, or explicit close.
 An explicit close during `consume` marks the capability closed immediately, makes the next close-aware copy or verification checkpoint fail, and defers descriptor closure until the synchronous consume callback has returned.
-The size limits bound the verified source bytes handed to the trusted consumer, not allocations that the consumer or MLX may derive from them, and their fit for a checkpoint remains unknown until an exact reviewed checkpoint is selected.
+The size limits bound the verified source bytes handed to the trusted consumer, not allocations that the consumer or MLX may derive from them.
+The selected checkpoint fits those byte limits by its pinned manifest, and its successful bounded Steno run measured 1,971,600 KiB peak helper RSS.
 The trusted runtime publishes only the value returned by a successful activation consume operation and does not publish callback side effects before final revalidation.
 MLX materialization is implemented only through this byte boundary and is wired into the XPC helper behind an exact helper-controlled activation profile.
-Because the production activation catalog is empty, no installed pin can currently instantiate that runtime.
+The production activation catalog admits only the exact reviewed Gemma 4 E2B pin.
+No executor can be instantiated until that snapshot has passed the consented import and installed-store verification.
 The whole-shard `Data` bridge has caller-provided bounds and is consumed synchronously by the inactive loader.
-Whether those bounds fit a checkpoint remains unknown until an exact reviewed checkpoint is selected.
+The selected checkpoint fits those bounds by its pinned file sizes, and the bounded real-model run remained below the 8 GiB helper RSS ceiling without critical memory pressure.
 Every complete verified shard is strictly parsed before the trusted callback receives it.
 The callback receives immutable metadata and tensor descriptors, and duplicate raw tensor names across shards fail closed before the duplicate shard is delivered.
 
@@ -146,11 +150,13 @@ The loader must not enumerate or reopen weight paths, and availability must use 
 
 If the largest shard of the selected checkpoint does not fit the reviewed memory cap, Steno must not silently raise the cap.
 The alternatives are a deterministic tensor-preserving re-shard during consented import with explicit source and derivation provenance in a later manifest version, or a separately reviewed authenticated reader exposed through a public MLX API.
-That choice remains open because no production checkpoint has been selected or measured.
+The selected checkpoint uses one 3,550,670,554-byte shard within its exact reviewed cap.
+The bounded real-model run remained below the documented memory ceiling.
+Any future checkpoint or resource profile that exceeds its reviewed ceiling must remain unavailable until a separately reviewed storage strategy exists.
 
 Steno must not redeclare or dynamically resolve private `Cmlx` symbols, depend on checkout-internal header paths, expose lazy custom-reader arrays, or use a temporary named clone as the integrity boundary.
 No dependency fork or upstream change has been published.
-The production helper remains model-free in practice because its activation catalog contains no approved pin, even though the authenticated helper now contains the reviewed byte-backed activation path.
+The production helper contains one exact approved activation profile but remains model-free until the corresponding checkpoint is imported and explicitly selected.
 
 ## Activation boundary
 
@@ -182,4 +188,5 @@ The app-side native `TextModelProvider` requires the same snapshot in an indepen
 Every token count and generation request uses the same shared prompt assembly, generated output must decode as the exact strict JSON contract, and the session is retired before the render returns or throws.
 This provider has no Ollama, network, or `SystemLanguageModel` fallback.
 The exact MLX dependency snapshot builds with Xcode 27 Beta 6 and its matching Metal Toolchain component without loading a model.
-Provider activation remains unavailable until one reviewed production checkpoint and matching limits are present in all three independent catalogs, user-facing consent and import flow, an explicit user-authorized repair flow for retained corrupt targets, end-to-end Release recording and calendar validation under Hardened Runtime, app-facing provider selection, and a real offline model run are accepted.
+The same exact checkpoint and matching limits are now present in all three independent catalogs, and the Xcode 27 app exposes the consented import and provider-selection flow.
+Production acceptance still requires final license review, an explicit user-authorized repair flow for retained corrupt targets, longer-template validation, and end-to-end Release recording and calendar validation under Hardened Runtime.

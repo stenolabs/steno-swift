@@ -4,7 +4,9 @@ Status: implemented and covered by gate-only and signed XPC integration tests.
 
 The global crash-releasing gate is the implemented exclusion boundary.
 The signed XPC binding, session-scoped client lifecycle, and helper self-exit path are implemented.
-The native provider remains inactive until one exact reviewed production checkpoint, user-facing consent and selection, recovery behavior, and a bounded real-model run are accepted.
+The Xcode 27 app now pins one exact Gemma 4 E2B checkpoint and exposes consented local import and provider selection.
+The provider remains unavailable until that exact checkpoint is verified in the local store.
+The bounded real-model run documented in [Native Gemma checkpoint](NATIVE-GEMMA-CHECKPOINT.md) completed successfully, while final license review and remaining Release validations remain open.
 
 This contract defines the macOS 27 exclusion boundary between audio capture and native Gemma work.
 It is intentionally independent of the model checkpoint, MLX, the meeting library, and the configured model directory.

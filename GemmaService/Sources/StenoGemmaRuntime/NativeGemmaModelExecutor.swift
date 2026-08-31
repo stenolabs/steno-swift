@@ -33,6 +33,7 @@ public enum NativeGemmaExecutorFactory {
 
         let activated = try GemmaLanguageModelFactory.makeActivatedLanguageModel(
             consuming: activationAssets,
+            modelLayout: profile.modelLayout,
             cancellationCheck: cancellationCheck
         )
         let executor = NativeGemmaModelExecutor(

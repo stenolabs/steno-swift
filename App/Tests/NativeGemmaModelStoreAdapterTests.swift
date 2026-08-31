@@ -21,7 +21,7 @@ struct NativeGemmaModelStoreAdapterTests {
         }
     }
 
-    @Test("the empty production catalog rejects activation before store resolution")
+    @Test("the production catalog rejects an unapproved pin before store resolution")
     func productionCatalogRejectsUnapprovedActivation() throws {
         let approvedPin = try pin(adapterRevision: GemmaIPCBuildInfo.adapterRevision)
         let model = try GemmaModelSnapshotPin(

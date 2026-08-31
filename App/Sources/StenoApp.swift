@@ -5,6 +5,9 @@ import SwiftUI
 struct StenoApp: App {
     @State private var model = AppModel()
     @State private var textModelSettings = TextModelSettings()
+    #if STENO_NATIVE_GEMMA_MODEL_STORE && canImport(StenoGemmaClient)
+    @State private var nativeGemmaModelSettings = NativeGemmaModelSettings()
+    #endif
     @State private var operatorProfile = OperatorProfile.shared
     @State private var onboarding = OnboardingModel()
     @Environment(\.openWindow) private var openWindow
@@ -15,9 +18,15 @@ struct StenoApp: App {
             ContentView()
                 .environment(model)
                 .environment(textModelSettings)
+                #if STENO_NATIVE_GEMMA_MODEL_STORE && canImport(StenoGemmaClient)
+                .environment(nativeGemmaModelSettings)
+                #endif
                 .environment(operatorProfile)
                 .environment(onboarding)
             .task {
+                #if STENO_NATIVE_GEMMA_MODEL_STORE && canImport(StenoGemmaClient)
+                Task { await nativeGemmaModelSettings.refreshInstalled() }
+                #endif
                 // Vor `bootstrap`, damit der erste Start nicht erst die
                 // Bibliothek oeffnet und dann den Wizard nachschiebt.
                 if !onboarding.isFinished { openWindow(id: "onboarding") }
@@ -103,6 +112,9 @@ struct StenoApp: App {
             LibraryChatWindow()
                 .environment(model)
                 .environment(textModelSettings)
+                #if STENO_NATIVE_GEMMA_MODEL_STORE && canImport(StenoGemmaClient)
+                .environment(nativeGemmaModelSettings)
+                #endif
         }
         .defaultSize(width: 820, height: 640)
 
@@ -110,6 +122,9 @@ struct StenoApp: App {
             SettingsView()
                 .environment(model)
                 .environment(textModelSettings)
+                #if STENO_NATIVE_GEMMA_MODEL_STORE && canImport(StenoGemmaClient)
+                .environment(nativeGemmaModelSettings)
+                #endif
                 .environment(operatorProfile)
         }
     }

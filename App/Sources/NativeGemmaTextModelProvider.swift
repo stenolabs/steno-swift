@@ -81,6 +81,14 @@ struct NativeGemmaProviderProfile: Equatable, Sendable {
 }
 
 struct NativeGemmaProviderCatalog: Sendable {
+    static let gemma4E2BSnapshot = NativeGemmaModelSnapshot(
+        modelIdentifier: "mlx-community/gemma-4-e2b-it-4bit",
+        checkpointRevision: "238767527555cb75a05732a84dff5d6ba0dd6809",
+        adapterRevision: GemmaIPCBuildInfo.adapterRevision,
+        licenseIdentifier: "gemma",
+        manifestSHA256: "dab4d380ff03b1e6ac34fa47a0db672e540ee399b9d04dc765ba832a6f59cca5"
+    )
+
     private let profiles: [NativeGemmaProviderProfile]
 
     init(profiles: [NativeGemmaProviderProfile]) {
@@ -96,9 +104,15 @@ struct NativeGemmaProviderCatalog: Sendable {
         return match
     }
 
-    /// Deliberately empty until one exact checkpoint and its measured resource envelope are
-    /// approved for import and helper activation.
-    static let production = NativeGemmaProviderCatalog(profiles: [])
+    /// Exactly one local checkpoint is available, with a deliberately small prompt and response
+    /// budget for the first measured macOS 27 integration.
+    static let production = NativeGemmaProviderCatalog(profiles: [
+        try? NativeGemmaProviderProfile(
+            snapshot: gemma4E2BSnapshot,
+            maximumPromptTokens: 4_096,
+            maximumResponseTokens: 256
+        ),
+    ].compactMap { $0 })
 }
 
 /// A native, local-only text-model provider backed by one closure-scoped helper session.

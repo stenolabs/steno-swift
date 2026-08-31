@@ -842,7 +842,7 @@ private final class SourceSnapshotSession {
             try cancellation.check()
             var status = stat()
             guard Darwin.fstat(directory.descriptor, &status) == 0,
-                  EntryMetadata(status) == directory.metadata else {
+                  EntryMetadata(status).matchesDirectorySnapshot(directory.metadata) else {
                 throw NativeGemmaModelImportError.sourceRejected(path.isEmpty ? "." : path)
             }
             if let parentPath = directory.parentPath,
@@ -852,7 +852,7 @@ private final class SourceSnapshotSession {
                 guard name.withCString({
                     Darwin.fstatat(parent.descriptor, $0, &entryStatus, AT_SYMLINK_NOFOLLOW)
                 }) == 0,
-                    EntryMetadata(entryStatus) == directory.metadata
+                    EntryMetadata(entryStatus).matchesDirectorySnapshot(directory.metadata)
                 else {
                     throw NativeGemmaModelImportError.sourceRejected(path)
                 }
@@ -1961,5 +1961,15 @@ private struct EntryMetadata: Equatable, Sendable {
         modifiedNanoseconds = status.st_mtimespec.tv_nsec
         changedSeconds = status.st_ctimespec.tv_sec
         changedNanoseconds = status.st_ctimespec.tv_nsec
+    }
+
+    func matchesDirectorySnapshot(_ other: Self) -> Bool {
+        identity == other.identity
+            && mode == other.mode
+            && linkCount == other.linkCount
+            && ownerID == other.ownerID
+            && byteCount == other.byteCount
+            && modifiedSeconds == other.modifiedSeconds
+            && modifiedNanoseconds == other.modifiedNanoseconds
     }
 }

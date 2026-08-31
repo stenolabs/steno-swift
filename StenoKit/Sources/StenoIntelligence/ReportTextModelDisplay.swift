@@ -13,9 +13,13 @@ public enum ReportTextModelDisplay: Equatable, Sendable {
         pendingEndpointSnapshot: TextModelEndpointSnapshot?,
         pendingNativeGemmaModelSnapshot: NativeGemmaModelSnapshot? = nil,
         selectedEndpointSnapshot: TextModelEndpointSnapshot?,
+        selectedNativeGemmaModelSnapshot: NativeGemmaModelSnapshot? = nil,
         configuredEndpoints: [TextModelEndpoint]
     ) -> Self {
         guard isPending else {
+            if let selectedNativeGemmaModelSnapshot {
+                return .nativeGemma(selectedNativeGemmaModelSnapshot)
+            }
             return selectedEndpointSnapshot.map(Self.external) ?? .apple
         }
         if let pendingEndpointSnapshot {

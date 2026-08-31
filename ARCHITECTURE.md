@@ -293,9 +293,9 @@ The order follows the handoff with one correction: milestone 1 already needs min
    Mutual caller authentication, strict IPC correlation, bounded client deadlines, a server-side request registry with targeted cancellation and true task-and-reply quiescence, exact helper-process exit proof, and one app-process-wide recording coordinator are implemented and covered by model-free tests.
    That coordinator also excludes model import from recording, requests cancellation of the exact active import, and waits for complete import quiescence before recording permission or capture.
    The importer verifies its source before store access, takes a process-wide mutation lease on the shared gate's byte 1, observes recording intent on byte 0 at bounded checkpoints, cleans up its own staging tree before commit, synchronizes the parent namespace, releases the lease, and then completes non-cancellable post-publication verification.
-   The crash-releasing cross-process gate and protocol-v4 atomic gate-and-model-directory descriptor bind are implemented and documented in `docs/NATIVE-GEMMA-GATE.md`.
-   The helper performs descriptor-rooted verification at bind time, retains the root capability, and binds every model request to the exact session model pin.
-   The consented local importer, app import facade, and content-addressed model store are implemented as an MLX-free boundary and documented in `docs/NATIVE-GEMMA-MODEL-STORE.md`; the production checkpoint catalog remains empty.
+   The crash-releasing cross-process gate and protocol-v5 atomic bind of the gate, verified model root, and exact model-file descriptors are implemented and documented in `docs/NATIVE-GEMMA-GATE.md`.
+   The helper performs descriptor-only verification at bind time and binds every model request to the exact session model pin.
+   The consented local importer, app import facade, content-addressed model store, and minimal import and provider-selection UI are implemented as an MLX-free app boundary and documented in `docs/NATIVE-GEMMA-MODEL-STORE.md`.
    The store root and gate-file path share one gate configuration, and local app coordination continues to drain the exact import task before recording admission.
    The app can resolve only one exact app-approved manifest digest from an already existing store hierarchy, verifies that installed tree through an adopted descriptor, and neither discovers models nor creates or repairs storage during resolution.
    The exact MLX dependency snapshot builds with Xcode 27 Beta 6 and its matching Metal Toolchain component without loading a model.
@@ -305,11 +305,12 @@ The order follows the handoff with one correction: milestone 1 already needs min
    The app-side `TextModelProvider` path now keeps one exact helper model session for an entire template render, including every count, map, and reduce operation, and retires it before returning or throwing.
    Prompt counting and generation use the same shared strict JSON prompt contract, and native output is rejected unless it is exactly the expected JSON shape.
    Import approval, app provider profiles, and helper activation are independent exact-pin allowlists.
-   All three production catalogs remain empty, so no installed checkpoint can currently create an executor and native Gemma remains unavailable for user selection.
+   All three production catalogs pin the same immutable Gemma 4 E2B checkpoint, and an unapproved pin remains unable to create an executor.
    The Xcode 27 Release configuration enables Hardened Runtime for both the app and helper, grants the app only its required microphone and calendar resource entitlements, and suppresses injected debug entitlements.
    One shared mutual code-identity policy rejects Release peers without the runtime flag, with `get-task-allow`, or with a Hardened Runtime exception entitlement.
    A local arm64 Release build passed strict nested-signature validation, with the helper carrying only its App Sandbox entitlement and no network entitlement.
-   Whole-shard `Data` has caller-provided bounds, and checkpoint fit remains unknown until an exact reviewed checkpoint is selected.
+   Whole-shard `Data` has exact caller-provided bounds for the pinned 3,550,670,554-byte shard.
+   A bounded macOS 27 Steno run imported and selected that checkpoint, generated a real Standup report, measured 1,971,600 KiB peak helper RSS, and never reached critical memory pressure.
    Explicit descriptor-bound recovery for v2 crash-orphaned staging is implemented as a manually invoked engine, while legacy or suspicious artifacts remain retained and reported.
-   A reviewed production checkpoint and resource profile in all three catalogs, user-facing import and provider-selection flows, an explicit user-authorized repair flow for retained corrupt targets, end-to-end Release recording and calendar validation under Hardened Runtime, negative signed abuse coverage, and a measured real offline run remain unresolved.
+   Final checkpoint license review, longer-template validation, an explicit user-authorized repair flow for retained corrupt targets, end-to-end Release recording and calendar validation under Hardened Runtime, and negative signed abuse coverage remain unresolved.
 9. Whether a speaker-count field should ever exist. If it does, ask "how many people spoke?", not "how many people attended?".

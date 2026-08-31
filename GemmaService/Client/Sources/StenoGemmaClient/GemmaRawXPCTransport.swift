@@ -3,7 +3,7 @@ import Dispatch
 import Foundation
 import Security
 import StenoGemmaIPC
-import StenoGemmaModelStore
+@_spi(StenoGemmaRuntime) import StenoGemmaModelStore
 import StenoGemmaProcessGate
 import XPC
 
@@ -195,7 +195,7 @@ public final class GemmaRawXPCTransport: GemmaClientTransport, @unchecked Sendab
 
     private enum FrameMode {
         case ordinary
-        case bindSession
+        case bindSession([GemmaIPCModelFileMetadata])
     }
 
     private let connection: xpc_connection_t
@@ -208,7 +208,7 @@ public final class GemmaRawXPCTransport: GemmaClientTransport, @unchecked Sendab
 
     private var lifecycle: Lifecycle = .awaitingSessionBind
     private var executionLease: GemmaModelExecutionLease?
-    private var modelDirectory: VerifiedGemmaModelDirectory?
+    private var modelHandoff: VerifiedGemmaModelDescriptorHandoff?
     private var boundHelperIdentity: GemmaIPCBoundHelperIdentity?
     private var authenticatedPeerPID: pid_t?
     private var pendingReplies: [UUID: CheckedContinuation<Data, any Error>] = [:]
@@ -223,7 +223,23 @@ public final class GemmaRawXPCTransport: GemmaClientTransport, @unchecked Sendab
         expectedRequirement = expectedHelperIdentity.requirement
         self.model = model
         self.executionLease = executionLease
-        self.modelDirectory = modelDirectory
+        let modelHandoff = try modelDirectory.consumeDescriptorHandoff()
+        var initializationCompleted = false
+        defer {
+            if !initializationCompleted {
+                modelHandoff.close()
+            }
+        }
+        guard modelHandoff.modelIdentifier == model.modelIdentifier,
+              modelHandoff.checkpointRevision == model.checkpointRevision,
+              modelHandoff.adapterRevision == model.adapterRevision,
+              modelHandoff.licenseIdentifier == model.licenseIdentifier,
+              modelHandoff.manifestSHA256 == model.manifestSHA256
+        else {
+            modelHandoff.close()
+            throw GemmaRawXPCTransportError.modelProvenanceMismatch
+        }
+        self.modelHandoff = modelHandoff
         callbackQueue = DispatchQueue(
             label: "org.stenolabs.steno.gemma-xpc-client.\(UUID().uuidString)"
         )
@@ -248,6 +264,7 @@ public final class GemmaRawXPCTransport: GemmaClientTransport, @unchecked Sendab
             self?.receiveConnectionEvent(event)
         }
         xpc_connection_activate(connection)
+        initializationCompleted = true
     }
 
     deinit {
@@ -426,16 +443,27 @@ public final class GemmaRawXPCTransport: GemmaClientTransport, @unchecked Sendab
         }
 
         do {
-            guard let rootIdentity = lock.withLock({ modelDirectory?.rootIdentity }) else {
+            guard let handoff = lock.withLock({ modelHandoff }) else {
                 throw GemmaRawXPCTransportError.connectionInvalidated
             }
+            let rootIdentity = handoff.rootIdentity
+            let expectedModelFiles = try handoff.files
+                .sorted { $0.relativePath < $1.relativePath }
+                .map {
+                    try GemmaIPCModelFileMetadata(
+                        relativePath: $0.relativePath,
+                        size: $0.size,
+                        sha256: $0.sha256
+                    )
+                }
             let expectedRootIdentity = try GemmaIPCModelRootIdentity(
                 deviceID: rootIdentity.deviceID,
                 fileID: rootIdentity.fileID
             )
-            let binding = GemmaIPCBindSessionRequest(
+            let binding = try GemmaIPCBindSessionRequest(
                 model: model,
-                expectedModelRootIdentity: expectedRootIdentity
+                expectedModelRootIdentity: expectedRootIdentity,
+                expectedModelFiles: expectedModelFiles
             )
             let request = GemmaXPCControlRequestEnvelope(body: .bindSession(binding))
             let encodedRequest = try GemmaXPCControlCodec.encode(request)
@@ -443,7 +471,7 @@ public final class GemmaRawXPCTransport: GemmaClientTransport, @unchecked Sendab
                 encodedRequest,
                 requestID: request.requestID,
                 channel: .control,
-                mode: .bindSession
+                mode: .bindSession(expectedModelFiles)
             )
             let bound = try GemmaXPCControlCodec.decodeBindSessionResponse(
                 encodedResponse,
@@ -465,7 +493,7 @@ public final class GemmaRawXPCTransport: GemmaClientTransport, @unchecked Sendab
             guard accepted else {
                 throw GemmaRawXPCTransportError.connectionInvalidated
             }
-            closeClientModelDirectory()
+            closeClientModelHandoff()
             sessionBind.resolve(.success(identity))
         } catch {
             let transportError = error as? GemmaRawXPCTransportError
@@ -488,29 +516,47 @@ public final class GemmaRawXPCTransport: GemmaClientTransport, @unchecked Sendab
 
         let message: xpc_object_t?
         switch mode {
-        case .bindSession:
+        case .bindSession(let expectedModelFiles):
             guard let resources = lock.withLock({ () -> (
                 GemmaModelExecutionLease,
-                VerifiedGemmaModelDirectory
+                VerifiedGemmaModelDescriptorHandoff
             )? in
                 guard let executionLease = self.executionLease,
-                      let modelDirectory = self.modelDirectory
+                      let modelHandoff = self.modelHandoff
                 else { return nil }
-                return (executionLease, modelDirectory)
+                return (executionLease, modelHandoff)
             }) else {
                 throw GemmaRawXPCTransportError.connectionInvalidated
             }
-            message = resources.0.withBorrowedFileDescriptor { executionGateDescriptor in
-                resources.1.withBorrowedFileDescriptor { modelDirectoryDescriptor in
-                    GemmaRawXPCOuterFrame.makeBindSession(
+            let boundMessage = try resources.0.withBorrowedFileDescriptor {
+                executionGateDescriptor in
+                try resources.1.withBorrowedFileDescriptors {
+                    modelDirectoryDescriptor,
+                    modelFileDescriptorsByRelativePath -> xpc_object_t? in
+                    guard modelFileDescriptorsByRelativePath.count == expectedModelFiles.count,
+                          Set(modelFileDescriptorsByRelativePath.keys) == Set(
+                              expectedModelFiles.map(\.relativePath)
+                          )
+                    else {
+                        return nil
+                    }
+                    let modelFileDescriptors = expectedModelFiles.compactMap {
+                        modelFileDescriptorsByRelativePath[$0.relativePath]
+                    }
+                    guard modelFileDescriptors.count == expectedModelFiles.count else {
+                        return nil
+                    }
+                    return GemmaRawXPCOuterFrame.makeBindSession(
                         frame: frame,
                         requestID: requestID,
                         channel: channel,
                         executionGateDescriptor: executionGateDescriptor,
-                        modelDirectoryDescriptor: modelDirectoryDescriptor
+                        modelDirectoryDescriptor: modelDirectoryDescriptor,
+                        modelFileDescriptors: modelFileDescriptors
                     )
-                } ?? nil
-            } ?? nil
+                }
+            }
+            message = boundMessage ?? nil
         case .ordinary:
             message = GemmaRawXPCOuterFrame.make(
                 frame: frame,
@@ -660,13 +706,13 @@ public final class GemmaRawXPCTransport: GemmaClientTransport, @unchecked Sendab
         lease?.close()
     }
 
-    private func closeClientModelDirectory() {
-        let directory = lock.withLock {
-            let directory = modelDirectory
-            modelDirectory = nil
-            return directory
+    private func closeClientModelHandoff() {
+        let handoff = lock.withLock {
+            let handoff = modelHandoff
+            modelHandoff = nil
+            return handoff
         }
-        directory?.close()
+        handoff?.close()
     }
 
     private func finishPending(
@@ -683,7 +729,7 @@ public final class GemmaRawXPCTransport: GemmaClientTransport, @unchecked Sendab
         let invalidation: (
             [CheckedContinuation<Data, any Error>],
             GemmaModelExecutionLease?,
-            VerifiedGemmaModelDirectory?
+            VerifiedGemmaModelDescriptorHandoff?
         ) = lock.withLock {
             guard lifecycle != .invalidated else { return ([], nil, nil) }
             lifecycle = .invalidated
@@ -691,10 +737,10 @@ public final class GemmaRawXPCTransport: GemmaClientTransport, @unchecked Sendab
             pendingReplies.removeAll()
             let lease = executionLease
             executionLease = nil
-            let directory = modelDirectory
-            modelDirectory = nil
+            let handoff = modelHandoff
+            modelHandoff = nil
             boundHelperIdentity = nil
-            return (continuations, lease, directory)
+            return (continuations, lease, handoff)
         }
         sessionBind.resolve(.failure(error))
         invalidation.1?.close()
@@ -933,6 +979,7 @@ struct GemmaRawXPCOuterFrame {
     private static let requestIDKey = "requestID"
     static let executionGateFDKey = "executionGateFD"
     static let modelDirectoryFDKey = "modelDirectoryFD"
+    static let modelFileFDsKey = "modelFileFDs"
 
     static func make(
         frame: Data,
@@ -947,11 +994,14 @@ struct GemmaRawXPCOuterFrame {
         requestID: UUID,
         channel: GemmaXPCChannel,
         executionGateDescriptor: Int32,
-        modelDirectoryDescriptor: Int32
+        modelDirectoryDescriptor: Int32,
+        modelFileDescriptors: [Int32]
     ) -> xpc_object_t? {
         guard channel == .control,
+              !modelFileDescriptors.isEmpty,
               let executionGateObject = xpc_fd_create(executionGateDescriptor),
               let modelDirectoryObject = xpc_fd_create(modelDirectoryDescriptor),
+              let modelFileObjects = makeFileDescriptorArray(modelFileDescriptors),
               let dictionary = makeBase(
                   frame: frame,
                   requestID: requestID,
@@ -962,6 +1012,7 @@ struct GemmaRawXPCOuterFrame {
         }
         xpc_dictionary_set_value(dictionary, executionGateFDKey, executionGateObject)
         xpc_dictionary_set_value(dictionary, modelDirectoryFDKey, modelDirectoryObject)
+        xpc_dictionary_set_value(dictionary, modelFileFDsKey, modelFileObjects)
         guard isValidBindSession(dictionary) else { return nil }
         return dictionary
     }
@@ -981,13 +1032,29 @@ struct GemmaRawXPCOuterFrame {
                   dictionary,
                   modelDirectoryFDKey
               ),
-              xpc_get_type(modelDirectoryObject) == XPC_TYPE_FD
+              xpc_get_type(modelDirectoryObject) == XPC_TYPE_FD,
+              let modelFileObjects = xpc_dictionary_get_value(
+                  dictionary,
+                  modelFileFDsKey
+              ),
+              xpc_get_type(modelFileObjects) == XPC_TYPE_ARRAY,
+              validFileDescriptorArray(modelFileObjects)
         else {
             return false
         }
         var length = 0
-        return xpc_dictionary_get_data(dictionary, frameKey, &length) != nil
-            && length <= GemmaIPCProtocol.maximumEncodedMessageBytes
+        guard let frameBytes = xpc_dictionary_get_data(dictionary, frameKey, &length),
+              length <= GemmaIPCProtocol.maximumEncodedMessageBytes
+        else {
+            return false
+        }
+        guard let request = try? GemmaXPCControlCodec.decodeRequest(
+            Data(bytes: frameBytes, count: length)
+        ), case .bindSession(let binding) = request.body
+        else {
+            return false
+        }
+        return xpc_array_get_count(modelFileObjects) == binding.expectedModelFiles.count
     }
 
     private static func makeBase(
@@ -1042,7 +1109,31 @@ struct GemmaRawXPCOuterFrame {
     private static let bindSessionKeys = ordinaryKeys.union([
         executionGateFDKey,
         modelDirectoryFDKey,
+        modelFileFDsKey,
     ])
+
+    private static func makeFileDescriptorArray(_ descriptors: [Int32]) -> xpc_object_t? {
+        let array = xpc_array_create(nil, 0)
+        for descriptor in descriptors {
+            guard descriptor >= 0, let object = xpc_fd_create(descriptor) else {
+                return nil
+            }
+            xpc_array_append_value(array, object)
+        }
+        return array
+    }
+
+    private static func validFileDescriptorArray(_ array: xpc_object_t) -> Bool {
+        let count = xpc_array_get_count(array)
+        guard count > 0 else { return false }
+        for index in 0 ..< count {
+            let object = xpc_array_get_value(array, index)
+            guard xpc_get_type(object) == XPC_TYPE_FD else {
+                return false
+            }
+        }
+        return true
+    }
 
     private static func hasExactKeys(
         _ dictionary: xpc_object_t,
