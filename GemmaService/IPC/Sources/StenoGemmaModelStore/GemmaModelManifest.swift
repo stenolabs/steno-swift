@@ -401,6 +401,7 @@ public enum GemmaModelVerificationError: Error, Equatable, LocalizedError, Senda
     case activationSafetensorsFileTooLarge(path: String, limit: Int64, actual: Int64)
     case activationSafetensorsFilesTooLarge(limit: Int64, actualAtLeast: Int64)
     case tooManyActivationSafetensorsFiles(limit: Int, actual: Int)
+    case duplicateSafetensorsTensorName(name: String, firstShard: String, duplicateShard: String)
     case activationAssetsUnavailable
 
     public var errorDescription: String? {
@@ -503,6 +504,8 @@ public enum GemmaModelVerificationError: Error, Equatable, LocalizedError, Senda
             "Gemma safetensors files exceed the \(limit)-byte total limit."
         case .tooManyActivationSafetensorsFiles(let limit, _):
             "Gemma activation has more than \(limit) safetensors files."
+        case .duplicateSafetensorsTensorName(let name, let firstShard, let duplicateShard):
+            "Gemma safetensors tensor \(name) occurs in both \(firstShard) and \(duplicateShard)."
         case .activationAssetsUnavailable:
             "The Gemma activation assets are closed or already consumed."
         }

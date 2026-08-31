@@ -1444,16 +1444,34 @@ public final class BorrowedGemmaModelActivationAssets {
             try borrowedState.requireConsumptionOpen()
         }
         let shards = try state.beginSafetensorsConsumption()
+        var tensorNames: [String: String] = [:]
         for path in shards.keys.sorted() {
             try closeAwareCancellationCheck()
             guard let reader = shards[path] else {
                 throw GemmaModelVerificationError.activationAssetsUnavailable
             }
             try reader.consume(cancellationCheck: closeAwareCancellationCheck) { data in
+                let parsed = try SafetensorsFileParser.parse(data)
+                try closeAwareCancellationCheck()
+                for tensor in parsed.tensors {
+                    if let firstShard = tensorNames[tensor.name] {
+                        throw GemmaModelVerificationError.duplicateSafetensorsTensorName(
+                            name: tensor.name,
+                            firstShard: firstShard,
+                            duplicateShard: path
+                        )
+                    }
+                }
+                for tensor in parsed.tensors {
+                    tensorNames[tensor.name] = path
+                }
+                try closeAwareCancellationCheck()
                 try body(VerifiedGemmaSafetensorsData(
                     relativePath: path,
                     size: reader.size,
-                    data: data
+                    data: data,
+                    metadata: parsed.metadata,
+                    tensors: parsed.tensors.map(VerifiedGemmaSafetensorsTensorDescriptor.init)
                 ))
             }
         }
@@ -1466,15 +1484,81 @@ public final class BorrowedGemmaModelActivationAssets {
 
 /// Immutable bytes for one verified safetensors shard passed to a synchronous trusted consumer.
 @_spi(StenoGemmaRuntime)
-public struct VerifiedGemmaSafetensorsData {
+public struct VerifiedGemmaSafetensorsData: Sendable, Equatable {
     public let relativePath: String
     public let size: Int64
     public let data: Data
+    public let metadata: [String: String]
+    public let tensors: [VerifiedGemmaSafetensorsTensorDescriptor]
 
-    fileprivate init(relativePath: String, size: Int64, data: Data) {
+    fileprivate init(
+        relativePath: String,
+        size: Int64,
+        data: Data,
+        metadata: [String: String],
+        tensors: [VerifiedGemmaSafetensorsTensorDescriptor]
+    ) {
         self.relativePath = relativePath
         self.size = size
         self.data = data
+        self.metadata = metadata
+        self.tensors = tensors
+    }
+}
+
+/// A parsed safetensors tensor descriptor for a shard verified during activation.
+@_spi(StenoGemmaRuntime)
+public struct VerifiedGemmaSafetensorsTensorDescriptor: Sendable, Equatable {
+    public let name: String
+    public let dtype: VerifiedGemmaSafetensorsDType
+    public let shape: [UInt64]
+
+    /// Tensor bytes relative to the first payload byte after the JSON header.
+    public let payloadByteRange: Range<Int>
+
+    fileprivate init(_ tensor: SafetensorsTensor) {
+        name = tensor.name
+        dtype = VerifiedGemmaSafetensorsDType(tensor.dtype)
+        shape = tensor.shape
+        payloadByteRange = tensor.payloadByteRange
+    }
+}
+
+/// Safetensors scalar types accepted by the pinned MLX adapter revision.
+@_spi(StenoGemmaRuntime)
+public enum VerifiedGemmaSafetensorsDType: String, CaseIterable, Sendable, Equatable {
+    case float16 = "F16"
+    case bfloat16 = "BF16"
+    case float32 = "F32"
+    case bool = "BOOL"
+    case int8 = "I8"
+    case int16 = "I16"
+    case int32 = "I32"
+    case int64 = "I64"
+    case uint8 = "U8"
+    case uint16 = "U16"
+    case uint32 = "U32"
+    case uint64 = "U64"
+    case float8E4M3 = "F8_E4M3"
+    case complex64 = "C64"
+
+    fileprivate init(_ dtype: SafetensorsDType) {
+        switch dtype {
+        case .float16: self = .float16
+        case .bfloat16: self = .bfloat16
+        case .float32: self = .float32
+        case .bool: self = .bool
+        case .int8: self = .int8
+        case .int16: self = .int16
+        case .int32: self = .int32
+        case .int64: self = .int64
+        case .uint8: self = .uint8
+        case .uint16: self = .uint16
+        case .uint32: self = .uint32
+        case .uint64: self = .uint64
+        case .float8E4M3: self = .float8E4M3
+        case .complex64: self = .complex64
+        }
     }
 }
 

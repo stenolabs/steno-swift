@@ -84,7 +84,8 @@ Any outstanding hardware or visual verification is stated on the item or in its 
       A non-responsive operating-system import operation deliberately blocks recording for the remaining app-process lifetime rather than failing open; a user-facing explanation and safe restart path remain open.
       The exact MLX dependency snapshot builds with Xcode 27 Beta 6 and its matching Metal Toolchain component without loading a model.
       A one-shot child-file activation boundary now retains exact shard descriptors, verifies each shard into immutable bytes before a trusted consumer sees it, expires borrowed views, and revalidates the named tree before returning a result.
-      The current whole-shard `Data` bridge is intentionally not connected to MLX because compact public checkpoints still contain multi-gigabyte shards; a bounded chunk-authenticated reader or an approved smaller-shard package remains open.
+      The current whole-shard `Data` bridge has caller-provided bounds, but whether those bounds fit a checkpoint remains unknown until an exact reviewed checkpoint is selected; no public shard size is assumed.
+      Every complete verified shard is now strictly parsed before the trusted activation callback, with immutable metadata and tensor descriptors and deterministic cross-shard raw-name duplicate rejection; MLX materialization remains open.
       A reviewed production checkpoint, user-facing import UI, explicit orphan and corrupt-install recovery, production Hardened Runtime validation, provider activation, a real model run, and negative signed abuse or multiprocess XPC coverage remain open.
 - [x] Multiple immutable report versions per meeting, pinned to a revision, with quarantine restoration.
 - [x] (M4) Title generation suggestion with apply/dismiss persistence.

@@ -15,10 +15,10 @@ This keeps MLX and Metal out of the process that owns an irreplaceable recording
 This first slice provides:
 
 - a macOS 27 executable process;
-- an exact source pin for the unreleased MLX `LanguageModel` adapter;
+- an exact source pin for the unreleased MLX `LanguageModel` adapter and a minimal vendored adapter subtree at that revision;
 - complete manifest verification of a local checkpoint at each verification instant;
 - a model-free self-check;
-- construction of an `MLXLanguageModel` backed only by the verified local directory; and
+- a model-free adapter seam that can adopt a prebuilt local `ModelContainer` through an immutable `ModelDescriptor`; and
 - tests that do not download or execute model weights;
 - a dependency-free strict-concurrency IPC module with a closed, size-bounded request and response schema;
 - a model-free, fail-closed XPC service core that handles handshake while rejecting token counting and generation as unavailable, with lifecycle operations owned by the process-wide registry;
@@ -44,7 +44,6 @@ It does not yet provide:
 - Hardened Runtime validation for the production app and a Release-specific entitlement policy;
 - negative signed abuse and multiprocess XPC integration coverage;
 - activation of the MLX provider through the XPC helper;
-- an immutable child-file activation boundary between descriptor-rooted verification and MLX materialization;
 - a real model run; or
 - a production support commitment for any specific converted checkpoint.
 
@@ -52,6 +51,9 @@ The standalone SwiftPM package contains the verified local model-loading path, w
 The helper has no incoming or outgoing network entitlement in that project variant, and the app-facing provider remains deliberately unavailable.
 The verified model runtime is not yet activated through the helper, and the app does not expose this provider.
 A standalone SwiftPM executable has no operating-system network sandbox, so source-level absence of a download path must not be described as a hard network guarantee.
+
+The existing production factory remains a deferred, path-backed prototype and is not wired into the helper or the model-free adapter seam.
+The adapter seam is model-free and path-free for a prebuilt `ModelContainer`; it does not select, download, or load a model.
 
 ## Model boundary
 
@@ -63,7 +65,9 @@ The verifier rejects traversal paths, hidden components, non-ASCII paths, case o
 It also rejects safetensors indexes whose shard paths escape the snapshot or refer to files absent from the manifest.
 The verifier holds directory descriptors, opens descendants with `openat` and `O_NOFOLLOW`, compares metadata before and after reads, and binds the verified capability to the root device and inode.
 The standalone runtime prototype repeats that complete path-backed check immediately before MLX loading, but this does not make previously checked child files immutable against another process running as the same user.
-The XPC provider must remain unavailable until a descriptor- or byte-based activation loader retains the exact manifest-listed child files, fully materializes the model without file-backed tensors, and verifies those files again before publishing the in-memory model.
+The one-shot activation boundary now retains the exact manifest-listed child files, copies non-shard files into immutable `Data`, and exposes shard bytes only through a synchronous consume operation with full-hash revalidation.
+The strict Safetensors parser validates every complete verified shard before the trusted activation callback and exposes immutable metadata and tensor descriptors.
+It also rejects duplicate raw tensor names across shards, while MLX materialization remains separate work.
 The importer writes through retained descriptors into a private sibling staging directory, synchronizes files and directories, sets files to `0400` and directories to `0500`, and publishes to `~/Library/Application Support/Steno/NativeGemma/Models/v1/<manifest-sha256>` with a no-replace rename.
 Those modes prevent accidental changes and expose tampering, but they are not a security boundary against another process running as the same macOS user.
 The complete import and recovery contract is documented in [Native Gemma model store](../docs/NATIVE-GEMMA-MODEL-STORE.md).
@@ -135,7 +139,7 @@ It must not be read from the same untrusted checkpoint directory it is meant to 
 
 ## Remaining production work
 
-The remaining production work is to review and add one exact checkpoint to the currently empty production catalog, expose the consented import flow, define explicit orphan and corrupt-install recovery, validate Hardened Runtime and the Release entitlement policy, complete the immutable child-file activation boundary, activate the MLX provider through the helper, and complete a real model run.
+The remaining production work is to review and add one exact checkpoint to the currently empty production catalog, expose the consented import flow, define explicit orphan and corrupt-install recovery, validate Hardened Runtime and the Release entitlement policy, connect the parsed verified shard data to MLX materialization, activate the MLX provider through the helper, and complete a real model run.
 Negative signed abuse and multiprocess XPC coverage must be complete before native Gemma is activated.
 The normative design for that boundary is [Native Gemma cross-process gate](../docs/NATIVE-GEMMA-GATE.md).
 Approved manifests and expected digests must live in Steno-controlled metadata, and installation must route through `ModelInstallationCoordinator` with explicit consent.

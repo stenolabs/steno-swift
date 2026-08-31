@@ -10,6 +10,10 @@ struct GemmaModelVerifierTests {
     func activationAssetsAreBoundOneShotAndCopySmallFiles() throws {
         let fixture = try Fixture.make(
             primaryPath: "model-00001-of-00001.safetensors",
+            primaryContents: Fixture.validSafetensorsData(
+                metadata: ["format": "pt"],
+                tensors: [(name: "embed.weight", dtype: "F16", shape: [1], payload: [0x01, 0x02])]
+            ),
             additionalFiles: ["tokenizer.json": Data("tokenizer".utf8)]
         )
         let assets = try activatedAssets(from: fixture)
@@ -22,8 +26,12 @@ struct GemmaModelVerifierTests {
             var paths: [String] = []
             try borrowed.consumeSafetensorsFiles { shard in
                 paths.append(shard.relativePath)
-                #expect(shard.size == 7)
-                #expect(shard.data == Data("payload".utf8))
+                #expect(shard.metadata == ["format": "pt"])
+                let tensor = try #require(shard.tensors.first)
+                #expect(tensor.name == "embed.weight")
+                #expect(tensor.dtype == .float16)
+                #expect(tensor.shape == [1])
+                #expect(tensor.payloadByteRange == 0 ..< 2)
             }
             #expect(paths == ["model-00001-of-00001.safetensors"])
             return "used"
@@ -39,6 +47,7 @@ struct GemmaModelVerifierTests {
     func borrowedActivationDataExpiresAndShardsAreOneShot() throws {
         let fixture = try Fixture.make(
             primaryPath: "model-00001-of-00001.safetensors",
+            primaryContents: Fixture.validSafetensorsData(),
             additionalFiles: ["tokenizer.json": Data("tokenizer".utf8)]
         )
         let assets = try activatedAssets(from: fixture)
@@ -64,6 +73,7 @@ struct GemmaModelVerifierTests {
     func borrowedActivationDataExpiresBeforeFinalRevalidation() throws {
         let fixture = try Fixture.make(
             primaryPath: "model-00001-of-00001.safetensors",
+            primaryContents: Fixture.validSafetensorsData(),
             additionalFiles: ["tokenizer.json": Data("tokenizer".utf8)]
         )
         let assets = try activatedAssets(from: fixture)
@@ -313,7 +323,10 @@ struct GemmaModelVerifierTests {
 
     @Test("a shard-consumer error closes every owned descriptor")
     func shardConsumerErrorClosesActivationAssets() throws {
-        let fixture = try Fixture.make(primaryPath: "model-00001-of-00001.safetensors")
+        let fixture = try Fixture.make(
+            primaryPath: "model-00001-of-00001.safetensors",
+            primaryContents: Fixture.validSafetensorsData()
+        )
         let closeRecorder = DescriptorCloseRecorder()
         let assets = try activatedAssets(from: fixture, closeRecorder: closeRecorder)
         let ownedDescriptors = assets.ownedDescriptorsForTesting()
@@ -332,6 +345,59 @@ struct GemmaModelVerifierTests {
         }
         #expect(closeRecorder.closedDescriptors() == Set(ownedDescriptors))
         #expect(closeRecorder.maximumCloseCount() == 1)
+    }
+
+    @Test("malformed safetensors shards never reach the trusted callback")
+    func malformedSafetensorsShardFailsBeforeCallback() throws {
+        let fixture = try Fixture.make(
+            primaryPath: "model-00001-of-00001.safetensors",
+            primaryContents: Data(repeating: 0, count: 7)
+        )
+        let assets = try activatedAssets(from: fixture)
+        var callbackCount = 0
+
+        #expect(throws: SafetensorsFileError.fileTooShort) {
+            _ = try assets.consume { borrowed in
+                try borrowed.consumeSafetensorsFiles { _ in
+                    callbackCount += 1
+                }
+                return ()
+            }
+        }
+        #expect(callbackCount == 0)
+    }
+
+    @Test("duplicate tensor names reject the duplicate shard in sorted order")
+    func duplicateSafetensorsTensorNamesFailBeforeDuplicateCallback() throws {
+        let firstPath = "model-00001-of-00002.safetensors"
+        let duplicatePath = "model-00002-of-00002.safetensors"
+        let fixture = try Fixture.make(
+            primaryPath: firstPath,
+            primaryContents: Fixture.validSafetensorsData(
+                tensors: [(name: "shared.weight", dtype: "F16", shape: [1], payload: [0x01, 0x02])]
+            ),
+            additionalFiles: [
+                duplicatePath: Fixture.validSafetensorsData(
+                    tensors: [(name: "shared.weight", dtype: "F16", shape: [1], payload: [0x03, 0x04])]
+                ),
+            ]
+        )
+        let assets = try activatedAssets(from: fixture)
+        var callbackPaths: [String] = []
+
+        #expect(throws: GemmaModelVerificationError.duplicateSafetensorsTensorName(
+            name: "shared.weight",
+            firstShard: firstPath,
+            duplicateShard: duplicatePath
+        )) {
+            _ = try assets.consume { borrowed in
+                try borrowed.consumeSafetensorsFiles { shard in
+                    callbackPaths.append(shard.relativePath)
+                }
+                return ()
+            }
+        }
+        #expect(callbackPaths == [firstPath])
     }
 
     @Test("a mutation during a shard copy prevents its consumer from running")
@@ -1688,6 +1754,34 @@ private final class Fixture: @unchecked Sendable {
             manifestDigest: manifestDigest,
             verifier: GemmaModelVerifier(requirements: requirements)
         )
+    }
+
+    static func validSafetensorsData(
+        metadata: [String: String] = [:],
+        tensors: [(name: String, dtype: String, shape: [UInt64], payload: [UInt8])] = [
+            (name: "weight", dtype: "F16", shape: [1], payload: [0x00, 0x00]),
+        ]
+    ) -> Data {
+        var records: [String: Any] = [:]
+        var payload = Data()
+        for tensor in tensors {
+            let start = payload.count
+            payload.append(contentsOf: tensor.payload)
+            records[tensor.name] = [
+                "dtype": tensor.dtype,
+                "shape": tensor.shape.map { NSNumber(value: $0) },
+                "data_offsets": [start, payload.count],
+            ]
+        }
+        if !metadata.isEmpty {
+            records["__metadata__"] = metadata
+        }
+        let header = try! JSONSerialization.data(withJSONObject: records, options: [.sortedKeys])
+        var headerLength = UInt64(header.count).littleEndian
+        var result = withUnsafeBytes(of: &headerLength) { Data($0) }
+        result.append(header)
+        result.append(payload)
+        return result
     }
 
     static func requirements(

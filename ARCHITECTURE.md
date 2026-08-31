@@ -296,5 +296,9 @@ The order follows the handoff with one correction: milestone 1 already needs min
    The helper performs descriptor-rooted verification at bind time, retains the root capability, and binds every model request to the exact session model pin.
    The consented local importer, app import facade, and content-addressed model store are implemented as an MLX-free boundary and documented in `docs/NATIVE-GEMMA-MODEL-STORE.md`; the production checkpoint catalog remains empty.
    The exact MLX dependency snapshot builds with Xcode 27 Beta 6 and its matching Metal Toolchain component without loading a model.
-   A reviewed production checkpoint, user-facing import flow, explicit recovery for retained corrupt installs or crash-orphaned staging, production Hardened Runtime validation, an immutable child-file activation boundary, and verified model-runtime activation remain unresolved.
+   The model-free adapter seam now accepts a prebuilt `ModelContainer` with an immutable `ModelDescriptor`, while the existing production factory remains deferred, path-backed, and unwired to the helper.
+   A one-shot child-file activation boundary retains exact shard descriptors and immutable non-shard bytes, strictly parses every verified shard before the trusted callback, and rejects duplicate raw tensor names across shards.
+   MLX materialization from those parsed verified bytes remains unresolved.
+   Whole-shard `Data` has caller-provided bounds, and checkpoint fit remains unknown until an exact reviewed checkpoint is selected.
+   A reviewed production checkpoint, user-facing import flow, explicit recovery for retained corrupt installs or crash-orphaned staging, production Hardened Runtime validation, and verified model-runtime activation remain unresolved.
 9. Whether a speaker-count field should ever exist. If it does, ask "how many people spoke?", not "how many people attended?".

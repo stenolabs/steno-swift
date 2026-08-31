@@ -89,32 +89,29 @@ For safetensors, the later synchronous consume operation makes one complete `Dat
 Thus, “one copy” does not mean “one read” or “one hash pass.”
 The capability exposes neither filesystem paths nor raw file-descriptor numbers, dynamically expires every borrowed view, revalidates every binding after the consumer returns, and closes all descriptors on success, error, cancellation, or explicit close.
 An explicit close during `consume` marks the capability closed immediately, makes the next close-aware copy or verification checkpoint fail, and defers descriptor closure until the synchronous consume callback has returned.
-The size limits bound the verified source bytes handed to the trusted consumer, not allocations that the consumer or MLX may derive from them.
+The size limits bound the verified source bytes handed to the trusted consumer, not allocations that the consumer or MLX may derive from them, and their fit for a checkpoint remains unknown until an exact reviewed checkpoint is selected.
 The trusted runtime must publish only the value returned by a successful activation consume operation and must not publish callback side effects before final revalidation.
 MLX materialization remains separate work and must not bypass this byte boundary.
-A whole-shard `Data` bridge is deliberately not wired into production because available compact checkpoints still contain multi-gigabyte shards; production activation needs either smaller approved shards or a reviewed chunk-authenticated MLX reader with bounded scratch memory.
+A whole-shard `Data` bridge has caller-provided bounds and is not yet wired into MLX materialization.
+Whether those bounds fit a checkpoint remains unknown until an exact reviewed checkpoint is selected.
+Every complete verified shard is strictly parsed before the trusted callback receives it.
+The callback receives immutable metadata and tensor descriptors, and duplicate raw tensor names across shards fail closed before the duplicate shard is delivered.
 
 ## Resource-bounded MLX activation contract
 
-The next manifest format must authenticate every safetensors file with both its existing full-file SHA-256 digest and an exact ordered list of fixed-size chunk SHA-256 digests.
-The chunk size is a Steno code constant rather than model-controlled input, and validation derives the exact chunk count and final-chunk length from the pinned file size.
-The pinned manifest digest authenticates the complete chunk table.
+The pinned public MLX API can load a complete safetensors shard from `Data`, so production may use that path only when an exact reviewed checkpoint fits explicit per-shard and aggregate activation limits and its peak memory has been measured on supported hardware.
+Those limits belong to reviewed Steno-controlled configuration and must never rise automatically in response to model input.
 
-The runtime reader must remain path-free and descriptor-backed.
-Every random-access callback validates arithmetic and bounds, clears the entire requested destination first, reads complete chunks with `pread` and `EINTR` handling into bounded private scratch memory, authenticates each complete chunk before copying requested bytes, and records the first failure in a permanent thread-safe state.
-After that first failure every callback continues to return only zero-filled output.
-Scratch slots and concurrent reads must have explicit limits no greater than the pinned MLX I/O concurrency.
+Within the synchronous activation callback, Steno must compare MLX's loaded tensor names and metadata with the strict parser result, materialize every returned array with checked evaluation before the shard bytes leave scope, and reject raw-name or sanitized-name collisions.
+No model container may be published until all shards, model updates, preparation, evaluation, cancellation checks, and the final descriptor-rooted activation revalidation succeed.
+Asynchronous MLX evaluation is not permitted across this trust boundary.
 
-The pinned MLX implementation creates lazy arrays and its C callback cannot throw.
-Steno must therefore synchronously materialize every returned array, inspect both MLX evaluation errors and the reader's permanent failure state, and publish no model container until those checks and the final descriptor-rooted activation revalidation succeed.
-The reader owner and retained descriptors remain alive until materialization has finished and MLX has released its callback owner.
-Asynchronous evaluation is not permitted across this trust boundary.
-
-The pinned `mlx-swift` release has no public custom-reader product or eager reader API, while its public `Data` API requires a complete shard in memory.
-The preferred integration is a narrow upstreamable API in the public `MLX` product, carried by an exact pinned fork until accepted upstream, together with an injected weight-loader seam in `mlx-swift-lm`.
-That seam must accept the authenticated eager arrays for each exact pinned shard and must not enumerate or reopen weight paths.
 Small configuration and tokenizer inputs come from the already copied activation data.
-Availability must use an explicit verified-model predicate instead of a fabricated filesystem URL.
+The loader must not enumerate or reopen weight paths, and availability must use the stored verified-container predicate instead of a fabricated filesystem URL.
+
+If the largest shard of the selected checkpoint does not fit the reviewed memory cap, Steno must not silently raise the cap.
+The alternatives are a deterministic tensor-preserving re-shard during consented import with explicit source and derivation provenance in a later manifest version, or a separately reviewed authenticated reader exposed through a public MLX API.
+That choice remains open because no production checkpoint has been selected or measured.
 
 Steno must not redeclare or dynamically resolve private `Cmlx` symbols, depend on checkout-internal header paths, expose lazy custom-reader arrays, or use a temporary named clone as the integrity boundary.
 No dependency fork or upstream change has been published, and the production helper remains model-free until this contract is implemented and independently reviewed.
@@ -136,6 +133,7 @@ The user-facing import path must use the app facade rather than making the inter
 The sandboxed helper cannot reopen the user store by path.
 The authenticated XPC bind now transfers a verified model-directory descriptor together with the execution-gate descriptor.
 The helper revalidates the tree from that retained descriptor at bind time and preserves the pinned root identity and exact model pin for the session.
-That acknowledgement does not claim continued child-file immutability after the scan.
+The one-shot child-file activation boundary now retains exact shard descriptors and immutable non-shard bytes for a trusted consumer and strictly parses every verified shard before delivery.
+MLX materialization remains separate and unavailable.
 The exact MLX dependency snapshot builds with Xcode 27 Beta 6 and its matching Metal Toolchain component without loading a model.
 Provider activation remains unavailable until a reviewed production checkpoint, user-facing consent and import flow, explicit recovery for retained corrupt installs or crash-orphaned staging, production Hardened Runtime validation, resource-bounded MLX activation through an authenticated byte boundary, and a real offline model run are accepted.
