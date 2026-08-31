@@ -30,27 +30,61 @@ public struct GemmaModelVerifier: Sendable {
         expectedRootIdentity: GemmaModelRootIdentity? = nil,
         cancellationCheck: @Sendable () throws -> Void = { try Task.checkCancellation() }
     ) throws -> VerifiedGemmaModel {
+        try cancellationCheck()
+        let root = directory.standardizedFileURL
+        let descriptor = try Self.openRoot(root)
+        defer { _ = Darwin.close(descriptor) }
+
         let result = try verifiedRoot(
-            directory: directory,
+            descriptor: descriptor,
             expectedRootIdentity: expectedRootIdentity,
             cancellationCheck: cancellationCheck
         )
+        try Self.requirePath(root, names: result.status, path: ".")
         return VerifiedGemmaModel(
-            rootDirectory: result.url,
+            rootDirectory: root,
             rootIdentity: result.identity,
             requirements: requirements
         )
     }
 
-    private func verifiedRoot(
-        directory: URL,
+    /// Consumes and verifies an already-open directory descriptor.
+    ///
+    /// Ownership transfers at entry. The descriptor is closed on every failure and is retained by
+    /// the returned capability on success. Verification never resolves or reopens a filesystem path.
+    public func verify(
+        adoptingDirectoryDescriptor descriptor: Int32,
+        expectedRootIdentity: GemmaModelRootIdentity? = nil,
+        cancellationCheck: @Sendable () throws -> Void = { try Task.checkCancellation() }
+    ) throws -> VerifiedGemmaModelDirectory {
+        var ownsDescriptor = descriptor >= 0
+        defer {
+            if ownsDescriptor {
+                _ = Darwin.close(descriptor)
+            }
+        }
+
+        try Self.prepareAdoptedRootDescriptor(descriptor)
+        let result = try verifiedRoot(
+            descriptor: descriptor,
+            expectedRootIdentity: expectedRootIdentity,
+            cancellationCheck: cancellationCheck
+        )
+        let capability = VerifiedGemmaModelDirectory(
+            fileDescriptor: descriptor,
+            rootIdentity: result.identity,
+            requirements: requirements
+        )
+        ownsDescriptor = false
+        return capability
+    }
+
+    fileprivate func verifiedRoot(
+        descriptor: Int32,
         expectedRootIdentity: GemmaModelRootIdentity?,
         cancellationCheck: @Sendable () throws -> Void
-    ) throws -> VerifiedRoot {
+    ) throws -> VerifiedDescriptorRoot {
         try cancellationCheck()
-        let root = directory.standardizedFileURL
-        let descriptor = try Self.openRoot(root)
-        defer { _ = Darwin.close(descriptor) }
 
         let initialStatus = try Self.status(of: descriptor, path: ".")
         try Self.validateDirectory(initialStatus, path: ".")
@@ -58,7 +92,6 @@ public struct GemmaModelVerifier: Sendable {
         guard expectedRootIdentity == nil || expectedRootIdentity == rootIdentity else {
             throw GemmaModelVerificationError.rootIdentityMismatch
         }
-        try Self.requirePath(root, names: initialStatus, path: ".")
 
         var scan = SnapshotScan()
         try Self.scanDirectory(
@@ -142,9 +175,8 @@ public struct GemmaModelVerifier: Sendable {
         guard Self.sameStableState(initialStatus, finalStatus) else {
             throw GemmaModelVerificationError.entryChanged(".")
         }
-        try Self.requirePath(root, names: finalStatus, path: ".")
 
-        return VerifiedRoot(url: root, identity: rootIdentity)
+        return VerifiedDescriptorRoot(identity: rootIdentity, status: finalStatus)
     }
 
     private static func openRoot(_ root: URL) throws -> Int32 {
@@ -161,6 +193,32 @@ public struct GemmaModelVerifier: Sendable {
             throw GemmaModelVerificationError.rootIsNotDirectory
         }
         return descriptor
+    }
+
+    private static func prepareAdoptedRootDescriptor(_ descriptor: Int32) throws {
+        guard descriptor >= 0 else {
+            throw GemmaModelVerificationError.invalidRootDescriptor
+        }
+        let descriptorFlags = Darwin.fcntl(descriptor, F_GETFD)
+        guard descriptorFlags >= 0,
+              Darwin.fcntl(descriptor, F_SETFD, descriptorFlags | FD_CLOEXEC) == 0
+        else {
+            throw GemmaModelVerificationError.invalidRootDescriptor
+        }
+        let statusFlags = Darwin.fcntl(descriptor, F_GETFL)
+        guard statusFlags >= 0 else {
+            throw GemmaModelVerificationError.invalidRootDescriptor
+        }
+        guard statusFlags & O_ACCMODE == O_RDONLY else {
+            throw GemmaModelVerificationError.rootDescriptorNotReadOnly
+        }
+        var status = stat()
+        guard Darwin.fstat(descriptor, &status) == 0 else {
+            throw GemmaModelVerificationError.invalidRootDescriptor
+        }
+        guard status.st_mode & S_IFMT == S_IFDIR else {
+            throw GemmaModelVerificationError.rootIsNotDirectory
+        }
     }
 
     private static func scanDirectory(
@@ -482,9 +540,9 @@ public struct GemmaModelVerifier: Sendable {
         }
     }
 
-    private struct VerifiedRoot {
-        let url: URL
+    fileprivate struct VerifiedDescriptorRoot {
         let identity: GemmaModelRootIdentity
+        let status: stat
     }
 
     private struct SnapshotScan {
@@ -509,10 +567,109 @@ public struct GemmaModelVerifier: Sendable {
     }
 }
 
+/// An owned, descriptor-rooted capability for a Gemma root whose contents passed full verification.
+///
+/// This capability is deliberately neither `Codable` nor path-backed. Closing it invalidates the
+/// descriptor permanently. Every borrowed operation holds the descriptor open for the complete
+/// non-escaping closure, and revalidation traverses only from that retained directory descriptor.
+/// The root descriptor does not freeze child-file contents after a verification pass.
+public final class VerifiedGemmaModelDirectory: @unchecked Sendable {
+    public let modelIdentifier: String
+    public let checkpointRevision: String
+    public let adapterRevision: String
+    public let licenseIdentifier: String
+    public let manifestSHA256: String
+    public let rootIdentity: GemmaModelRootIdentity
+
+    private let requirements: GemmaModelRequirements
+    private let state: VerifiedGemmaModelDirectoryState
+
+    fileprivate init(
+        fileDescriptor: Int32,
+        rootIdentity: GemmaModelRootIdentity,
+        requirements: GemmaModelRequirements
+    ) {
+        self.rootIdentity = rootIdentity
+        self.requirements = requirements
+        state = VerifiedGemmaModelDirectoryState(fileDescriptor: fileDescriptor)
+        modelIdentifier = requirements.modelIdentifier
+        checkpointRevision = requirements.checkpointRevision
+        adapterRevision = requirements.adapterRevision
+        licenseIdentifier = requirements.licenseIdentifier
+        manifestSHA256 = requirements.expectedManifestSHA256
+    }
+
+    deinit {
+        close()
+    }
+
+    /// Permanently closes the owned directory descriptor. Repeated calls are harmless.
+    public func close() {
+        state.close()
+    }
+
+    /// Runs a non-escaping operation while the owned descriptor is guaranteed to remain open.
+    ///
+    /// The descriptor is borrowed. The closure must not close it or retain its numeric value.
+    public func withBorrowedFileDescriptor<Result>(
+        _ body: (Int32) throws -> Result
+    ) rethrows -> Result? {
+        try state.withOpenDescriptor(body)
+    }
+
+    /// Repeats full verification from the retained root descriptor without consulting a path.
+    public func revalidate(
+        cancellationCheck: @Sendable () throws -> Void = { try Task.checkCancellation() }
+    ) throws {
+        let didVerify: Bool? = try state.withOpenDescriptor { descriptor in
+            _ = try GemmaModelVerifier(requirements: requirements).verifiedRoot(
+                descriptor: descriptor,
+                expectedRootIdentity: rootIdentity,
+                cancellationCheck: cancellationCheck
+            )
+            return true
+        }
+        guard didVerify == true else {
+            throw GemmaModelVerificationError.invalidRootDescriptor
+        }
+    }
+}
+
+private final class VerifiedGemmaModelDirectoryState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var fileDescriptor: Int32
+
+    init(fileDescriptor: Int32) {
+        self.fileDescriptor = fileDescriptor
+    }
+
+    func close() {
+        let descriptor = lock.withLock {
+            guard fileDescriptor >= 0 else { return Int32(-1) }
+            defer { fileDescriptor = -1 }
+            return fileDescriptor
+        }
+        if descriptor >= 0 {
+            _ = Darwin.close(descriptor)
+        }
+    }
+
+    func withOpenDescriptor<Result>(
+        _ body: (Int32) throws -> Result
+    ) rethrows -> Result? {
+        try lock.withLock {
+            guard fileDescriptor >= 0 else { return nil }
+            return try body(fileDescriptor)
+        }
+    }
+}
+
 /// A verified model capability with path-free public provenance.
 ///
 /// The root remains private. `revalidate()` returns it only after checking the same directory
-/// identity and every manifest entry again immediately before a model-loading operation.
+/// identity and every manifest entry again. Production model activation must additionally open and
+/// retain the exact child files through loading, materialize MLX, and verify them again before
+/// publishing the in-memory model.
 public struct VerifiedGemmaModel: Sendable, Equatable {
     public let modelIdentifier: String
     public let checkpointRevision: String

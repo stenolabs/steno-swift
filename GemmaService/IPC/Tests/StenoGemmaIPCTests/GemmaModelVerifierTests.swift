@@ -19,6 +19,157 @@ struct GemmaModelVerifierTests {
         #expect(verified.rootIdentity == expectedIdentity)
     }
 
+    @Test("an adopted directory descriptor is owned, close-on-exec, and revalidates without a path")
+    func adoptedDescriptorOwnershipAndRevalidation() throws {
+        let fixture = try Fixture.make()
+        let descriptor = Darwin.open(fixture.root.path, O_RDONLY | O_DIRECTORY)
+        try #require(descriptor >= 0)
+        let originalStatus = try descriptorStatus(descriptor)
+
+        let verified = try fixture.verifier.verify(
+            adoptingDirectoryDescriptor: descriptor,
+            expectedRootIdentity: fixture.rootIdentity()
+        )
+        let borrowedFlags = try #require(verified.withBorrowedFileDescriptor {
+            Darwin.fcntl($0, F_GETFD)
+        })
+        #expect(borrowedFlags & FD_CLOEXEC == FD_CLOEXEC)
+
+        try verified.revalidate()
+        verified.close()
+        #expect(!self.descriptor(descriptor, stillRefersTo: originalStatus))
+        #expect(throws: GemmaModelVerificationError.invalidRootDescriptor) {
+            try verified.revalidate()
+        }
+
+        verified.close()
+        let unrelated = Darwin.open("/dev/null", O_RDONLY | O_CLOEXEC)
+        try #require(unrelated >= 0)
+        defer { _ = Darwin.close(unrelated) }
+        #expect(Darwin.fcntl(unrelated, F_GETFD) >= 0)
+    }
+
+    @Test("descriptor-rooted revalidation survives visible root rename and replacement")
+    func adoptedDescriptorDoesNotReopenVisiblePath() throws {
+        let fixture = try Fixture.make()
+        let originalRoot = fixture.root
+        let movedRoot = originalRoot.deletingLastPathComponent()
+            .appendingPathComponent("moved-\(UUID().uuidString)", isDirectory: true)
+        defer { Fixture.removeTreeIfPresent(at: movedRoot) }
+
+        let descriptor = Darwin.open(
+            originalRoot.path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        try #require(descriptor >= 0)
+        let verified = try fixture.verifier.verify(
+            adoptingDirectoryDescriptor: descriptor,
+            expectedRootIdentity: fixture.rootIdentity()
+        )
+
+        try #require(Darwin.rename(originalRoot.path, movedRoot.path) == 0)
+        try FileManager.default.createDirectory(
+            at: originalRoot,
+            withIntermediateDirectories: false
+        )
+        try Fixture.chmod(originalRoot, 0o500)
+
+        try verified.revalidate()
+        let movedIdentity = try Fixture.rootIdentity(at: movedRoot)
+        #expect(verified.rootIdentity == movedIdentity)
+        #expect(throws: GemmaModelVerificationError.manifestFileMissing(
+            "gemma-model-manifest.json"
+        )) {
+            _ = try fixture.verifier.verify(directory: originalRoot)
+        }
+    }
+
+    @Test("adoption rejects and closes wrong descriptor type, access, mode, and identity")
+    func adoptedDescriptorValidationAndFailureOwnership() throws {
+        let fixture = try Fixture.make()
+
+        var pipeDescriptors: [Int32] = [-1, -1]
+        try #require(Darwin.pipe(&pipeDescriptors) == 0)
+        let pipeStatus = try descriptorStatus(pipeDescriptors[0])
+        defer {
+            if pipeDescriptors[1] >= 0 { _ = Darwin.close(pipeDescriptors[1]) }
+        }
+        #expect(throws: GemmaModelVerificationError.rootIsNotDirectory) {
+            _ = try fixture.verifier.verify(
+                adoptingDirectoryDescriptor: pipeDescriptors[0]
+            )
+        }
+        #expect(!descriptor(pipeDescriptors[0], stillRefersTo: pipeStatus))
+        pipeDescriptors[0] = -1
+
+        let writableFile = fixture.root.deletingLastPathComponent()
+            .appendingPathComponent("writable-\(UUID().uuidString)")
+        try Data().write(to: writableFile)
+        defer { try? FileManager.default.removeItem(at: writableFile) }
+        let writableDescriptor = Darwin.open(writableFile.path, O_RDWR | O_CLOEXEC)
+        try #require(writableDescriptor >= 0)
+        let writableStatus = try descriptorStatus(writableDescriptor)
+        #expect(throws: GemmaModelVerificationError.rootDescriptorNotReadOnly) {
+            _ = try fixture.verifier.verify(
+                adoptingDirectoryDescriptor: writableDescriptor
+            )
+        }
+        #expect(!descriptor(writableDescriptor, stillRefersTo: writableStatus))
+
+        try Fixture.chmod(fixture.root, 0o700)
+        let wrongModeDescriptor = Darwin.open(
+            fixture.root.path,
+            O_RDONLY | O_DIRECTORY | O_CLOEXEC
+        )
+        try #require(wrongModeDescriptor >= 0)
+        let wrongModeStatus = try descriptorStatus(wrongModeDescriptor)
+        #expect(throws: GemmaModelVerificationError.unsafePermissions(
+            path: ".",
+            expected: 0o500,
+            actual: 0o700
+        )) {
+            _ = try fixture.verifier.verify(
+                adoptingDirectoryDescriptor: wrongModeDescriptor
+            )
+        }
+        #expect(!descriptor(wrongModeDescriptor, stillRefersTo: wrongModeStatus))
+        try Fixture.chmod(fixture.root, 0o500)
+
+        let wrongIdentityDescriptor = Darwin.open(
+            fixture.root.path,
+            O_RDONLY | O_DIRECTORY | O_CLOEXEC
+        )
+        try #require(wrongIdentityDescriptor >= 0)
+        let wrongIdentityStatus = try descriptorStatus(wrongIdentityDescriptor)
+        let identity = try fixture.rootIdentity()
+        #expect(throws: GemmaModelVerificationError.rootIdentityMismatch) {
+            _ = try fixture.verifier.verify(
+                adoptingDirectoryDescriptor: wrongIdentityDescriptor,
+                expectedRootIdentity: GemmaModelRootIdentity(
+                    deviceID: identity.deviceID,
+                    fileID: identity.fileID &+ 1
+                )
+            )
+        }
+        #expect(!descriptor(wrongIdentityDescriptor, stillRefersTo: wrongIdentityStatus))
+    }
+
+    private func descriptorStatus(_ descriptor: Int32) throws -> stat {
+        var status = stat()
+        guard Darwin.fstat(descriptor, &status) == 0 else {
+            throw CocoaError(.fileReadUnknown)
+        }
+        return status
+    }
+
+    private func descriptor(_ descriptor: Int32, stillRefersTo expected: stat) -> Bool {
+        var actual = stat()
+        guard Darwin.fstat(descriptor, &actual) == 0 else { return false }
+        return actual.st_dev == expected.st_dev
+            && actual.st_ino == expected.st_ino
+            && actual.st_mode & S_IFMT == expected.st_mode & S_IFMT
+    }
+
     @Test("manifest bytes, format, model identity, revisions, and license remain pinned")
     func manifestAndIdentityPinsAreEnforced() throws {
         let changedFixture = try Fixture.make()
@@ -550,6 +701,10 @@ private final class Fixture {
     }
 
     func rootIdentity() throws -> GemmaModelRootIdentity {
+        try Self.rootIdentity(at: root)
+    }
+
+    static func rootIdentity(at root: URL) throws -> GemmaModelRootIdentity {
         var status = stat()
         guard Darwin.lstat(root.path, &status) == 0 else {
             throw CocoaError(.fileReadUnknown)
@@ -558,6 +713,11 @@ private final class Fixture {
             deviceID: UInt64(status.st_dev),
             fileID: UInt64(status.st_ino)
         )
+    }
+
+    static func removeTreeIfPresent(at root: URL) {
+        makeWritableRecursively(root)
+        try? FileManager.default.removeItem(at: root)
     }
 
     func replaceWeights(with contents: String) throws {

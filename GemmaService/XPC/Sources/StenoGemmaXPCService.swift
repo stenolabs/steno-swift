@@ -3,11 +3,13 @@ import Dispatch
 import Foundation
 import Security
 import StenoGemmaIPC
+import StenoGemmaModelStore
 import StenoGemmaProcessGate
 import StenoGemmaServiceCore
 import XPC
 
-/// Raw XPC service shell. It has no model, filesystem, network, or audio capability.
+/// Raw XPC service shell. It has no model-loading, network, or audio capability.
+/// A verified descriptor-rooted model capability is retained only for the bound session.
 final class StenoGemmaXPCService: @unchecked Sendable {
     private enum AuthenticationState: Equatable {
         case unbound
@@ -33,6 +35,8 @@ final class StenoGemmaXPCService: @unchecked Sendable {
     private var authenticationTimeout: DispatchWorkItem?
     private var helperExecutionLease: GemmaModelExecutionLease?
     private var executionGateMonitor: GemmaHelperExecutionGateMonitor?
+    private var boundSession: GemmaIPCBindSessionRequest?
+    private var verifiedModelDirectory: VerifiedGemmaModelDirectory?
 
     init?(connection: xpc_connection_t) {
         guard let configuration = StenoGemmaXPCProcessConfiguration.current else { return nil }
@@ -98,7 +102,8 @@ final class StenoGemmaXPCService: @unchecked Sendable {
         case .binding, .terminal:
             terminateInvalidPeer()
         case .bound:
-            guard outer.executionGateDescriptor == nil else {
+            guard outer.executionGateDescriptor == nil,
+                  outer.modelDirectoryDescriptor == nil else {
                 terminateInvalidPeer()
             }
             handleBoundFrame(outer, replyTo: event)
@@ -121,7 +126,7 @@ final class StenoGemmaXPCService: @unchecked Sendable {
             guard control.requestID == outer.requestID else {
                 terminateInvalidPeer()
             }
-            if case .bindExecutionGate = control.body {
+            if case .bindSession = control.body {
                 terminateInvalidPeer()
             }
             handle(control: control, outerRequestID: outer.requestID, replyTo: event)
@@ -135,10 +140,11 @@ final class StenoGemmaXPCService: @unchecked Sendable {
         replyTo message: xpc_object_t
     ) {
         guard outer.channel == .control,
-              let descriptorObject = outer.executionGateDescriptor,
+              let executionGateDescriptor = outer.executionGateDescriptor,
+              let modelDirectoryDescriptor = outer.modelDirectoryDescriptor,
               let control = try? GemmaXPCControlCodec.decodeRequest(outer.frame),
               control.requestID == outer.requestID,
-              control.body == .bindExecutionGate
+              case .bindSession(let binding) = control.body
         else {
             terminateInvalidPeer()
         }
@@ -151,14 +157,30 @@ final class StenoGemmaXPCService: @unchecked Sendable {
             terminateInvalidPeer()
         }
 
-        let duplicate = xpc_fd_dup(descriptorObject)
-        guard duplicate >= 0 else {
+        guard let reply = xpc_dictionary_create_reply(message) else {
             terminateInvalidPeer()
         }
+        let replyHandle = GemmaXPCReplyHandle(
+            connection: connection,
+            reply: reply,
+            channel: .control
+        )
+
+        let executionGateFD = xpc_fd_dup(executionGateDescriptor)
+        guard executionGateFD >= 0 else {
+            terminateInvalidPeer()
+        }
+        let modelDirectoryFD = xpc_fd_dup(modelDirectoryDescriptor)
+        guard modelDirectoryFD >= 0 else {
+            _ = Darwin.close(executionGateFD)
+            terminateInvalidPeer()
+        }
+
         let lease: GemmaModelExecutionLease
         do {
-            lease = try GemmaProcessGate.adoptHelperExecutionDescriptor(duplicate)
+            lease = try GemmaProcessGate.adoptHelperExecutionDescriptor(executionGateFD)
         } catch {
+            _ = Darwin.close(modelDirectoryFD)
             terminateInvalidPeer()
         }
         do {
@@ -171,26 +193,101 @@ final class StenoGemmaXPCService: @unchecked Sendable {
 
         let monitor = GemmaHelperExecutionGateMonitor(lease: lease)
         guard monitor.start() else {
+            _ = Darwin.close(modelDirectoryFD)
             terminateInvalidPeer()
         }
-        let identity = StenoGemmaXPCProcessRuntime.boundHelperIdentity
+        do {
+            if try GemmaProcessGate.helperObservesRecordingIntent(for: lease) {
+                _ = Darwin.close(modelDirectoryFD)
+                terminateForRecordingIntent()
+            }
+        } catch {
+            _ = Darwin.close(modelDirectoryFD)
+            terminateInvalidPeer()
+        }
+
+        DispatchQueue.global(qos: .utility).async { [self, lease, monitor, replyHandle] in
+            verifyAndBindSession(
+                binding: binding,
+                executionGate: lease,
+                modelDirectoryFD: modelDirectoryFD,
+                monitor: monitor,
+                requestID: outer.requestID,
+                reply: replyHandle
+            )
+        }
+    }
+
+    private func verifyAndBindSession(
+        binding: GemmaIPCBindSessionRequest,
+        executionGate lease: GemmaModelExecutionLease,
+        modelDirectoryFD: Int32,
+        monitor: GemmaHelperExecutionGateMonitor,
+        requestID: UUID,
+        reply: GemmaXPCReplyHandle
+    ) {
+        let requirements: GemmaModelRequirements
+        do {
+            requirements = try GemmaModelRequirements(
+                modelIdentifier: binding.model.modelIdentifier,
+                checkpointRevision: binding.model.checkpointRevision,
+                adapterRevision: binding.model.adapterRevision,
+                licenseIdentifier: binding.model.licenseIdentifier,
+                expectedManifestSHA256: binding.model.manifestSHA256
+            )
+        } catch {
+            _ = Darwin.close(modelDirectoryFD)
+            terminateInvalidPeer()
+        }
+
+        let verified: VerifiedGemmaModelDirectory
+        do {
+            verified = try GemmaModelVerifier(requirements: requirements).verify(
+                adoptingDirectoryDescriptor: modelDirectoryFD,
+                expectedRootIdentity: GemmaModelRootIdentity(
+                    deviceID: binding.expectedModelRootIdentity.deviceID,
+                    fileID: binding.expectedModelRootIdentity.fileID
+                )
+            )
+        } catch {
+            terminateInvalidPeer()
+        }
+
+        do {
+            if try GemmaProcessGate.helperObservesRecordingIntent(for: lease) {
+                terminateForRecordingIntent()
+            }
+        } catch {
+            terminateInvalidPeer()
+        }
+
         let didBind = lock.withLock {
             guard executionGateState == .binding else { return false }
             helperExecutionLease = lease
             executionGateMonitor = monitor
+            boundSession = binding
+            verifiedModelDirectory = verified
             executionGateState = .bound
             return true
         }
         guard didBind else {
+            verified.close()
             terminateInvalidPeer()
         }
-        guard sendControl(
-            .executionGateBound(identity),
-            for: outer.requestID,
-            replyTo: message
-        ) else {
+
+        let response = GemmaXPCControlResponseEnvelope(
+            requestID: requestID,
+            body: .sessionBound(
+                GemmaIPCBindSessionResponse(
+                    binding: binding,
+                    helperIdentity: StenoGemmaXPCProcessRuntime.boundHelperIdentity
+                )
+            )
+        )
+        guard let data = try? GemmaXPCControlCodec.encode(response) else {
             terminateInvalidPeer()
         }
+        reply.send(data, requestID: requestID)
     }
 
     private func authenticatePeerIfNeeded(message: xpc_object_t) -> Bool {
@@ -326,6 +423,11 @@ final class StenoGemmaXPCService: @unchecked Sendable {
             )
 
         case .handshake, .countTokens, .generate:
+            guard let boundModel = lock.withLock({ boundSession?.model }),
+                  request.body.modelPin == boundModel else {
+                replyModelFailure(.modelIntegrityFailure, for: requestID, reply: replyOnce)
+                return
+            }
             guard let cancellationResponse = Self.encodedModelResponse(
                 requestID: requestID,
                 body: .failure(.init(code: .cancelled))
@@ -450,7 +552,7 @@ final class StenoGemmaXPCService: @unchecked Sendable {
         ) else { return }
 
         switch control.body {
-        case .bindExecutionGate:
+        case .bindSession:
             terminateInvalidPeer()
 
         case .prepareForExit:
@@ -757,15 +859,17 @@ private struct GemmaXPCOuterFrame {
     let frame: Data
     let requestID: UUID
     let executionGateDescriptor: xpc_object_t?
+    let modelDirectoryDescriptor: xpc_object_t?
 
     private static let channelKey = "channel"
     private static let frameKey = "frame"
     private static let requestIDKey = "requestID"
     private static let executionGateFDKey = "executionGateFD"
+    private static let modelDirectoryFDKey = "modelDirectoryFD"
 
     static func decode(_ message: xpc_object_t) -> GemmaXPCOuterFrame? {
         guard xpc_get_type(message) == XPC_TYPE_DICTIONARY,
-              let executionGateDescriptor = validatedExecutionGateDescriptor(message),
+              let descriptors = validatedDescriptors(message),
               let channelValue = xpc_dictionary_get_string(message, channelKey),
               let channel = GemmaXPCChannel(rawValue: String(cString: channelValue)),
               let requestIDBytes = xpc_dictionary_get_uuid(message, requestIDKey)
@@ -785,7 +889,8 @@ private struct GemmaXPCOuterFrame {
             channel: channel,
             frame: Data(bytes: dataBytes, count: length),
             requestID: UUID(uuid: uuid),
-            executionGateDescriptor: executionGateDescriptor.value
+            executionGateDescriptor: descriptors.executionGate,
+            modelDirectoryDescriptor: descriptors.modelDirectory
         )
     }
 
@@ -806,10 +911,11 @@ private struct GemmaXPCOuterFrame {
     }
 
     private struct OptionalDescriptor {
-        let value: xpc_object_t?
+        let executionGate: xpc_object_t?
+        let modelDirectory: xpc_object_t?
     }
 
-    private static func validatedExecutionGateDescriptor(
+    private static func validatedDescriptors(
         _ dictionary: xpc_object_t
     ) -> OptionalDescriptor? {
         var keys = Set<String>()
@@ -820,15 +926,20 @@ private struct GemmaXPCOuterFrame {
         guard accepted else { return nil }
         let ordinaryKeys = Set([channelKey, frameKey, requestIDKey])
         if keys == ordinaryKeys {
-            return OptionalDescriptor(value: nil)
+            return OptionalDescriptor(executionGate: nil, modelDirectory: nil)
         }
-        guard keys == ordinaryKeys.union([executionGateFDKey]),
-              let descriptor = xpc_dictionary_get_value(dictionary, executionGateFDKey),
-              xpc_get_type(descriptor) == XPC_TYPE_FD
+        guard keys == ordinaryKeys.union([executionGateFDKey, modelDirectoryFDKey]),
+              let executionGate = xpc_dictionary_get_value(dictionary, executionGateFDKey),
+              let modelDirectory = xpc_dictionary_get_value(dictionary, modelDirectoryFDKey),
+              xpc_get_type(executionGate) == XPC_TYPE_FD,
+              xpc_get_type(modelDirectory) == XPC_TYPE_FD
         else {
             return nil
         }
-        return OptionalDescriptor(value: descriptor)
+        return OptionalDescriptor(
+            executionGate: executionGate,
+            modelDirectory: modelDirectory
+        )
     }
 }
 

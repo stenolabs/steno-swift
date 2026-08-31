@@ -13,14 +13,14 @@ struct GemmaClientControllerTests {
         let factory = TestTransportFactory(transport: transport, events: events)
         let controller = try makeController(factory: factory, events: events)
 
-        try await controller.withModelSession { session in
+        try await controller.withModelSession(model: try modelPin()) { session in
             _ = try await session.send(try handshakeBody())
             _ = try await session.send(try tokenCountBody())
             _ = try await session.send(try generationBody(prompt: "one helper"))
             #expect(factory.creationCount == 1)
             #expect(await controller.lifecycleState() == .active)
             await #expect(throws: GemmaClientControllerError.modelSessionActive) {
-                try await controller.withModelSession { _ in () }
+                try await controller.withModelSession(model: try modelPin()) { _ in () }
             }
         }
 
@@ -36,9 +36,39 @@ struct GemmaClientControllerTests {
             factory: TestTransportFactory(transport: TestTransport(events: events), events: events),
             events: events
         )
-        let retained = try await controller.withModelSession { session in session }
+        let retained = try await controller.withModelSession(model: try modelPin()) { session in session }
         await #expect(throws: GemmaClientControllerError.modelSessionInactive) {
             try await retained.send(try generationBody(prompt: "late"))
+        }
+    }
+
+    @Test("a session rejects a different model pin before factory creation or transport send")
+    func mixedModelPinsAreRejectedBeforeTransportUse() async throws {
+        let events = EventLog()
+        let transport = TestTransport(events: events)
+        let factory = TestTransportFactory(transport: transport, events: events)
+        let controller = try makeController(factory: factory, events: events)
+        let sessionModel = try modelPin()
+        let otherModel = try alternateModelPin()
+
+        try await controller.withModelSession(model: sessionModel) { session in
+            #expect(session.model == sessionModel)
+            await #expect(throws: GemmaClientControllerError.modelPinMismatch) {
+                try await session.send(try generationBody(model: otherModel, prompt: "wrong before factory"))
+            }
+            #expect(factory.creationCount == 0)
+            #expect(events.count(of: "send:generate") == 0)
+
+            _ = try await session.send(try generationBody(model: sessionModel, prompt: "right"))
+            #expect(factory.creationCount == 1)
+            #expect(factory.requestedModels == [sessionModel])
+            #expect(events.count(of: "send:generate") == 1)
+
+            await #expect(throws: GemmaClientControllerError.modelPinMismatch) {
+                try await session.send(try generationBody(model: otherModel, prompt: "wrong after factory"))
+            }
+            #expect(factory.creationCount == 1)
+            #expect(events.count(of: "send:generate") == 1)
         }
     }
 
@@ -51,7 +81,7 @@ struct GemmaClientControllerTests {
             events: throwingEvents
         )
         await #expect(throws: SessionTestError.expected) {
-            try await throwingController.withModelSession { session in
+            try await throwingController.withModelSession(model: try modelPin()) { session in
                 _ = try await session.send(try generationBody(prompt: "then throw"))
                 throw SessionTestError.expected
             }
@@ -66,7 +96,7 @@ struct GemmaClientControllerTests {
             events: cancellingEvents
         )
         let task = Task {
-            try await cancellingController.withModelSession { session in
+            try await cancellingController.withModelSession(model: try modelPin()) { session in
                 _ = try await session.send(try generationBody(prompt: "cancel"))
             }
         }
@@ -87,14 +117,14 @@ struct GemmaClientControllerTests {
             exitProver: TestExitProver(events: events, exitGate: exitGate)
         )
         let modelTask = Task {
-            try await controller.withModelSession { session in
+            try await controller.withModelSession(model: try modelPin()) { session in
                 _ = try await session.send(try generationBody(prompt: "retire"))
             }
         }
         await events.waitUntilPresent("waitForExit")
         #expect(await controller.lifecycleState() == .retiring)
         await #expect(throws: GemmaClientControllerError.modelSessionRetiring) {
-            try await controller.withModelSession { _ in () }
+            try await controller.withModelSession(model: try modelPin()) { _ in () }
         }
 
         let leaseToken = GemmaRecordingLease()
@@ -120,7 +150,7 @@ struct GemmaClientControllerTests {
             events: events
         )
         let modelTask = Task {
-            try await controller.withModelSession { session in
+            try await controller.withModelSession(model: try modelPin()) { session in
                 _ = try await session.send(try generationBody(prompt: "recording wins"))
             }
         }
@@ -133,6 +163,68 @@ struct GemmaClientControllerTests {
         #expect(await controller.lifecycleState() == .recording)
         try await controller.releaseRecordingLease(lease)
         applicationGate.resolve(.generate(GemmaIPCGenerateResponse(text: "late")))
+    }
+
+    @Test("recording preempts model preparation before gate acquisition or helper activation")
+    func recordingPreemptsBlockedPreparation() async throws {
+        let events = EventLog()
+        let preparationGate = AsyncGate<Void>()
+        let factory = TestTransportFactory(
+            transport: TestTransport(events: events),
+            events: events,
+            preparationGate: preparationGate
+        )
+        let controller = try makeController(factory: factory, events: events)
+
+        let modelTask = Task {
+            try await controller.withModelSession(model: try modelPin()) { session in
+                _ = try await session.send(try generationBody(prompt: "preparation"))
+            }
+        }
+        await events.waitUntilPresent("prepareTransport")
+
+        let lease = try await controller.acquireRecordingLease(GemmaRecordingLease())
+        #expect(await controller.lifecycleState() == .recording)
+        #expect(events.count(of: "activateTransport") == 0)
+        await #expect(throws: GemmaClientControllerError.cancelledForRecording) {
+            try await modelTask.value
+        }
+
+        preparationGate.resolve(())
+        await events.waitUntilPresent("invalidatePreparation")
+        #expect(events.count(of: "activateTransport") == 0)
+        #expect(events.count(of: "invalidatePreparation") == 1)
+        try await controller.releaseRecordingLease(lease)
+    }
+
+    @Test("concurrent first requests share one model preparation and transport activation")
+    func concurrentFirstRequestsSharePreparation() async throws {
+        let events = EventLog()
+        let preparationGate = AsyncGate<Void>()
+        let factory = TestTransportFactory(
+            transport: TestTransport(events: events),
+            events: events,
+            preparationGate: preparationGate
+        )
+        let controller = try makeController(factory: factory, events: events)
+
+        try await controller.withModelSession(model: try modelPin()) { session in
+            let first = Task {
+                try await session.send(try generationBody(prompt: "first preparation waiter"))
+            }
+            let second = Task {
+                try await session.send(try generationBody(prompt: "second preparation waiter"))
+            }
+            await events.waitUntilPresent("prepareTransport")
+            await Task.yield()
+            preparationGate.resolve(())
+            _ = try await first.value
+            _ = try await second.value
+        }
+
+        #expect(events.count(of: "prepareTransport") == 1)
+        #expect(events.count(of: "activateTransport") == 1)
+        #expect(factory.creationCount == 1)
     }
 
     @Test("process-gate contention is recoverable and does not start a helper")
@@ -167,7 +259,7 @@ struct GemmaClientControllerTests {
             deadline: ManualDeadline()
         )
 
-        try await controller.withModelSession { session in
+        try await controller.withModelSession(model: try modelPin()) { session in
             let first = Task { try await session.send(try generationBody(prompt: "first")) }
             await events.waitUntilPresent("send:generate")
             await #expect(throws: GemmaClientControllerError.busy(limit: 1)) {
@@ -189,7 +281,7 @@ struct GemmaClientControllerTests {
             events: events
         )
         let modelTask = Task {
-            try await controller.withModelSession { session in
+            try await controller.withModelSession(model: try modelPin()) { session in
                 _ = try await session.send(try generationBody(prompt: "fail retirement"))
             }
         }
@@ -221,12 +313,13 @@ struct GemmaClientControllerTests {
             deadline: deadline
         )
         let modelTask = Task {
-            try await controller.withModelSession { session in
+            try await controller.withModelSession(model: try modelPin()) { session in
                 _ = try await session.send(try generationBody(prompt: "connect"))
+                events.record("connected")
                 await hold.wait()
             }
         }
-        await events.waitUntilPresent("send:generate")
+        await events.waitUntilPresent("connected")
         let leaseTask = Task { try await controller.acquireRecordingLease(GemmaRecordingLease()) }
         await events.waitUntilPresent("send:shutdown")
         await deadline.waitUntilRegistered(.quiescentShutdown)
@@ -260,7 +353,7 @@ struct GemmaClientControllerTests {
             deadline: deadline
         )
         let modelTask = Task {
-            try await controller.withModelSession { session in
+            try await controller.withModelSession(model: try modelPin()) { session in
                 let first = Task { try await session.send(try generationBody(prompt: "first")) }
                 let second = Task { try await session.send(try generationBody(prompt: "second")) }
                 await events.waitUntilCount("send:generate", reaches: 2)
@@ -299,7 +392,7 @@ struct GemmaClientControllerTests {
             deadline: deadline
         )
         let modelTask = Task {
-            try await controller.withModelSession { session in
+            try await controller.withModelSession(model: try modelPin()) { session in
                 _ = try await session.send(try generationBody(prompt: "connect"))
                 await hold.wait()
             }
@@ -417,15 +510,21 @@ struct GemmaClientControllerTests {
     }
 }
 
-private func generationBody(prompt: String) throws -> GemmaIPCRequestBody {
-    let pin = try modelPin()
+private func generationBody(
+    model: GemmaModelSnapshotPin,
+    prompt: String
+) throws -> GemmaIPCRequestBody {
     return .generate(
         try GemmaIPCGenerateRequest(
-            model: pin,
+            model: model,
             prompt: prompt,
             maximumTokens: 32
         )
     )
+}
+
+private func generationBody(prompt: String) throws -> GemmaIPCRequestBody {
+    try generationBody(model: modelPin(), prompt: prompt)
 }
 
 private func handshakeBody() throws -> GemmaIPCRequestBody {
@@ -446,6 +545,16 @@ private func modelPin() throws -> GemmaModelSnapshotPin {
     )
 }
 
+private func alternateModelPin() throws -> GemmaModelSnapshotPin {
+    try GemmaModelSnapshotPin(
+        modelIdentifier: "google/gemma-4-2b-it",
+        checkpointRevision: String(repeating: "c", count: 40),
+        adapterRevision: GemmaIPCBuildInfo.adapterRevision,
+        licenseIdentifier: "gemma",
+        manifestSHA256: String(repeating: "d", count: 64)
+    )
+}
+
 private enum SessionTestError: Error {
     case expected
 }
@@ -455,44 +564,111 @@ private final class TestTransportFactory: GemmaClientTransportFactory, @unchecke
     private let transports: [TestTransport]
     private let events: EventLog
     private let failFirstWithExecutionGateBusy: Bool
+    private let preparationGate: AsyncGate<Void>?
     private var storedCreationCount = 0
+    private var storedRequestedModels: [GemmaModelSnapshotPin] = []
     private var didFailForExecutionGateBusy = false
 
     init(
         transport: TestTransport,
         events: EventLog,
-        failFirstWithExecutionGateBusy: Bool = false
+        failFirstWithExecutionGateBusy: Bool = false,
+        preparationGate: AsyncGate<Void>? = nil
     ) {
         self.transports = [transport]
         self.events = events
         self.failFirstWithExecutionGateBusy = failFirstWithExecutionGateBusy
+        self.preparationGate = preparationGate
     }
 
     init(transports: [TestTransport], events: EventLog) {
         self.transports = transports
         self.events = events
         failFirstWithExecutionGateBusy = false
+        preparationGate = nil
     }
 
     var creationCount: Int {
         lock.withLock { storedCreationCount }
     }
 
-    func makeTransport() throws -> any GemmaClientTransport {
-        let transport: TestTransport = try lock.withLock {
+    var requestedModels: [GemmaModelSnapshotPin] {
+        lock.withLock { storedRequestedModels }
+    }
+
+    func prepareTransport(
+        for model: GemmaModelSnapshotPin
+    ) async throws -> any GemmaClientTransportPreparation {
+        events.record("prepareTransport")
+        if let preparationGate {
+            await preparationGate.wait()
+        }
+        let outcome: TestTransportPreparation.Outcome = try lock.withLock {
             if failFirstWithExecutionGateBusy, !didFailForExecutionGateBusy {
                 didFailForExecutionGateBusy = true
-                throw GemmaRawXPCTransportError.executionGateBusy
+                return .executionGateBusy
             }
             guard storedCreationCount < transports.count else {
                 throw TestTransportError.noConfiguredTransport
             }
             let transport = transports[storedCreationCount]
             storedCreationCount += 1
-            return transport
+            storedRequestedModels.append(model)
+            return .transport(transport)
         }
-        events.record("factory")
-        return transport
+        return TestTransportPreparation(model: model, outcome: outcome, events: events)
+    }
+}
+
+private final class TestTransportPreparation:
+    GemmaClientTransportPreparation,
+    @unchecked Sendable
+{
+    enum Outcome {
+        case transport(TestTransport)
+        case executionGateBusy
+    }
+
+    let model: GemmaModelSnapshotPin
+
+    private let lock = NSLock()
+    private let outcome: Outcome
+    private let events: EventLog
+    private var consumed = false
+
+    init(model: GemmaModelSnapshotPin, outcome: Outcome, events: EventLog) {
+        self.model = model
+        self.outcome = outcome
+        self.events = events
+    }
+
+    func activate() throws -> any GemmaClientTransport {
+        let canActivate = lock.withLock {
+            guard !consumed else { return false }
+            consumed = true
+            return true
+        }
+        guard canActivate else {
+            throw TestTransportError.noConfiguredTransport
+        }
+        events.record("activateTransport")
+        switch outcome {
+        case .transport(let transport):
+            return transport
+        case .executionGateBusy:
+            throw GemmaRawXPCTransportError.executionGateBusy
+        }
+    }
+
+    func invalidate() {
+        let didInvalidate = lock.withLock {
+            guard !consumed else { return false }
+            consumed = true
+            return true
+        }
+        if didInvalidate {
+            events.record("invalidatePreparation")
+        }
     }
 }
 

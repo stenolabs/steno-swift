@@ -25,10 +25,11 @@ This first slice provides:
 - a separate Xcode 27 project variant that embeds and code-signs the XPC helper with App Sandbox enabled and incoming and outgoing network access disabled; and
 - mutual designated-requirement, dynamic-code, canonical-path, request-ID, and channel validation between the signed app and helper;
 - a bounded client request lifecycle with cancellable deadlines and no eager helper launch or reconnect;
+- two-phase transport initialization that verifies the model asynchronously before any process-gate acquisition and atomically rejects late capabilities after recording preemption;
 - a process-wide server request registry with unique active request IDs, targeted cancellation outside the model actor, one inference-like task at a time, and prepare/arm quiescence only after tasks return and replies finish;
 - one app-process-wide recording coordinator that closes native Gemma admission before the first recording permission await and retains the lease through capture cleanup;
 - an exact-process exit protocol in which the authenticated helper arms itself, the client closes that exact connection without another message, and recording proceeds only after the observed helper PID exits; and
-- a global crash-releasing recording and model gate, with the file descriptor bound in the first XPC control frame;
+- a global crash-releasing recording and model gate, with the execution-gate and verified model-root descriptors atomically bound in the first XPC control frame;
 - a session-scoped client with automatic terminal retirement; and
 - a consent chokepoint with one-shot, pin-bound, source-inode-bound confirmations and an empty production checkpoint catalog;
 - an MLX-free importer that copies only a fully pinned local manifest into a content-addressed Steno-controlled store, publishes without replacement, and returns path-free provenance;
@@ -43,6 +44,7 @@ It does not yet provide:
 - Hardened Runtime validation for the production app and a Release-specific entitlement policy;
 - negative signed abuse and multiprocess XPC integration coverage;
 - activation of the MLX provider through the XPC helper;
+- an immutable child-file activation boundary between descriptor-rooted verification and MLX materialization;
 - a real model run; or
 - a production support commitment for any specific converted checkpoint.
 
@@ -59,7 +61,9 @@ It gives the MLX adapter a cache identity derived from the pinned manifest, reso
 Before the directory can be used, every regular file must appear in a manifest with its exact byte count and SHA-256 digest.
 The verifier rejects traversal paths, hidden components, non-ASCII paths, case or normalization collisions, absolute paths, a symbolic-link root, symbolic-link entries inside the snapshot, missing files, unexpected files, duplicate entries, hard-linked installed files, wrong ownership or modes, size differences, hash differences, and an unpinned or mismatched manifest.
 It also rejects safetensors indexes whose shard paths escape the snapshot or refer to files absent from the manifest.
-The verifier holds directory descriptors, opens descendants with `openat` and `O_NOFOLLOW`, compares metadata before and after reads, binds the verified capability to the root device and inode, and repeats that complete check immediately before MLX loads it.
+The verifier holds directory descriptors, opens descendants with `openat` and `O_NOFOLLOW`, compares metadata before and after reads, and binds the verified capability to the root device and inode.
+The standalone runtime prototype repeats that complete path-backed check immediately before MLX loading, but this does not make previously checked child files immutable against another process running as the same user.
+The XPC provider must remain unavailable until a descriptor- or byte-based activation loader retains the exact manifest-listed child files, fully materializes the model without file-backed tensors, and verifies those files again before publishing the in-memory model.
 The importer writes through retained descriptors into a private sibling staging directory, synchronizes files and directories, sets files to `0400` and directories to `0500`, and publishes to `~/Library/Application Support/Steno/NativeGemma/Models/v1/<manifest-sha256>` with a no-replace rename.
 Those modes prevent accidental changes and expose tampering, but they are not a security boundary against another process running as the same macOS user.
 The complete import and recovery contract is documented in [Native Gemma model store](../docs/NATIVE-GEMMA-MODEL-STORE.md).
@@ -76,10 +80,9 @@ Do not add a checkpoint to a Steno installation catalog until its exact source, 
 
 Use Xcode 27 or later and install its Metal Toolchain component.
 
-The current exact `mlx-swift-lm` source pin still resolves a transitive MLX Metal header that Xcode 27 Beta 6 rejects.
-Therefore the full runtime package is not currently a green Xcode 27 build.
-Do not activate the runtime or replace the pin with a floating dependency.
-A matched and reviewed MLX, MLX-C, and `mlx-swift-lm` snapshot is required first.
+The exact MLX dependency snapshot builds with Xcode 27 Beta 6 after its matching Metal Toolchain component is installed.
+The full package and its four model-free runtime tests pass without downloading or loading a checkpoint.
+Keep the dependency revisions exact and do not replace them with floating versions.
 
 ```bash
 swift test --package-path GemmaService
@@ -132,7 +135,7 @@ It must not be read from the same untrusted checkpoint directory it is meant to 
 
 ## Remaining production work
 
-The remaining production work is to bind model import to the app-wide recording exclusion, review and add one exact checkpoint to the currently empty production catalog, expose the consented import flow, define explicit orphan and corrupt-install recovery, validate Hardened Runtime and the Release entitlement policy, select a buildable matched MLX dependency snapshot, activate the MLX provider through the helper, and complete a real model run.
+The remaining production work is to review and add one exact checkpoint to the currently empty production catalog, expose the consented import flow, define explicit orphan and corrupt-install recovery, validate Hardened Runtime and the Release entitlement policy, complete the immutable child-file activation boundary, activate the MLX provider through the helper, and complete a real model run.
 Negative signed abuse and multiprocess XPC coverage must be complete before native Gemma is activated.
 The normative design for that boundary is [Native Gemma cross-process gate](../docs/NATIVE-GEMMA-GATE.md).
 Approved manifests and expected digests must live in Steno-controlled metadata, and installation must route through `ModelInstallationCoordinator` with explicit consent.

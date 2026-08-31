@@ -81,7 +81,9 @@ The failed result must never activate the model; a later explicitly authorized r
 
 Read-only owner modes protect against accidental modification and provide a cheap tamper signal.
 They are not a cryptographic or sandbox boundary against another process running as the same macOS user, which can change owner modes.
-The actual integrity controls are exact pins, retained descriptors, no-follow opens, content hashing, no-replace publication, helper sandboxing, and full revalidation immediately before MLX loading.
+The implemented store integrity controls are exact pins, retained root descriptors, no-follow opens, content hashing, no-replace publication, helper sandboxing, and descriptor-rooted verification at each explicit verification instant.
+A retained root descriptor does not freeze later child-file mutations by another process running as the same user.
+Production activation therefore also requires an immutable load boundary that opens and retains the exact manifest-listed child files, fully materializes MLX from those capabilities, and verifies them again before publishing the in-memory model.
 
 ## Activation boundary
 
@@ -98,5 +100,8 @@ That condition lasts for the remaining app-process lifetime, keeps the recording
 A follow-up user-facing path must explain the blocked state and offer a safe restart, but it must never turn a timeout or cancellation request into permission to begin capture while import quiescence remains unproven.
 The user-facing import path must use the app facade rather than making the internal adapter a general app service.
 The sandboxed helper cannot reopen the user store by path.
-Provider activation therefore also requires an authenticated XPC handoff of a verified model-directory descriptor and a descriptor-rooted verifier entry point that preserves the pinned root identity inside the helper.
-Provider activation remains unavailable until that descriptor handoff, a reviewed production checkpoint, user-facing consent flow, buildable matched MLX dependency set, signed helper runtime path, and real offline model run are accepted.
+The authenticated XPC bind now transfers a verified model-directory descriptor together with the execution-gate descriptor.
+The helper revalidates the tree from that retained descriptor at bind time and preserves the pinned root identity and exact model pin for the session.
+That acknowledgement does not claim continued child-file immutability after the scan.
+The exact MLX dependency snapshot builds with Xcode 27 Beta 6 and its matching Metal Toolchain component without loading a model.
+Provider activation remains unavailable until a reviewed production checkpoint, user-facing consent and import flow, explicit recovery for retained corrupt installs or crash-orphaned staging, production Hardened Runtime validation, an immutable child-file activation boundary, and a real offline model run are accepted.

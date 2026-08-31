@@ -294,6 +294,8 @@ public struct GemmaModelManifest: Sendable, Equatable, Codable {
 
 public enum GemmaModelVerificationError: Error, Equatable, LocalizedError, Sendable {
     case invalidRequirement(String)
+    case invalidRootDescriptor
+    case rootDescriptorNotReadOnly
     case rootIsNotDirectory
     case rootIdentityMismatch
     case symbolicLinkNotAllowed(String)
@@ -339,6 +341,10 @@ public enum GemmaModelVerificationError: Error, Equatable, LocalizedError, Senda
         switch self {
         case .invalidRequirement(let detail):
             "Invalid Gemma model requirements: \(detail)."
+        case .invalidRootDescriptor:
+            "The Gemma model root descriptor is invalid."
+        case .rootDescriptorNotReadOnly:
+            "The Gemma model root descriptor is not read-only."
         case .rootIsNotDirectory:
             "The Gemma model root is not a directory."
         case .rootIdentityMismatch:

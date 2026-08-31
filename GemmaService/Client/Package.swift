@@ -21,6 +21,7 @@ let package = Package(
             name: "StenoGemmaClient",
             dependencies: [
                 .product(name: "StenoGemmaIPC", package: "IPC"),
+                .product(name: "StenoGemmaModelStore", package: "IPC"),
                 .product(name: "StenoGemmaProcessGate", package: "IPC"),
             ],
             swiftSettings: [
@@ -32,6 +33,7 @@ let package = Package(
             dependencies: [
                 "StenoGemmaClient",
                 .product(name: "StenoGemmaIPC", package: "IPC"),
+                .product(name: "StenoGemmaModelStore", package: "IPC"),
                 .product(name: "StenoGemmaProcessGate", package: "IPC"),
             ],
             swiftSettings: [

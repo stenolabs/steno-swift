@@ -374,30 +374,42 @@ struct GemmaIPCTests {
         }
     }
 
-    @Test("protocol v3 control frames round-trip and require the exact response kind")
+    @Test("protocol v4 atomically binds a model session and requires an exact response mirror")
     func controlFramesRoundTrip() throws {
         let identity = GemmaIPCBoundHelperIdentity(
             helperInstanceID: UUID(),
             processIdentifier: 42
+        )
+        let binding = GemmaIPCBindSessionRequest(
+            model: pin,
+            expectedModelRootIdentity: try GemmaIPCModelRootIdentity(
+                deviceID: 17,
+                fileID: 23
+            )
         )
         let prepared = GemmaIPCPreparedHelperExit(
             helperInstanceID: identity.helperInstanceID,
             processIdentifier: identity.processIdentifier
         )
 
-        let bindRequest = GemmaXPCControlRequestEnvelope(body: .bindExecutionGate)
+        let bindRequest = GemmaXPCControlRequestEnvelope(body: .bindSession(binding))
         #expect(try GemmaXPCControlCodec.decodeRequest(
             GemmaXPCControlCodec.encode(bindRequest)
         ) == bindRequest)
         let bindResponse = GemmaXPCControlResponseEnvelope(
             requestID: bindRequest.requestID,
-            body: .executionGateBound(identity)
+            body: .sessionBound(.init(binding: binding, helperIdentity: identity))
         )
         #expect(try GemmaXPCControlCodec.decodeResponse(
             GemmaXPCControlCodec.encode(bindResponse),
             expectedRequestID: bindRequest.requestID,
-            expectedOperation: .bindExecutionGate
+            expectedOperation: .bindSession
         ) == bindResponse)
+        #expect(try GemmaXPCControlCodec.decodeBindSessionResponse(
+            GemmaXPCControlCodec.encode(bindResponse),
+            expectedRequestID: bindRequest.requestID,
+            expectedBinding: binding
+        ) == .init(binding: binding, helperIdentity: identity))
 
         let prepareRequest = GemmaXPCControlRequestEnvelope(body: .prepareForExit)
         #expect(try GemmaXPCControlCodec.decodeRequest(
@@ -438,8 +450,8 @@ struct GemmaIPCTests {
         }
 
         let mismatches: [(GemmaXPCControlOperation, GemmaXPCControlResponseBody)] = [
-            (.bindExecutionGate, .prepared(prepared)),
-            (.prepareForExit, .executionGateBound(identity)),
+            (.bindSession, .prepared(prepared)),
+            (.prepareForExit, .sessionBound(.init(binding: binding, helperIdentity: identity))),
             (.armAndExit, .prepared(prepared)),
         ]
         for (expectedOperation, wrongBody) in mismatches {
@@ -457,7 +469,7 @@ struct GemmaIPCTests {
         }
 
         for operation in [
-            GemmaXPCControlOperation.bindExecutionGate,
+            GemmaXPCControlOperation.bindSession,
             .prepareForExit,
             .armAndExit,
         ] {
@@ -476,12 +488,19 @@ struct GemmaIPCTests {
         #expect(GemmaXPCChannel.control.rawValue == "control")
     }
 
-    @Test("control JSON requires exact keys and rejects duplicates")
+    @Test("control bind JSON requires exact keys and rejects malformed fields")
     func controlFramesRequireExactJSONKeys() throws {
         let requestID = UUID()
+        let binding = GemmaIPCBindSessionRequest(
+            model: pin,
+            expectedModelRootIdentity: try GemmaIPCModelRootIdentity(
+                deviceID: 17,
+                fileID: 23
+            )
+        )
         let bindRequest = GemmaXPCControlRequestEnvelope(
             requestID: requestID,
-            body: .bindExecutionGate
+            body: .bindSession(binding)
         )
         let requestData = try GemmaXPCControlCodec.encode(bindRequest)
         let requestObject = try #require(
@@ -490,11 +509,20 @@ struct GemmaIPCTests {
         #expect(Set(requestObject.keys) == ["protocolVersion", "requestID", "body"])
         let requestBody = try #require(requestObject["body"] as? [String: Any])
         #expect(Set(requestBody.keys) == ["operation", "payload"])
-        #expect((requestBody["payload"] as? [String: Any])?.isEmpty == true)
+        let requestPayload = try #require(requestBody["payload"] as? [String: Any])
+        #expect(Set(requestPayload.keys) == ["model", "expectedModelRootIdentity"])
+        #expect(Set(try #require(requestPayload["model"] as? [String: Any]).keys) == [
+            "modelIdentifier", "checkpointRevision", "adapterRevision", "licenseIdentifier", "manifestSHA256",
+        ])
+        #expect(Set(try #require(requestPayload["expectedModelRootIdentity"] as? [String: Any]).keys) == [
+            "deviceID", "fileID",
+        ])
 
         var requestWithExtraPayloadKey = requestObject
         var extraRequestBody = requestBody
-        extraRequestBody["payload"] = ["gateFD": 7]
+        var extraRequestPayload = requestPayload
+        extraRequestPayload["executionGateFD"] = 7
+        extraRequestBody["payload"] = extraRequestPayload
         requestWithExtraPayloadKey["body"] = extraRequestBody
         #expect(throws: GemmaIPCCodecError.malformedMessage) {
             _ = try GemmaXPCControlCodec.decodeRequest(
@@ -502,8 +530,34 @@ struct GemmaIPCTests {
             )
         }
 
+        var requestMissingModel = requestObject
+        var missingModelBody = requestBody
+        var missingModelPayload = requestPayload
+        missingModelPayload.removeValue(forKey: "model")
+        missingModelBody["payload"] = missingModelPayload
+        requestMissingModel["body"] = missingModelBody
+        #expect(throws: GemmaIPCCodecError.malformedMessage) {
+            _ = try GemmaXPCControlCodec.decodeRequest(
+                JSONSerialization.data(withJSONObject: requestMissingModel)
+            )
+        }
+
+        var requestWithInvalidRoot = requestObject
+        var invalidRootBody = requestBody
+        var invalidRootPayload = requestPayload
+        var invalidRoot = try #require(invalidRootPayload["expectedModelRootIdentity"] as? [String: Any])
+        invalidRoot["fileID"] = 0
+        invalidRootPayload["expectedModelRootIdentity"] = invalidRoot
+        invalidRootBody["payload"] = invalidRootPayload
+        requestWithInvalidRoot["body"] = invalidRootBody
+        #expect(throws: GemmaIPCCodecError.malformedMessage) {
+            _ = try GemmaXPCControlCodec.decodeRequest(
+                JSONSerialization.data(withJSONObject: requestWithInvalidRoot)
+            )
+        }
+
         let duplicateOperation = Data("""
-        {"protocolVersion":\(GemmaIPCProtocol.currentVersion),"requestID":"\(requestID.uuidString)","body":{"operation":"bindExecutionGate","operation":"prepareForExit","payload":{}}}
+        {"protocolVersion":\(GemmaIPCProtocol.currentVersion),"requestID":"\(requestID.uuidString)","body":{"operation":"bindSession","operation":"prepareForExit","payload":{}}}
         """.utf8)
         #expect(throws: GemmaIPCCodecError.malformedMessage) {
             _ = try GemmaXPCControlCodec.decodeRequest(duplicateOperation)
@@ -515,7 +569,7 @@ struct GemmaIPCTests {
         )
         let response = GemmaXPCControlResponseEnvelope(
             requestID: requestID,
-            body: .executionGateBound(identity)
+            body: .sessionBound(.init(binding: binding, helperIdentity: identity))
         )
         let responseData = try GemmaXPCControlCodec.encode(response)
         var responseObject = try #require(
@@ -525,37 +579,64 @@ struct GemmaIPCTests {
         var responseBody = try #require(responseObject["body"] as? [String: Any])
         #expect(Set(responseBody.keys) == ["kind", "payload"])
         var responsePayload = try #require(responseBody["payload"] as? [String: Any])
-        #expect(Set(responsePayload.keys) == ["helperInstanceID", "processIdentifier"])
-        responsePayload["path"] = "/tmp/not-allowed"
+        #expect(Set(responsePayload.keys) == ["model", "expectedModelRootIdentity", "helperIdentity"])
+        var helperIdentity = try #require(responsePayload["helperIdentity"] as? [String: Any])
+        #expect(Set(helperIdentity.keys) == ["helperInstanceID", "processIdentifier"])
+        helperIdentity["path"] = "/tmp/not-allowed"
+        responsePayload["helperIdentity"] = helperIdentity
         responseBody["payload"] = responsePayload
         responseObject["body"] = responseBody
         #expect(throws: GemmaIPCCodecError.malformedMessage) {
             _ = try GemmaXPCControlCodec.decodeResponse(
                 JSONSerialization.data(withJSONObject: responseObject),
                 expectedRequestID: requestID,
-                expectedOperation: .bindExecutionGate
+                expectedOperation: .bindSession
+            )
+        }
+
+        let mismatchedBinding = GemmaIPCBindSessionRequest(
+            model: pin,
+            expectedModelRootIdentity: try GemmaIPCModelRootIdentity(deviceID: 17, fileID: 24)
+        )
+        let mismatchedResponse = GemmaXPCControlResponseEnvelope(
+            requestID: requestID,
+            body: .sessionBound(.init(binding: mismatchedBinding, helperIdentity: identity))
+        )
+        #expect(throws: GemmaIPCCodecError.malformedMessage) {
+            _ = try GemmaXPCControlCodec.decodeBindSessionResponse(
+                GemmaXPCControlCodec.encode(mismatchedResponse),
+                expectedRequestID: requestID,
+                expectedBinding: binding
             )
         }
 
         let duplicateKind = Data("""
-        {"protocolVersion":\(GemmaIPCProtocol.currentVersion),"requestID":"\(requestID.uuidString)","body":{"kind":"executionGateBound","kind":"failure","payload":{"helperInstanceID":"\(identity.helperInstanceID.uuidString)","processIdentifier":42}}}
+        {"protocolVersion":\(GemmaIPCProtocol.currentVersion),"requestID":"\(requestID.uuidString)","body":{"kind":"sessionBound","kind":"failure","payload":{}}}
         """.utf8)
         #expect(throws: GemmaIPCCodecError.malformedMessage) {
             _ = try GemmaXPCControlCodec.decodeResponse(
                 duplicateKind,
                 expectedRequestID: requestID,
-                expectedOperation: .bindExecutionGate
+                expectedOperation: .bindSession
             )
         }
     }
 
-    @Test("control protocol v3 rejects request and response version skew")
+    @Test("control protocol v4 rejects request and response version skew")
     func controlFramesRejectVersionSkew() throws {
-        #expect(GemmaIPCProtocol.currentVersion == 3)
+        #expect(GemmaIPCProtocol.currentVersion == 4)
+
+        let binding = GemmaIPCBindSessionRequest(
+            model: pin,
+            expectedModelRootIdentity: try GemmaIPCModelRootIdentity(
+                deviceID: 17,
+                fileID: 23
+            )
+        )
 
         let incompatible = GemmaXPCControlRequestEnvelope(
             protocolVersion: GemmaIPCProtocol.currentVersion - 1,
-            body: .bindExecutionGate
+            body: .bindSession(binding)
         )
         #expect(throws: GemmaIPCCodecError.protocolMismatch) {
             _ = try GemmaXPCControlCodec.decodeRequest(
@@ -567,16 +648,16 @@ struct GemmaIPCTests {
         let incompatibleResponse = GemmaXPCControlResponseEnvelope(
             protocolVersion: GemmaIPCProtocol.currentVersion + 1,
             requestID: requestID,
-            body: .executionGateBound(.init(
-                helperInstanceID: UUID(),
-                processIdentifier: 42
+            body: .sessionBound(.init(
+                binding: binding,
+                helperIdentity: .init(helperInstanceID: UUID(), processIdentifier: 42)
             ))
         )
         #expect(throws: GemmaIPCCodecError.malformedMessage) {
             _ = try GemmaXPCControlCodec.decodeResponse(
                 GemmaXPCControlCodec.encode(incompatibleResponse),
                 expectedRequestID: requestID,
-                expectedOperation: .bindExecutionGate
+                expectedOperation: .bindSession
             )
         }
     }

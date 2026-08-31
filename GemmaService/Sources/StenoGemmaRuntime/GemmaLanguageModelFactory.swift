@@ -42,7 +42,11 @@ public enum GemmaLanguageModelFactoryError: Error, Equatable, LocalizedError, Se
 /// Constructs the Foundation Models adapter only from a fully verified local Gemma 4 snapshot.
 ///
 /// This factory contains no Hub identifier, downloader, cache lookup, or remote fallback.
-/// The load closure repeats the complete snapshot verification immediately before MLX opens it.
+/// Prototype-only path-backed loader.
+///
+/// Revalidation narrows accidental mutation races but does not freeze child files against another
+/// same-user process between verification and MLX opens. The XPC provider must not activate this
+/// factory until an immutable child-file activation boundary replaces the directory-URL handoff.
 @available(macOS 27.0, *)
 public enum GemmaLanguageModelFactory {
     public static func makeLanguageModel(

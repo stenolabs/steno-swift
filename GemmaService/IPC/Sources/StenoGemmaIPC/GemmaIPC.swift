@@ -2,8 +2,8 @@ import Foundation
 
 /// The canonical version of Steno's narrow, local-only Gemma helper protocol.
 public enum GemmaIPCProtocol {
-    /// Version 3 binds an execution-gate capability before helper work is admitted.
-    public static let currentVersion = 3
+    /// Version 4 atomically binds the exact model pin, verified root identity, and helper identity.
+    public static let currentVersion = 4
     public static let maximumEncodedMessageBytes = 256 * 1024
     public static let maximumTextBytes = 128 * 1024
     public static let maximumGenerationTokens = 4_096
@@ -165,6 +165,7 @@ public struct GemmaModelSnapshotPin: Codable, Sendable, Equatable {
 public enum GemmaIPCValidationError: Error, Equatable, Sendable {
     case invalidPinValue(String)
     case invalidManifestSHA256
+    case invalidModelRootIdentity
     case textTooLarge(limit: Int, actual: Int)
     case invalidMaximumGenerationTokens
 }
@@ -246,6 +247,22 @@ public enum GemmaIPCRequestBody: Sendable, Equatable, Codable {
             .cancel
         case .shutdown:
             .shutdown
+        }
+    }
+
+    /// Returns the exact snapshot pin carried by application work.
+    ///
+    /// Lifecycle operations are deliberately pin-free and remain owned by the request registry.
+    public var modelPin: GemmaModelSnapshotPin? {
+        switch self {
+        case .handshake(let request):
+            request.model
+        case .countTokens(let request):
+            request.model
+        case .generate(let request):
+            request.model
+        case .cancel, .shutdown:
+            nil
         }
     }
 
@@ -575,7 +592,7 @@ public enum GemmaIPCCodec {
 /// Control requests travel inside the same bounded, strictly decoded Data frame as model work.
 /// They are intercepted by the XPC shell and never reach `GemmaServiceCore`.
 public enum GemmaXPCControlOperation: String, Codable, Sendable, Equatable {
-    case bindExecutionGate
+    case bindSession
     case prepareForExit
     case armAndExit
 }
@@ -588,6 +605,72 @@ public struct GemmaIPCBoundHelperIdentity: Codable, Sendable, Equatable {
     public init(helperInstanceID: UUID, processIdentifier: Int32) {
         self.helperInstanceID = helperInstanceID
         self.processIdentifier = processIdentifier
+    }
+}
+
+/// The expected filesystem identity of the local model root verified at bind time.
+///
+/// This is path-free so the control frame never reveals a model-store location.
+/// The execution-gate and model-root descriptors travel separately over XPC.
+public struct GemmaIPCModelRootIdentity: Codable, Sendable, Equatable {
+    public let deviceID: UInt64
+    public let fileID: UInt64
+
+    public init(deviceID: UInt64, fileID: UInt64) throws {
+        guard fileID != 0 else {
+            throw GemmaIPCValidationError.invalidModelRootIdentity
+        }
+        self.deviceID = deviceID
+        self.fileID = fileID
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case deviceID
+        case fileID
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            deviceID: container.decode(UInt64.self, forKey: .deviceID),
+            fileID: container.decode(UInt64.self, forKey: .fileID)
+        )
+    }
+}
+
+/// The path-free portion of an atomic model-session bind request.
+///
+/// The raw XPC frame carries the corresponding execution-gate and model-root descriptors,
+/// never JSON-encoded descriptor numbers.
+public struct GemmaIPCBindSessionRequest: Codable, Sendable, Equatable {
+    public let model: GemmaModelSnapshotPin
+    public let expectedModelRootIdentity: GemmaIPCModelRootIdentity
+
+    public init(
+        model: GemmaModelSnapshotPin,
+        expectedModelRootIdentity: GemmaIPCModelRootIdentity
+    ) {
+        self.model = model
+        self.expectedModelRootIdentity = expectedModelRootIdentity
+    }
+}
+
+/// The helper's atomic acknowledgement of an exact model-session bind.
+///
+/// `model` and `expectedModelRootIdentity` must be an exact echo of the request. The helper
+/// adds only its process-lifetime identity after it has accepted both out-of-band descriptors.
+public struct GemmaIPCBindSessionResponse: Codable, Sendable, Equatable {
+    public let model: GemmaModelSnapshotPin
+    public let expectedModelRootIdentity: GemmaIPCModelRootIdentity
+    public let helperIdentity: GemmaIPCBoundHelperIdentity
+
+    public init(
+        binding: GemmaIPCBindSessionRequest,
+        helperIdentity: GemmaIPCBoundHelperIdentity
+    ) {
+        model = binding.model
+        expectedModelRootIdentity = binding.expectedModelRootIdentity
+        self.helperIdentity = helperIdentity
     }
 }
 
@@ -611,14 +694,14 @@ public struct GemmaIPCArmAndExitRequest: Codable, Sendable, Equatable {
 }
 
 public enum GemmaXPCControlRequestBody: Sendable, Equatable, Codable {
-    case bindExecutionGate
+    case bindSession(GemmaIPCBindSessionRequest)
     case prepareForExit
     case armAndExit(GemmaIPCArmAndExitRequest)
 
     public var operation: GemmaXPCControlOperation {
         switch self {
-        case .bindExecutionGate:
-            .bindExecutionGate
+        case .bindSession:
+            .bindSession
         case .prepareForExit:
             .prepareForExit
         case .armAndExit:
@@ -634,9 +717,8 @@ public enum GemmaXPCControlRequestBody: Sendable, Equatable, Codable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         switch try container.decode(GemmaXPCControlOperation.self, forKey: .operation) {
-        case .bindExecutionGate:
-            _ = try container.decode(GemmaIPCEmptyPayload.self, forKey: .payload)
-            self = .bindExecutionGate
+        case .bindSession:
+            self = .bindSession(try container.decode(GemmaIPCBindSessionRequest.self, forKey: .payload))
         case .prepareForExit:
             _ = try container.decode(GemmaIPCEmptyPayload.self, forKey: .payload)
             self = .prepareForExit
@@ -649,8 +731,8 @@ public enum GemmaXPCControlRequestBody: Sendable, Equatable, Codable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(operation, forKey: .operation)
         switch self {
-        case .bindExecutionGate:
-            try container.encode(GemmaIPCEmptyPayload(), forKey: .payload)
+        case .bindSession(let request):
+            try container.encode(request, forKey: .payload)
         case .prepareForExit:
             try container.encode(GemmaIPCEmptyPayload(), forKey: .payload)
         case .armAndExit(let request):
@@ -676,7 +758,7 @@ public struct GemmaXPCControlRequestEnvelope: Codable, Sendable, Equatable {
 }
 
 public enum GemmaXPCControlResponseBody: Sendable, Equatable, Codable {
-    case executionGateBound(GemmaIPCBoundHelperIdentity)
+    case sessionBound(GemmaIPCBindSessionResponse)
     case prepared(GemmaIPCPreparedHelperExit)
     case armed(GemmaIPCPreparedHelperExit)
     case failure(GemmaIPCFailure)
@@ -687,7 +769,7 @@ public enum GemmaXPCControlResponseBody: Sendable, Equatable, Codable {
     }
 
     private enum Kind: String, Codable {
-        case executionGateBound
+        case sessionBound
         case prepared
         case armed
         case failure
@@ -696,10 +778,8 @@ public enum GemmaXPCControlResponseBody: Sendable, Equatable, Codable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         switch try container.decode(Kind.self, forKey: .kind) {
-        case .executionGateBound:
-            self = .executionGateBound(
-                try container.decode(GemmaIPCBoundHelperIdentity.self, forKey: .payload)
-            )
+        case .sessionBound:
+            self = .sessionBound(try container.decode(GemmaIPCBindSessionResponse.self, forKey: .payload))
         case .prepared:
             self = .prepared(try container.decode(GemmaIPCPreparedHelperExit.self, forKey: .payload))
         case .armed:
@@ -712,9 +792,9 @@ public enum GemmaXPCControlResponseBody: Sendable, Equatable, Codable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case .executionGateBound(let identity):
-            try container.encode(Kind.executionGateBound, forKey: .kind)
-            try container.encode(identity, forKey: .payload)
+        case .sessionBound(let response):
+            try container.encode(Kind.sessionBound, forKey: .kind)
+            try container.encode(response, forKey: .payload)
         case .prepared(let prepared):
             try container.encode(Kind.prepared, forKey: .kind)
             try container.encode(prepared, forKey: .payload)
@@ -785,7 +865,7 @@ public enum GemmaXPCControlCodec {
                 throw GemmaIPCCodecError.malformedMessage
             }
             switch (expectedOperation, response.body) {
-            case (.bindExecutionGate, .executionGateBound),
+            case (.bindSession, .sessionBound),
                  (.prepareForExit, .prepared),
                  (.armAndExit, .armed),
                  (_, .failure):
@@ -796,6 +876,27 @@ public enum GemmaXPCControlCodec {
         } catch {
             throw GemmaIPCCodecError.malformedMessage
         }
+    }
+
+    /// Decodes a bind acknowledgement and rejects a helper that did not exactly echo the
+    /// snapshot pin and expected model-root identity supplied by the caller.
+    public static func decodeBindSessionResponse(
+        _ data: Data,
+        expectedRequestID: UUID,
+        expectedBinding: GemmaIPCBindSessionRequest
+    ) throws -> GemmaIPCBindSessionResponse {
+        let response = try decodeResponse(
+            data,
+            expectedRequestID: expectedRequestID,
+            expectedOperation: .bindSession
+        )
+        guard case .sessionBound(let bound) = response.body,
+              bound.model == expectedBinding.model,
+              bound.expectedModelRootIdentity == expectedBinding.expectedModelRootIdentity
+        else {
+            throw GemmaIPCCodecError.malformedMessage
+        }
+        return bound
     }
 
     private static func encodeValue<Value: Encodable>(_ value: Value) throws -> Data {
@@ -1061,6 +1162,14 @@ private enum GemmaXPCControlJSONSchema {
     private static let requestBodyKeys: Set<String> = ["operation", "payload"]
     private static let responseBodyKeys: Set<String> = ["kind", "payload"]
     private static let helperIdentityKeys: Set<String> = ["helperInstanceID", "processIdentifier"]
+    private static let modelPinKeys: Set<String> = [
+        "modelIdentifier", "checkpointRevision", "adapterRevision", "licenseIdentifier", "manifestSHA256",
+    ]
+    private static let modelRootIdentityKeys: Set<String> = ["deviceID", "fileID"]
+    private static let bindSessionRequestKeys: Set<String> = ["model", "expectedModelRootIdentity"]
+    private static let bindSessionResponseKeys: Set<String> = [
+        "model", "expectedModelRootIdentity", "helperIdentity",
+    ]
 
     static func validateRequest(_ data: Data) throws {
         let envelope = try rootObject(data, keys: envelopeKeys)
@@ -1069,8 +1178,10 @@ private enum GemmaXPCControlJSONSchema {
             throw GemmaIPCCodecError.malformedMessage
         }
         switch operation {
-        case GemmaXPCControlOperation.bindExecutionGate.rawValue:
-            _ = try object(body["payload"], keys: [])
+        case GemmaXPCControlOperation.bindSession.rawValue:
+            let payload = try object(body["payload"], keys: bindSessionRequestKeys)
+            _ = try object(payload["model"], keys: modelPinKeys)
+            _ = try object(payload["expectedModelRootIdentity"], keys: modelRootIdentityKeys)
         case GemmaXPCControlOperation.prepareForExit.rawValue:
             _ = try object(body["payload"], keys: [])
         case GemmaXPCControlOperation.armAndExit.rawValue:
@@ -1088,7 +1199,12 @@ private enum GemmaXPCControlJSONSchema {
             throw GemmaIPCCodecError.malformedMessage
         }
         switch kind {
-        case "executionGateBound", "prepared", "armed":
+        case "sessionBound":
+            let payload = try object(body["payload"], keys: bindSessionResponseKeys)
+            _ = try object(payload["model"], keys: modelPinKeys)
+            _ = try object(payload["expectedModelRootIdentity"], keys: modelRootIdentityKeys)
+            _ = try object(payload["helperIdentity"], keys: helperIdentityKeys)
+        case "prepared", "armed":
             _ = try object(body["payload"], keys: helperIdentityKeys)
         case "failure":
             _ = try object(body["payload"], keys: ["code"])
