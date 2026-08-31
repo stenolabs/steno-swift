@@ -119,6 +119,60 @@ public struct GemmaModelManifest: Sendable, Equatable, Codable {
         self.files = files
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case formatVersion
+        case modelIdentifier
+        case checkpointRevision
+        case adapterRevision
+        case licenseIdentifier
+        case files
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        formatVersion = try container.decode(Int.self, forKey: .formatVersion)
+        modelIdentifier = try container.decode(String.self, forKey: .modelIdentifier)
+        checkpointRevision = try container.decode(String.self, forKey: .checkpointRevision)
+        adapterRevision = try container.decode(String.self, forKey: .adapterRevision)
+        licenseIdentifier = try container.decode(String.self, forKey: .licenseIdentifier)
+
+        var filesContainer = try container.nestedUnkeyedContainer(forKey: .files)
+        var decodedFiles: [GemmaModelFile] = []
+        while !filesContainer.isAtEnd {
+            guard decodedFiles.count < Self.maximumFileCount else {
+                throw GemmaModelVerificationError.tooManyFiles(
+                    limit: Self.maximumFileCount,
+                    actual: Self.maximumFileCount + 1
+                )
+            }
+            decodedFiles.append(try filesContainer.decode(GemmaModelFile.self))
+        }
+        files = decodedFiles
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(formatVersion, forKey: .formatVersion)
+        try container.encode(modelIdentifier, forKey: .modelIdentifier)
+        try container.encode(checkpointRevision, forKey: .checkpointRevision)
+        try container.encode(adapterRevision, forKey: .adapterRevision)
+        try container.encode(licenseIdentifier, forKey: .licenseIdentifier)
+        try container.encode(files, forKey: .files)
+    }
+
+    static func decode(from data: Data) throws -> GemmaModelManifest {
+        do {
+            return try JSONDecoder().decode(Self.self, from: data)
+        } catch let error as GemmaModelVerificationError {
+            if case .tooManyFiles(_, _) = error {
+                throw error
+            }
+            throw GemmaModelVerificationError.malformedManifest
+        } catch {
+            throw GemmaModelVerificationError.malformedManifest
+        }
+    }
+
     public struct GemmaModelFile: Sendable, Equatable, Codable {
         public let relativePath: String
         public let size: Int64
@@ -129,6 +183,11 @@ public struct GemmaModelManifest: Sendable, Equatable, Codable {
             self.size = size
             self.sha256 = sha256
         }
+    }
+
+    /// Classifies the safetensors extension without case folding.
+    static func isSafetensorsFile(_ path: String) -> Bool {
+        path.hasSuffix(".safetensors")
     }
 
     static func validateRelativePath(_ value: String) throws {

@@ -121,12 +121,7 @@ public struct GemmaModelVerifier: Sendable {
             )
         }
 
-        let manifest: GemmaModelManifest
-        do {
-            manifest = try JSONDecoder().decode(GemmaModelManifest.self, from: manifestData)
-        } catch {
-            throw GemmaModelVerificationError.malformedManifest
-        }
+        let manifest = try GemmaModelManifest.decode(from: manifestData)
         try manifest.validate(against: requirements)
 
         let expectedFiles = Dictionary(uniqueKeysWithValues: manifest.files.map {
@@ -221,12 +216,7 @@ public struct GemmaModelVerifier: Sendable {
             maximumBytes: Int(manifestRead.status.st_size),
             cancellationCheck: cancellationCheck
         )
-        let manifest: GemmaModelManifest
-        do {
-            manifest = try JSONDecoder().decode(GemmaModelManifest.self, from: manifestData)
-        } catch {
-            throw GemmaModelVerificationError.malformedManifest
-        }
+        let manifest = try GemmaModelManifest.decode(from: manifestData)
         try manifest.validate(against: requirements)
 
         var smallFiles: [String: Data] = [:]
@@ -270,7 +260,7 @@ public struct GemmaModelVerifier: Sendable {
                         actual: opened.status.st_size
                     )
                 }
-                if file.relativePath.hasSuffix(".safetensors") {
+                if GemmaModelManifest.isSafetensorsFile(file.relativePath) {
                     try limits.recordSafetensorsFile(
                         path: file.relativePath,
                         size: file.size,
@@ -828,7 +818,7 @@ public struct GemmaModelVerifier: Sendable {
             } catch {
                 throw GemmaModelVerificationError.unsafeSafetensorsIndexPath(path)
             }
-            guard path.hasSuffix(".safetensors"), expectedFiles[path] != nil else {
+            guard GemmaModelManifest.isSafetensorsFile(path), expectedFiles[path] != nil else {
                 throw GemmaModelVerificationError.unmanifestedSafetensorsFile(path)
             }
         }

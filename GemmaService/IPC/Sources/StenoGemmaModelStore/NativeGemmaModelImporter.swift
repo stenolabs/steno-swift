@@ -225,12 +225,7 @@ public actor NativeGemmaModelImporter {
             )
         }
 
-        let manifest: GemmaModelManifest
-        do {
-            manifest = try JSONDecoder().decode(GemmaModelManifest.self, from: manifestData)
-        } catch {
-            throw GemmaModelVerificationError.malformedManifest
-        }
+        let manifest = try GemmaModelManifest.decode(from: manifestData)
         try manifest.validate(against: requirements)
         try source.bindExactTree(
             manifest: manifest,

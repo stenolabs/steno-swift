@@ -961,6 +961,88 @@ struct GemmaModelVerifierTests {
         }
     }
 
+    @Test("manifest decoding bounds files before materializing the 4097th entry")
+    func manifestDecodingBoundsFileCountIncrementally() throws {
+        let checksum = String(repeating: "0", count: 64)
+        let validFiles = (0 ..< GemmaModelManifest.maximumFileCount).map { index in
+            "{\"relativePath\":\"weights-\(index).bin\",\"size\":1,\"sha256\":\"\(checksum)\"}"
+        }
+        func manifestData(files: [String]) -> Data {
+            Data(
+                """
+                {"formatVersion":1,"modelIdentifier":"\(Fixture.modelIdentifier)","checkpointRevision":"\(Fixture.checkpointRevision)","adapterRevision":"\(Fixture.adapterRevision)","licenseIdentifier":"\(Fixture.licenseIdentifier)","files":[\(files.joined(separator: ","))]}
+                """.utf8
+            )
+        }
+
+        for invalidExtraFile in ["{}", "42"] {
+            #expect(throws: GemmaModelVerificationError.tooManyFiles(
+                limit: GemmaModelManifest.maximumFileCount,
+                actual: GemmaModelManifest.maximumFileCount + 1
+            )) {
+                _ = try GemmaModelManifest.decode(
+                    from: manifestData(files: validFiles + [invalidExtraFile])
+                )
+            }
+            #expect(throws: GemmaModelVerificationError.malformedManifest) {
+                _ = try GemmaModelManifest.decode(
+                    from: manifestData(files: Array(validFiles.dropLast()) + [invalidExtraFile])
+                )
+            }
+        }
+    }
+
+    @Test("version 1 manifest decoding round-trips every manifest and file field")
+    func versionOneManifestDecodingRoundTripsSemantically() throws {
+        let checksum = String(repeating: "0", count: 64)
+        let data = Data(
+            """
+            {"formatVersion":1,"modelIdentifier":"\(Fixture.modelIdentifier)","checkpointRevision":"\(Fixture.checkpointRevision)","adapterRevision":"\(Fixture.adapterRevision)","licenseIdentifier":"\(Fixture.licenseIdentifier)","files":[{"relativePath":"weights.bin","size":7,"sha256":"\(checksum)"},{"relativePath":"tokenizer.json","size":13,"sha256":"\(String(repeating: "a", count: 64))"}]}
+            """.utf8
+        )
+
+        let decoded = try GemmaModelManifest.decode(from: data)
+        let encoded = try JSONEncoder().encode(decoded)
+        let redecoded = try GemmaModelManifest.decode(from: encoded)
+        let inputJSON = try JSONSerialization.jsonObject(with: data)
+        let outputJSON = try JSONSerialization.jsonObject(with: encoded)
+        let canonicalInput = try JSONSerialization.data(
+            withJSONObject: inputJSON,
+            options: [.sortedKeys]
+        )
+        let canonicalOutput = try JSONSerialization.data(
+            withJSONObject: outputJSON,
+            options: [.sortedKeys]
+        )
+
+        #expect(redecoded == decoded)
+        #expect(canonicalOutput == canonicalInput)
+    }
+
+    @Test("safetensors classification is exact and uppercase files remain activation small data")
+    func safetensorsClassificationIsCaseSensitive() throws {
+        #expect(GemmaModelManifest.isSafetensorsFile("model.safetensors"))
+        #expect(!GemmaModelManifest.isSafetensorsFile("model.SAFETENSORS"))
+        #expect(!GemmaModelManifest.isSafetensorsFile("model.Safetensors"))
+        #expect(!GemmaModelManifest.isSafetensorsFile("model.safetensors.backup"))
+
+        let fixture = try Fixture.make(primaryPath: "model.SAFETENSORS")
+        let directory = try adoptedDirectory(from: fixture)
+        let limits = try VerifiedGemmaModelActivationLimits(
+            maximumSmallFileByteCount: 1024,
+            maximumTotalSmallFileByteCount: 4096,
+            maximumSafetensorsFileCount: 0,
+            maximumSafetensorsFileByteCount: 0,
+            maximumTotalSafetensorsByteCount: 0
+        )
+        let assets = try directory.consumeActivationAssets(limits: limits)
+        defer { assets.close() }
+        try assets.consume { borrowed in
+            #expect(borrowed.safetensorsRelativePaths.isEmpty)
+            #expect(borrowed.data(forRelativePath: "model.SAFETENSORS") != nil)
+        }
+    }
+
     @Test("a manifest cannot require more than 64 directories")
     func directoryCountIsBounded() throws {
         let requirements = try Fixture.requirements()
@@ -1161,6 +1243,19 @@ struct GemmaModelVerifierTests {
             "other.safetensors"
         )) {
             _ = try unlistedFixture.verifier.verify(directory: unlistedFixture.root)
+        }
+
+        let uppercase = Data(
+            "{\"weight_map\":{\"layer\":\"model-00001-of-00001.SAFETENSORS\"}}".utf8
+        )
+        let uppercaseFixture = try Fixture.make(
+            primaryPath: "model-00001-of-00001.safetensors",
+            additionalFiles: ["model.safetensors.index.json": uppercase]
+        )
+        #expect(throws: GemmaModelVerificationError.unmanifestedSafetensorsFile(
+            "model-00001-of-00001.SAFETENSORS"
+        )) {
+            _ = try uppercaseFixture.verifier.verify(directory: uppercaseFixture.root)
         }
     }
 }
