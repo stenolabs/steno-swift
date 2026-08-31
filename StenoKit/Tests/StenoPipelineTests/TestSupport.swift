@@ -704,6 +704,7 @@ func overwriteJob(
         revisionID: job.revisionID,
         textModelEndpointID: job.textModelEndpointID,
         textModelEndpointSnapshot: job.textModelEndpointSnapshot,
+        nativeGemmaModelSnapshot: job.nativeGemmaModelSnapshot,
         templateRenderInputFingerprint: job.templateRenderInputFingerprint,
         localeIdentifier: job.localeIdentifier,
         importGenerationID: importGenerationID,

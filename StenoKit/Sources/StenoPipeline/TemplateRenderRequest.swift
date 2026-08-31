@@ -19,6 +19,7 @@ public enum TemplateRenderRequest {
         templateID: String,
         textModelEndpointID: String? = nil,
         textModelEndpointSnapshot: TextModelEndpointSnapshot? = nil,
+        nativeGemmaModelSnapshot: NativeGemmaModelSnapshot? = nil,
         preflight: TemplateRenderPreflight
     ) async throws -> Job {
         try await enqueue(
@@ -28,6 +29,7 @@ public enum TemplateRenderRequest {
             templateID: templateID,
             textModelEndpointID: textModelEndpointID,
             textModelEndpointSnapshot: textModelEndpointSnapshot,
+            nativeGemmaModelSnapshot: nativeGemmaModelSnapshot,
             preflight: preflight,
             checkpoint: { _ in }
         )
@@ -41,6 +43,7 @@ public enum TemplateRenderRequest {
         templateID: String,
         textModelEndpointID: String? = nil,
         textModelEndpointSnapshot: TextModelEndpointSnapshot? = nil,
+        nativeGemmaModelSnapshot: NativeGemmaModelSnapshot? = nil,
         preflight: TemplateRenderPreflight,
         checkpoint: @escaping TemplateRenderRequestAction
     ) async throws -> Job {
@@ -49,6 +52,14 @@ public enum TemplateRenderRequest {
         }
         guard preflight.meetingID == meetingID else {
             throw TemplateRenderPreflightError.inputChanged
+        }
+        if let nativeGemmaModelSnapshot {
+            guard textModelEndpointID == nil,
+                  textModelEndpointSnapshot == nil,
+                  nativeGemmaModelSnapshot.isWellFormed
+            else {
+                throw PipelineError.nativeGemmaModelPinsInvalid
+            }
         }
         // Die Revision wird beim Einreihen gepinnt: das Protokoll gehört zu
         // dem Textstand, den der Nutzer vor sich hatte, nicht zu einem, der
@@ -90,8 +101,11 @@ public enum TemplateRenderRequest {
                 meetingID: meetingID,
                 templateID: templateID,
                 revisionID: preflight.revisionID,
-                textModelEndpointID: textModelEndpointID,
+                textModelEndpointID: nativeGemmaModelSnapshot == nil
+                    ? textModelEndpointID
+                    : NativeGemmaModelSnapshot.reservedTextModelEndpointID,
                 textModelEndpointSnapshot: textModelEndpointSnapshot,
+                nativeGemmaModelSnapshot: nativeGemmaModelSnapshot,
                 templateRenderInputFingerprint: preflight.inputFingerprint,
                 importGenerationID: meeting.processingGenerationID
             )

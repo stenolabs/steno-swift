@@ -220,6 +220,7 @@ struct DomainModelTests {
         #expect(job.revisionID == nil)
         #expect(job.textModelEndpointID == nil)
         #expect(job.textModelEndpointSnapshot == nil)
+        #expect(job.nativeGemmaModelSnapshot == nil)
     }
 
     @Test("Job persists a secret-free endpoint snapshot")
@@ -259,6 +260,74 @@ struct DomainModelTests {
         #expect(object["secret"] == nil)
         #expect(encodedSnapshot["apiKey"] == nil)
         #expect(encodedSnapshot["secret"] == nil)
+    }
+
+    @Test("native Gemma provenance is path-free and round-trips in schema one jobs")
+    func nativeGemmaSnapshotRoundTrip() throws {
+        let snapshot = nativeGemmaSnapshot()
+        let job = Job(
+            kind: .templateRender,
+            meetingID: MeetingID(),
+            textModelEndpointID: NativeGemmaModelSnapshot.reservedTextModelEndpointID,
+            nativeGemmaModelSnapshot: snapshot
+        )
+
+        let data = try JSONEncoder().encode(job)
+        let object = try #require(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        let encoded = try #require(
+            object["nativeGemmaModelSnapshot"] as? [String: Any]
+        )
+
+        #expect(try JSONDecoder().decode(Job.self, from: data) == job)
+        #expect(snapshot.isWellFormed)
+        #expect(encoded["modelIdentifier"] as? String == snapshot.modelIdentifier)
+        #expect(encoded["checkpointRevision"] as? String == snapshot.checkpointRevision)
+        #expect(encoded["adapterRevision"] as? String == snapshot.adapterRevision)
+        #expect(encoded["licenseIdentifier"] as? String == snapshot.licenseIdentifier)
+        #expect(encoded["manifestSHA256"] as? String == snapshot.manifestSHA256)
+        #expect(encoded["path"] == nil)
+        #expect(encoded["url"] == nil)
+
+        let descriptor = EngineDescriptor.mlxGemma(snapshot: snapshot)
+        #expect(descriptor.name == "MLXLanguageModel")
+        #expect(descriptor.name != "FoundationModels")
+        #expect(
+            descriptor.version
+                == "\(snapshot.adapterRevision)@\(snapshot.manifestSHA256)"
+        )
+        #expect(
+            descriptor.modelVersion
+                == "\(snapshot.modelIdentifier)@\(snapshot.checkpointRevision)#license=\(snapshot.licenseIdentifier)"
+        )
+    }
+
+    @Test("native Gemma sentinel remains invalid as a legacy endpoint UUID")
+    func nativeGemmaSentinelFailsLegacyEndpointParsing() {
+        #expect(
+            UUID(
+                uuidString: NativeGemmaModelSnapshot.reservedTextModelEndpointID
+            ) == nil
+        )
+    }
+
+    @Test("native Gemma provenance rejects malformed identifiers and hashes")
+    func malformedNativeGemmaSnapshotIsNotWellFormed() {
+        let invalidModelIdentifiers = [
+            "/Users/example/model",
+            "file:///tmp/model",
+            "../private/model",
+            "namespace//model",
+            "namespace/model;adapter=other",
+        ]
+        for modelIdentifier in invalidModelIdentifiers {
+            #expect(!nativeGemmaSnapshot(modelIdentifier: modelIdentifier).isWellFormed)
+        }
+        #expect(!nativeGemmaSnapshot(checkpointRevision: "main").isWellFormed)
+        #expect(!nativeGemmaSnapshot(adapterRevision: "none").isWellFormed)
+        #expect(!nativeGemmaSnapshot(licenseIdentifier: "file:///tmp/license").isWellFormed)
+        #expect(!nativeGemmaSnapshot(manifestSHA256: "not-a-sha256").isWellFormed)
     }
 
     @Test("Legacy endpoint snapshots decode without a configuration revision")
@@ -308,5 +377,21 @@ struct DomainModelTests {
         let data = try JSONEncoder().encode(value)
         let decoded = try JSONDecoder().decode(Value.self, from: data)
         #expect(decoded == value)
+    }
+
+    private func nativeGemmaSnapshot(
+        modelIdentifier: String = "mlx-community/gemma-4-e4b-it-4bit",
+        checkpointRevision: String = String(repeating: "9", count: 40),
+        adapterRevision: String = String(repeating: "b", count: 40),
+        licenseIdentifier: String = "gemma",
+        manifestSHA256: String = String(repeating: "a", count: 64)
+    ) -> NativeGemmaModelSnapshot {
+        NativeGemmaModelSnapshot(
+            modelIdentifier: modelIdentifier,
+            checkpointRevision: checkpointRevision,
+            adapterRevision: adapterRevision,
+            licenseIdentifier: licenseIdentifier,
+            manifestSHA256: manifestSHA256
+        )
     }
 }

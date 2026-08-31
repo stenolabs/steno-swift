@@ -227,6 +227,7 @@ public actor JobStore {
               existing.revisionID == job.revisionID,
               existing.textModelEndpointID == job.textModelEndpointID,
               existing.textModelEndpointSnapshot == job.textModelEndpointSnapshot,
+              existing.nativeGemmaModelSnapshot == job.nativeGemmaModelSnapshot,
               existing.templateRenderInputFingerprint
                 == job.templateRenderInputFingerprint,
               existing.processingGenerationID == job.processingGenerationID,
@@ -704,6 +705,7 @@ public actor JobStore {
             && existing.revisionID == candidate.revisionID
             && existing.textModelEndpointID == candidate.textModelEndpointID
             && existing.textModelEndpointSnapshot == candidate.textModelEndpointSnapshot
+            && existing.nativeGemmaModelSnapshot == candidate.nativeGemmaModelSnapshot
             && existing.templateRenderInputFingerprint
                 == candidate.templateRenderInputFingerprint
             && existing.processingGenerationID == candidate.processingGenerationID

@@ -21,6 +21,7 @@ struct ReportsSection: View {
     @State private var pendingJobID: JobID?
     @State private var pendingEndpointID: String?
     @State private var pendingEndpointSnapshot: TextModelEndpointSnapshot?
+    @State private var pendingNativeGemmaModelSnapshot: NativeGemmaModelSnapshot?
     @State private var selectedEndpointSnapshot: TextModelEndpointSnapshot?
     @State private var preflight: TemplateRenderPreflight?
     @State private var preflightIsReady = false
@@ -281,6 +282,7 @@ struct ReportsSection: View {
             isPending: renderPending,
             pendingEndpointID: pendingEndpointID,
             pendingEndpointSnapshot: pendingEndpointSnapshot,
+            pendingNativeGemmaModelSnapshot: pendingNativeGemmaModelSnapshot,
             selectedEndpointSnapshot: selectedEndpointSnapshot,
             configuredEndpoints: textModelSettings.endpoints
         )
@@ -381,6 +383,7 @@ struct ReportsSection: View {
             pendingJobID = job.id
             pendingEndpointID = job.textModelEndpointID
             pendingEndpointSnapshot = job.textModelEndpointSnapshot
+            pendingNativeGemmaModelSnapshot = job.nativeGemmaModelSnapshot
             renderPending = true
             await refreshLoop()
         } catch {
@@ -432,6 +435,7 @@ struct ReportsSection: View {
                 pendingJobID = active.id
                 pendingEndpointID = active.textModelEndpointID
                 pendingEndpointSnapshot = active.textModelEndpointSnapshot
+                pendingNativeGemmaModelSnapshot = active.nativeGemmaModelSnapshot
             }
             if let jobID = pendingJobID,
                let job = jobs.first(where: { $0.id == jobID })
@@ -445,15 +449,18 @@ struct ReportsSection: View {
                     pendingJobID = nil
                     pendingEndpointID = nil
                     pendingEndpointSnapshot = nil
+                    pendingNativeGemmaModelSnapshot = nil
                 case .finished:
                     renderError = nil
                     pendingJobID = nil
                     pendingEndpointID = nil
                     pendingEndpointSnapshot = nil
+                    pendingNativeGemmaModelSnapshot = nil
                 case .cancelled:
                     pendingJobID = nil
                     pendingEndpointID = nil
                     pendingEndpointSnapshot = nil
+                    pendingNativeGemmaModelSnapshot = nil
                 case .queued, .running:
                     break
                 }
@@ -462,6 +469,7 @@ struct ReportsSection: View {
                 pendingJobID = active.id
                 pendingEndpointID = active.textModelEndpointID
                 pendingEndpointSnapshot = active.textModelEndpointSnapshot
+                pendingNativeGemmaModelSnapshot = active.nativeGemmaModelSnapshot
             }
             if isFirstSnapshot,
                shouldObserveColdFailure,

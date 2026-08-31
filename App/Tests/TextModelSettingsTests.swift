@@ -8,6 +8,24 @@ import Testing
 @Suite("Mac text model settings")
 @MainActor
 struct TextModelSettingsTests {
+    @Test("native Gemma selection fails closed instead of resolving Foundation Models")
+    func nativeGemmaSelectionFailsClosed() throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.cleanUp() }
+        let selection = TextModelProviderSelection(
+            endpointID: NativeGemmaModelSnapshot.reservedTextModelEndpointID,
+            nativeGemmaModelSnapshot: nativeGemmaSnapshot()
+        )
+
+        #expect(throws: PipelineError.nativeGemmaProviderUnavailable) {
+            _ = try TextModelSettings.makeProviderResolver(
+                defaults: fixture.defaults,
+                secrets: fixture.secrets,
+                registry: fixture.registry
+            )(selection)
+        }
+    }
+
     @Test("endpoint deletion names the keychain consequence before removal")
     func endpointDeletionDisclosure() {
         let endpoint = endpoint(requiresAPIKey: true)
@@ -1201,6 +1219,16 @@ struct TextModelSettingsTests {
         )
     }
 
+}
+
+private func nativeGemmaSnapshot() -> NativeGemmaModelSnapshot {
+    NativeGemmaModelSnapshot(
+        modelIdentifier: "mlx-community/gemma-4-e4b-it-4bit",
+        checkpointRevision: String(repeating: "9", count: 40),
+        adapterRevision: String(repeating: "b", count: 40),
+        licenseIdentifier: "gemma",
+        manifestSHA256: String(repeating: "a", count: 64)
+    )
 }
 
 struct UpsertCrashCase: Sendable, CustomTestStringConvertible {

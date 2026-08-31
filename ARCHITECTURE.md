@@ -1,11 +1,12 @@
 # Steno for macOS - Architecture
 
-Status: 4 August 2026.
+Status: 30 August 2026.
 Labels in this document: **[Fact]** was verified against a local source, **[Assumption]** is plausible but unmeasured, and **[Recommendation]** is a decision made by this design.
 
 ## 1. Overall decision
 
 Steno is a native Swift app in a single repository, with a local SwiftPM package named `StenoKit`, clearly separated targets, and a thin macOS app target.
+The experimental `GemmaService` package is a separate macOS 27 build boundary and is not part of the application dependency graph.
 Its core is a **file-based, versioned library** with immutable originals, append-only processing runs, and explicit revisions, without a database dependency in the initial implementation.
 Transcription primarily uses Apple's `SpeechAnalyzer` and `SpeechTranscriber` APIs, verified in the macOS 26 SDK, including `audioTimeRange` for word timestamps and `volatileResults` for provisional live results.
 Diarization uses the existing Sortformer and WeSpeaker code from the sidecar as an internal Swift target, in process rather than as a subprocess.
@@ -42,7 +43,8 @@ The speaker-identity logic from `speaker_suggestions.py` is reshaped as a Swift 
 
 ## 2. Modules and dependencies
 
-One repository contains one local SwiftPM package, `StenoKit`, with several targets and one Xcode app target.
+The shipping application contains one local SwiftPM package, `StenoKit`, with several targets and one Xcode app target.
+The separate experimental `GemmaService` package remains outside that graph until the deferred integration requirements are met.
 [Recommendation] Use one package with multiple targets instead of many packages: target dependencies provide real boundaries without versioning and release overhead between artificial packages.
 
 ```text
@@ -85,7 +87,7 @@ Dependency rules:
 `StenoDomain` depends on nothing.
 Everything depends on `StenoDomain`, and nothing depends on the app.
 Provider targets know `StenoLibrary` only through narrow read-only protocols; the pipeline performs writes.
-The only external dependency in the initial implementation is FluidAudio 0.15.2, already pinned and proven in production by the sidecar.
+The only external dependency of `StenoKit` in the initial implementation is FluidAudio 0.15.6, pinned exactly.
 
 ## 3. Data model
 
@@ -283,4 +285,7 @@ The order follows the handoff with one correction: milestone 1 already needs min
 5. Distribution through Developer ID signing, notarization, and updates; the initial implementation is a local build.
 6. iOS: keep the domain and contracts portable, but write no iOS-specific code before the macOS core is stable.
 7. Detailed encryption design, including key format and recovery-code UX, before milestone 7.
-8. Whether a speaker-count field should ever exist. If it does, ask "how many people spoke?", not "how many people attended?".
+8. Native Gemma 4 app integration: `GemmaService` establishes a macOS 27 compile and local-verification boundary around an MLX runtime that conforms to Apple's Foundation Models `LanguageModel` API.
+   Apple's framework does not load the external checkpoint.
+   The package must remain outside the app until the helper is signed, sandboxed without network entitlements, loads an immutable Steno-controlled snapshot tied to an explicitly approved checkpoint, and is proven unable to affect recording.
+9. Whether a speaker-count field should ever exist. If it does, ask "how many people spoke?", not "how many people attended?".

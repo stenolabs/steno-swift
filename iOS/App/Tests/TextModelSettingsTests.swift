@@ -8,6 +8,24 @@ import Testing
 @MainActor
 @Suite("Text model settings")
 struct TextModelSettingsTests {
+    @Test("native Gemma selection fails closed instead of resolving Foundation Models")
+    func nativeGemmaSelectionFailsClosed() throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.cleanUp() }
+        let selection = TextModelProviderSelection(
+            endpointID: NativeGemmaModelSnapshot.reservedTextModelEndpointID,
+            nativeGemmaModelSnapshot: nativeGemmaSnapshot()
+        )
+
+        #expect(throws: PipelineError.nativeGemmaProviderUnavailable) {
+            _ = try TextModelSettings.makeProviderResolver(
+                defaults: fixture.defaults,
+                secrets: fixture.secrets,
+                registry: fixture.registry
+            )(selection)
+        }
+    }
+
     @Test("a failed registry commit leaves an old queued job on its old secret slot")
     func failedRegistryCommitKeepsOldEndpointAndSecret() throws {
         let fixture = try SettingsFixture()
@@ -1118,6 +1136,16 @@ struct TextModelSettingsTests {
                 == "sentinel-orphan"
         )
     }
+}
+
+private func nativeGemmaSnapshot() -> NativeGemmaModelSnapshot {
+    NativeGemmaModelSnapshot(
+        modelIdentifier: "mlx-community/gemma-4-e4b-it-4bit",
+        checkpointRevision: String(repeating: "9", count: 40),
+        adapterRevision: String(repeating: "b", count: 40),
+        licenseIdentifier: "gemma",
+        manifestSHA256: String(repeating: "a", count: 64)
+    )
 }
 
 struct UpsertCrashCase: Sendable, CustomTestStringConvertible {

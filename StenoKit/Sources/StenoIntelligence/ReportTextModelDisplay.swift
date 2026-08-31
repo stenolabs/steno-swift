@@ -3,6 +3,7 @@ import StenoDomain
 
 public enum ReportTextModelDisplay: Equatable, Sendable {
     case apple
+    case nativeGemma(NativeGemmaModelSnapshot)
     case external(TextModelEndpointSnapshot)
     case unavailableExternal(String)
 
@@ -10,6 +11,7 @@ public enum ReportTextModelDisplay: Equatable, Sendable {
         isPending: Bool,
         pendingEndpointID: String?,
         pendingEndpointSnapshot: TextModelEndpointSnapshot?,
+        pendingNativeGemmaModelSnapshot: NativeGemmaModelSnapshot? = nil,
         selectedEndpointSnapshot: TextModelEndpointSnapshot?,
         configuredEndpoints: [TextModelEndpoint]
     ) -> Self {
@@ -18,6 +20,9 @@ public enum ReportTextModelDisplay: Equatable, Sendable {
         }
         if let pendingEndpointSnapshot {
             return .external(pendingEndpointSnapshot)
+        }
+        if let pendingNativeGemmaModelSnapshot {
+            return .nativeGemma(pendingNativeGemmaModelSnapshot)
         }
         guard let pendingEndpointID else { return .apple }
         if let pendingUUID = UUID(uuidString: pendingEndpointID),
@@ -57,7 +62,7 @@ public enum ReportTextModelDisplay: Equatable, Sendable {
 
     public var usesExternalEndpoint: Bool {
         switch self {
-        case .apple:
+        case .apple, .nativeGemma:
             false
         case .external, .unavailableExternal:
             true
@@ -68,6 +73,8 @@ public enum ReportTextModelDisplay: Equatable, Sendable {
         switch self {
         case .apple:
             "Apple Intelligence (on device)"
+        case .nativeGemma(let snapshot):
+            "Gemma · \(snapshot.modelIdentifier) (on device)"
         case .external(let snapshot):
             // Ein Legacy-Pin ohne hosting zeigt keinen Hosting-Zusatz,
             // niemals einen inferierten; "(external)" bleibt der neutrale

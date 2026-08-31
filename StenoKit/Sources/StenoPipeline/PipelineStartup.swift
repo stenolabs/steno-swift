@@ -49,6 +49,9 @@ public func startPipeline(
     modelCacheDirectory: URL? = nil,
     identityEngine: SpeakerSuggestionEngine = SpeakerSuggestionEngine(),
     textModelProviderResolver: @escaping TextModelProviderResolver = { selection in
+        if selection.nativeGemmaModelSnapshot != nil {
+            throw PipelineError.nativeGemmaProviderUnavailable
+        }
         if let endpointID = selection.endpointID {
             throw PipelineError.unknownTextModelEndpoint(endpointID)
         }
@@ -105,6 +108,9 @@ public func startPipeline(
     modelCacheDirectory: URL? = nil,
     identityEngine: SpeakerSuggestionEngine = SpeakerSuggestionEngine(),
     textModelProviderResolver: @escaping TextModelProviderResolver = { selection in
+        if selection.nativeGemmaModelSnapshot != nil {
+            throw PipelineError.nativeGemmaProviderUnavailable
+        }
         if let endpointID = selection.endpointID {
             throw PipelineError.unknownTextModelEndpoint(endpointID)
         }
