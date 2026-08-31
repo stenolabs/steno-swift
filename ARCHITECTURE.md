@@ -304,6 +304,9 @@ The order follows the handoff with one correction: milestone 1 already needs min
    Prompt counting and generation use the same shared strict JSON prompt contract, and native output is rejected unless it is exactly the expected JSON shape.
    Import approval, app provider profiles, and helper activation are independent exact-pin allowlists.
    All three production catalogs remain empty, so no installed checkpoint can currently create an executor and native Gemma remains unavailable for user selection.
+   The Xcode 27 Release configuration enables Hardened Runtime for both the app and helper, grants the app only its required microphone and calendar resource entitlements, and suppresses injected debug entitlements.
+   One shared mutual code-identity policy rejects Release peers without the runtime flag, with `get-task-allow`, or with a Hardened Runtime exception entitlement.
+   A local arm64 Release build passed strict nested-signature validation, with the helper carrying only its App Sandbox entitlement and no network entitlement.
    Whole-shard `Data` has caller-provided bounds, and checkpoint fit remains unknown until an exact reviewed checkpoint is selected.
-   A reviewed production checkpoint and resource profile in all three catalogs, user-facing import and provider-selection flows, explicit recovery for retained corrupt installs or crash-orphaned staging, production Hardened Runtime validation, negative signed abuse coverage, and a measured real offline run remain unresolved.
+   A reviewed production checkpoint and resource profile in all three catalogs, user-facing import and provider-selection flows, explicit recovery for retained corrupt installs or crash-orphaned staging, end-to-end Release recording and calendar validation under Hardened Runtime, negative signed abuse coverage, and a measured real offline run remain unresolved.
 9. Whether a speaker-count field should ever exist. If it does, ask "how many people spoke?", not "how many people attended?".

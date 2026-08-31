@@ -874,15 +874,23 @@ private struct GemmaExpectedHelperIdentity: @unchecked Sendable {
 }
 
 enum GemmaRawXPCSecurityProfile {
-    static func isSafe(entitlements: [String: Any]?) -> Bool {
-        guard let entitlements,
-              (entitlements["com.apple.security.app-sandbox"] as? Bool) == true,
-              (entitlements["com.apple.security.network.client"] as? Bool) != true,
-              (entitlements["com.apple.security.network.server"] as? Bool) != true
-        else {
-            return false
-        }
-        return true
+#if DEBUG
+    private static let buildAllowsDebugging = true
+#else
+    private static let buildAllowsDebugging = false
+#endif
+
+    static func isSafe(
+        entitlements: [String: Any]?,
+        codeDirectoryFlags: UInt32,
+        allowsDebugging: Bool
+    ) -> Bool {
+        GemmaCodeSecurityProfile.isSafe(
+            entitlements: entitlements,
+            codeDirectoryFlags: codeDirectoryFlags,
+            role: .helper,
+            allowsDebugging: allowsDebugging
+        )
     }
 
     static func isSafe(staticCode: SecStaticCode) -> Bool {
@@ -892,12 +900,15 @@ enum GemmaRawXPCSecurityProfile {
             SecCSFlags(rawValue: kSecCSSigningInformation),
             &information
         ) == errSecSuccess,
-        let dictionary = information as? [CFString: Any]
+        let dictionary = information as? [CFString: Any],
+        let codeDirectoryFlags = dictionary[kSecCodeInfoFlags] as? NSNumber
         else {
             return false
         }
         return isSafe(
-            entitlements: dictionary[kSecCodeInfoEntitlementsDict] as? [String: Any]
+            entitlements: dictionary[kSecCodeInfoEntitlementsDict] as? [String: Any],
+            codeDirectoryFlags: codeDirectoryFlags.uint32Value,
+            allowsDebugging: buildAllowsDebugging
         )
     }
 }

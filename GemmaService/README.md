@@ -38,14 +38,15 @@ This first slice provides:
 - an app-side resolver that opens only one exact app-approved installed digest as a verified descriptor-owned capability, without discovery, hierarchy creation, repair, or path return;
 - helper-side exact-profile activation with fixed memory and prompt limits, byte-backed MLX materialization, one shared tokenizer and input processor for counting and generation, and a fresh `LanguageModelSession` for every generation request; and
 - an inactive app-side native `TextModelProvider` that keeps one exact helper session across a complete template render and uses one strict JSON prompt contract for both counting and generation; and
-- signed positive XPC integration and app tests that verify fail-closed inference, exact helper absence within the owning app process before a recording lease, failure before permission UI, permission-denial release, and concurrent first-use initialization.
+- signed positive XPC integration and app tests that verify fail-closed inference, exact helper absence within the owning app process before a recording lease, failure before permission UI, permission-denial release, and concurrent first-use initialization; and
+- an arm64 Release policy that enables Hardened Runtime for the app and helper, grants the app only microphone and calendar resource entitlements, suppresses injected debug entitlements, rejects unsafe code-signing profiles, and passes strict nested-signature and helper-entitlement inspection.
 
 It does not yet provide:
 
 - an app setting, an approved production checkpoint catalog, or a user-facing import flow;
 - automatic checkpoint downloads;
 - user-selectable or production-approved native Gemma report generation from the Steno app;
-- Hardened Runtime validation for the production app and a Release-specific entitlement policy;
+- end-to-end Release recording, system-audio, and calendar validation under Hardened Runtime;
 - negative signed abuse and multiprocess XPC integration coverage;
 - an approved production activation profile and app-facing provider selection;
 - a real model run; or
@@ -148,7 +149,7 @@ It must not be read from the same untrusted checkpoint directory it is meant to 
 
 ## Remaining production work
 
-The remaining production work is to review and add one exact checkpoint and matching resource profile to all three currently empty production catalogs, expose the consented import and provider-selection flows, define explicit orphan and corrupt-install recovery, validate Hardened Runtime and the Release entitlement policy, and complete a resource-measured real offline model run.
+The remaining production work is to review and add one exact checkpoint and matching resource profile to all three currently empty production catalogs, expose the consented import and provider-selection flows, define explicit orphan and corrupt-install recovery, complete end-to-end Release recording and calendar validation under Hardened Runtime, and complete a resource-measured real offline model run.
 Negative signed abuse and multiprocess XPC coverage must be complete before native Gemma is activated.
 The normative design for that boundary is [Native Gemma cross-process gate](../docs/NATIVE-GEMMA-GATE.md).
 Approved manifests and expected digests must live in Steno-controlled metadata, and installation must route through `ModelInstallationCoordinator` with explicit consent.
