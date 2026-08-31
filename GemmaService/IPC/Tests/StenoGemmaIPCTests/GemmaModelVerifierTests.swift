@@ -2,10 +2,563 @@ import CryptoKit
 import Darwin
 import Foundation
 import Testing
-@testable import StenoGemmaModelStore
+@_spi(StenoGemmaRuntime) @testable import StenoGemmaModelStore
 
 @Suite("Installed Gemma model verifier")
 struct GemmaModelVerifierTests {
+    @Test("activation assets bind child files, are one-shot, and copy non-weight assets")
+    func activationAssetsAreBoundOneShotAndCopySmallFiles() throws {
+        let fixture = try Fixture.make(
+            primaryPath: "model-00001-of-00001.safetensors",
+            additionalFiles: ["tokenizer.json": Data("tokenizer".utf8)]
+        )
+        let assets = try activatedAssets(from: fixture)
+        let expectedRootIdentity = try fixture.rootIdentity()
+
+        let received = try assets.consume { borrowed in
+            #expect(borrowed.modelIdentifier == Fixture.modelIdentifier)
+            #expect(borrowed.rootIdentity == expectedRootIdentity)
+            #expect(borrowed.data(forRelativePath: "tokenizer.json") == Data("tokenizer".utf8))
+            var paths: [String] = []
+            try borrowed.consumeSafetensorsFiles { shard in
+                paths.append(shard.relativePath)
+                #expect(shard.size == 7)
+                #expect(shard.data == Data("payload".utf8))
+            }
+            #expect(paths == ["model-00001-of-00001.safetensors"])
+            return "used"
+        }
+        #expect(received == "used")
+
+        #expect(throws: GemmaModelVerificationError.activationAssetsUnavailable) {
+            _ = try assets.consume { _ in "again" }
+        }
+    }
+
+    @Test("borrowed activation data expires and shards can be consumed only once")
+    func borrowedActivationDataExpiresAndShardsAreOneShot() throws {
+        let fixture = try Fixture.make(
+            primaryPath: "model-00001-of-00001.safetensors",
+            additionalFiles: ["tokenizer.json": Data("tokenizer".utf8)]
+        )
+        let assets = try activatedAssets(from: fixture)
+        var escaped: BorrowedGemmaModelActivationAssets?
+
+        try assets.consume { borrowed in
+            escaped = borrowed
+            try borrowed.consumeSafetensorsFiles { _ in }
+            #expect(throws: GemmaModelVerificationError.activationAssetsUnavailable) {
+                try borrowed.consumeSafetensorsFiles { _ in }
+            }
+        }
+
+        let expired = try #require(escaped)
+        #expect(expired.data(forRelativePath: "tokenizer.json") == nil)
+        #expect(expired.safetensorsRelativePaths.isEmpty)
+        #expect(throws: GemmaModelVerificationError.activationAssetsUnavailable) {
+            try expired.consumeSafetensorsFiles { _ in }
+        }
+    }
+
+    @Test("borrowed activation data expires before final revalidation")
+    func borrowedActivationDataExpiresBeforeFinalRevalidation() throws {
+        let fixture = try Fixture.make(
+            primaryPath: "model-00001-of-00001.safetensors",
+            additionalFiles: ["tokenizer.json": Data("tokenizer".utf8)]
+        )
+        let assets = try activatedAssets(from: fixture)
+        let probe = BorrowedExpirationProbe()
+
+        try assets.consume(cancellationCheck: { probe.check() }) { borrowed in
+            probe.store(borrowed)
+        }
+
+        #expect(probe.firstObservationAfterBorrow() == true)
+    }
+
+    @Test("activation assets reject a same-content child replacement after binding")
+    func activationAssetsRejectChildReplacement() throws {
+        let fixture = try Fixture.make(primaryPath: "model-00001-of-00001.safetensors")
+        let assets = try activatedAssets(from: fixture)
+
+        #expect(throws: GemmaModelVerificationError.entryChanged(
+            "model-00001-of-00001.safetensors"
+        )) {
+            _ = try assets.consume { _ in
+                try fixture.replaceWeightsAtomically(with: Data("payload".utf8))
+                return ()
+            }
+        }
+    }
+
+    @Test("activation assets reject an in-place mutate and restore")
+    func activationAssetsRejectInPlaceMutationEvenWhenBytesAreRestored() throws {
+        let fixture = try Fixture.make(primaryPath: "model-00001-of-00001.safetensors")
+        let assets = try activatedAssets(from: fixture)
+
+        #expect(throws: GemmaModelVerificationError.entryChanged(
+            "model-00001-of-00001.safetensors"
+        )) {
+            _ = try assets.consume { _ in
+                try fixture.mutateWeightsAndRestore()
+                return ()
+            }
+        }
+    }
+
+    @Test("activation assets enforce explicit small-data and shard-count limits")
+    func activationAssetsEnforceLimits() throws {
+        let smallFixture = try Fixture.make(
+            primaryPath: "model-00001-of-00001.safetensors",
+            additionalFiles: ["tokenizer.json": Data(repeating: 0x74, count: 700)]
+        )
+        let smallDirectory = try adoptedDirectory(from: smallFixture)
+        let smallLimits = try VerifiedGemmaModelActivationLimits(
+            maximumSmallFileByteCount: 600,
+            maximumTotalSmallFileByteCount: 4096,
+            maximumSafetensorsFileCount: 2,
+            maximumSafetensorsFileByteCount: 1024,
+            maximumTotalSafetensorsByteCount: 4096
+        )
+        #expect(throws: GemmaModelVerificationError.activationSmallFileTooLarge(
+            path: "tokenizer.json",
+            limit: 600,
+            actual: 700
+        )) {
+            _ = try smallDirectory.consumeActivationAssets(limits: smallLimits)
+        }
+
+        let shardFixture = try Fixture.make(
+            primaryPath: "model-00001-of-00002.safetensors",
+            additionalFiles: ["model-00002-of-00002.safetensors": Data("second".utf8)]
+        )
+        let shardDirectory = try adoptedDirectory(from: shardFixture)
+        let shardLimits = try VerifiedGemmaModelActivationLimits(
+            maximumSmallFileByteCount: 1024,
+            maximumTotalSmallFileByteCount: 4096,
+            maximumSafetensorsFileCount: 1,
+            maximumSafetensorsFileByteCount: 1024,
+            maximumTotalSafetensorsByteCount: 4096
+        )
+        #expect(throws: GemmaModelVerificationError.tooManyActivationSafetensorsFiles(
+            limit: 1,
+            actual: 2
+        )) {
+            _ = try shardDirectory.consumeActivationAssets(limits: shardLimits)
+        }
+
+        let totalSmallFixture = try Fixture.make(
+            primaryPath: "model-00001-of-00001.safetensors",
+            additionalFiles: ["tokenizer.json": Data(repeating: 0x74, count: 200)]
+        )
+        let totalSmallDirectory = try adoptedDirectory(from: totalSmallFixture)
+        let manifestSize = try Data(contentsOf: totalSmallFixture.manifestURL).count
+        let totalSmallLimit = manifestSize + 199
+        let totalSmallLimits = try VerifiedGemmaModelActivationLimits(
+            maximumSmallFileByteCount: 1024 * 1024,
+            maximumTotalSmallFileByteCount: totalSmallLimit,
+            maximumSafetensorsFileCount: 2,
+            maximumSafetensorsFileByteCount: 1024,
+            maximumTotalSafetensorsByteCount: 4096
+        )
+        #expect(throws: GemmaModelVerificationError.activationSmallFilesTooLarge(
+            limit: totalSmallLimit,
+            actualAtLeast: manifestSize + 200
+        )) {
+            _ = try totalSmallDirectory.consumeActivationAssets(limits: totalSmallLimits)
+        }
+        #expect(throws: GemmaModelVerificationError.invalidRootDescriptor) {
+            try totalSmallDirectory.revalidate()
+        }
+
+        let oversizedShardFixture = try Fixture.make(primaryPath: "model-00001-of-00001.safetensors")
+        let oversizedShardDirectory = try adoptedDirectory(from: oversizedShardFixture)
+        let oversizedShardLimits = try VerifiedGemmaModelActivationLimits(
+            maximumSmallFileByteCount: 1024 * 1024,
+            maximumTotalSmallFileByteCount: 4096,
+            maximumSafetensorsFileCount: 2,
+            maximumSafetensorsFileByteCount: 6,
+            maximumTotalSafetensorsByteCount: 4096
+        )
+        #expect(throws: GemmaModelVerificationError.activationSafetensorsFileTooLarge(
+            path: "model-00001-of-00001.safetensors",
+            limit: 6,
+            actual: 7
+        )) {
+            _ = try oversizedShardDirectory.consumeActivationAssets(limits: oversizedShardLimits)
+        }
+
+        let totalShardFixture = try Fixture.make(
+            primaryPath: "model-00001-of-00002.safetensors",
+            additionalFiles: ["model-00002-of-00002.safetensors": Data("second".utf8)]
+        )
+        let totalShardDirectory = try adoptedDirectory(from: totalShardFixture)
+        let totalShardLimits = try VerifiedGemmaModelActivationLimits(
+            maximumSmallFileByteCount: 1024 * 1024,
+            maximumTotalSmallFileByteCount: 4096,
+            maximumSafetensorsFileCount: 2,
+            maximumSafetensorsFileByteCount: 1024,
+            maximumTotalSafetensorsByteCount: 12
+        )
+        #expect(throws: GemmaModelVerificationError.activationSafetensorsFilesTooLarge(
+            limit: 12,
+            actualAtLeast: 13
+        )) {
+            _ = try totalShardDirectory.consumeActivationAssets(limits: totalShardLimits)
+        }
+    }
+
+    @Test("activation limit validation and arithmetic fail closed")
+    func activationLimitValidationAndArithmeticFailClosed() throws {
+        #expect(throws: GemmaModelVerificationError.invalidActivationLimits) {
+            _ = try VerifiedGemmaModelActivationLimits(
+                maximumSmallFileByteCount: -1,
+                maximumTotalSmallFileByteCount: 0,
+                maximumSafetensorsFileCount: 0,
+                maximumSafetensorsFileByteCount: 0,
+                maximumTotalSafetensorsByteCount: 0
+            )
+        }
+
+        let limits = try VerifiedGemmaModelActivationLimits(
+            maximumSmallFileByteCount: Int.max,
+            maximumTotalSmallFileByteCount: Int.max,
+            maximumSafetensorsFileCount: Int.max,
+            maximumSafetensorsFileByteCount: Int64.max,
+            maximumTotalSafetensorsByteCount: Int64.max
+        )
+        var smallTotal = Int.max
+        #expect(throws: GemmaModelVerificationError.activationSmallFilesTooLarge(
+            limit: Int.max,
+            actualAtLeast: Int.max
+        )) {
+            try limits.recordSmallFile(path: "config.json", size: 1, total: &smallTotal)
+        }
+
+        var shardTotal = Int64.max
+        #expect(throws: GemmaModelVerificationError.activationSafetensorsFilesTooLarge(
+            limit: Int64.max,
+            actualAtLeast: Int64.max
+        )) {
+            try limits.recordSafetensorsFile(
+                path: "model.safetensors",
+                size: 1,
+                total: &shardTotal,
+                count: 0
+            )
+        }
+
+        var safeTotal: Int64 = 0
+        #expect(throws: GemmaModelVerificationError.tooManyActivationSafetensorsFiles(
+            limit: Int.max,
+            actual: Int.max
+        )) {
+            try limits.recordSafetensorsFile(
+                path: "model.safetensors",
+                size: 1,
+                total: &safeTotal,
+                count: Int.max
+            )
+        }
+    }
+
+    @Test("a cancelled activation closes its descriptors and cannot be retried")
+    func cancellationClosesActivationAssets() throws {
+        let fixture = try Fixture.make(primaryPath: "model-00001-of-00001.safetensors")
+        let assets = try activatedAssets(from: fixture)
+
+        #expect(throws: CancellationError.self) {
+            _ = try assets.consume(cancellationCheck: { throw CancellationError() }) { _ in
+                ()
+            }
+        }
+        #expect(throws: GemmaModelVerificationError.activationAssetsUnavailable) {
+            _ = try assets.consume { _ in () }
+        }
+    }
+
+    @Test("a concurrent close wins before activation result publication")
+    func concurrentClosePreventsActivationResultPublication() async throws {
+        let fixture = try Fixture.make(primaryPath: "model-00001-of-00001.safetensors")
+        let assets = try activatedAssets(from: fixture)
+        let release = DispatchSemaphore(value: 0)
+        let (started, startedContinuation) = AsyncStream<Void>.makeStream()
+        let consumeTask = Task.detached { () -> Bool in
+            defer { startedContinuation.finish() }
+            do {
+                _ = try assets.consume { _ in
+                    startedContinuation.yield()
+                    release.wait()
+                    return "must not publish"
+                }
+                return false
+            } catch GemmaModelVerificationError.activationAssetsUnavailable {
+                return true
+            } catch {
+                return false
+            }
+        }
+
+        for await _ in started {
+            break
+        }
+        assets.close()
+        release.signal()
+
+        #expect(await consumeTask.value)
+        #expect(throws: GemmaModelVerificationError.activationAssetsUnavailable) {
+            _ = try assets.consume { _ in () }
+        }
+    }
+
+    @Test("a shard-consumer error closes every owned descriptor")
+    func shardConsumerErrorClosesActivationAssets() throws {
+        let fixture = try Fixture.make(primaryPath: "model-00001-of-00001.safetensors")
+        let closeRecorder = DescriptorCloseRecorder()
+        let assets = try activatedAssets(from: fixture, closeRecorder: closeRecorder)
+        let ownedDescriptors = assets.ownedDescriptorsForTesting()
+        #expect(ownedDescriptors.count == 2)
+
+        #expect(throws: CocoaError.self) {
+            _ = try assets.consume { borrowed in
+                try borrowed.consumeSafetensorsFiles { _ in
+                    throw CocoaError(.fileWriteUnknown)
+                }
+                return ()
+            }
+        }
+        #expect(throws: GemmaModelVerificationError.activationAssetsUnavailable) {
+            _ = try assets.consume { _ in () }
+        }
+        #expect(closeRecorder.closedDescriptors() == Set(ownedDescriptors))
+        #expect(closeRecorder.maximumCloseCount() == 1)
+    }
+
+    @Test("a mutation during a shard copy prevents its consumer from running")
+    func mutationDuringShardCopyFailsBeforeShardConsumer() throws {
+        let fixture = try Fixture.make(
+            primaryPath: "model-00001-of-00001.safetensors",
+            primaryContents: Data(repeating: 0x70, count: 2 * 1024 * 1024)
+        )
+        let assets = try activatedAssets(from: fixture, maximumSafetensorsFileByteCount: 4 * 1024 * 1024)
+        let mutationHook = MutationDuringCopyHook(weightsURL: fixture.weightsURL)
+        var consumerCalled = false
+
+        #expect(throws: GemmaModelVerificationError.self) {
+            _ = try assets.consume(cancellationCheck: {
+                ()
+            }) { borrowed in
+                try borrowed.consumeSafetensorsFiles(cancellationCheck: {
+                    try mutationHook.check()
+                }) { _ in
+                    consumerCalled = true
+                }
+                return ()
+            }
+        }
+        #expect(!consumerCalled)
+    }
+
+    @Test("close during a shard copy aborts before the shard callback and defers descriptor closure")
+    func closeDuringShardCopyIsObservedBeforeTheShardCallback() async throws {
+        let fixture = try Fixture.make(
+            primaryPath: "model-00001-of-00001.safetensors",
+            primaryContents: Data(repeating: 0x70, count: 2 * 1024 * 1024)
+        )
+        let closeRecorder = DescriptorCloseRecorder()
+        let assets = try activatedAssets(
+            from: fixture,
+            maximumSafetensorsFileByteCount: 4 * 1024 * 1024,
+            closeRecorder: closeRecorder
+        )
+        let ownedDescriptors = assets.ownedDescriptorsForTesting()
+        let checkpoint = ShardCopyCheckpoint()
+        let consumeTask = Task.detached { () -> Bool in
+            defer { checkpoint.finish() }
+            do {
+                _ = try assets.consume { borrowed in
+                    try borrowed.consumeSafetensorsFiles(cancellationCheck: {
+                        checkpoint.check()
+                    }) { _ in
+                        checkpoint.recordShardCallback()
+                    }
+                    return ()
+                }
+                return false
+            } catch GemmaModelVerificationError.activationAssetsUnavailable {
+                return true
+            } catch {
+                return false
+            }
+        }
+
+        for await _ in checkpoint.enteredCopy {
+            break
+        }
+        assets.close()
+        #expect(closeRecorder.closedDescriptors().isEmpty)
+        checkpoint.releaseCopy()
+
+        #expect(await consumeTask.value)
+        #expect(checkpoint.shardCallbackCount() == 0)
+        #expect(closeRecorder.closedDescriptors() == Set(ownedDescriptors))
+        #expect(closeRecorder.maximumCloseCount() == 1)
+    }
+
+    @Test("activation construction closes transferred descriptors through its owner")
+    func activationConstructionFailureUsesOwnedDescriptorCloserExactlyOnce() throws {
+        let fixture = try Fixture.make(
+            primaryPath: "model-00001-of-00002.safetensors",
+            additionalFiles: ["model-00002-of-00002.safetensors": Data("second".utf8)]
+        )
+        let directory = try adoptedDirectory(from: fixture)
+        let closeRecorder = DescriptorCloseRecorder()
+        let limits = try VerifiedGemmaModelActivationLimits(
+            maximumSmallFileByteCount: 1024 * 1024,
+            maximumTotalSmallFileByteCount: 4 * 1024 * 1024,
+            maximumSafetensorsFileCount: 1,
+            maximumSafetensorsFileByteCount: 1024 * 1024,
+            maximumTotalSafetensorsByteCount: 4 * 1024 * 1024
+        )
+
+        #expect(throws: GemmaModelVerificationError.tooManyActivationSafetensorsFiles(
+            limit: 1,
+            actual: 2
+        )) {
+            _ = try directory.consumeActivationAssetsForTesting(
+                limits: limits,
+                ownedDescriptorCloser: { closeRecorder.close($0) }
+            )
+        }
+        #expect(try closeRecorder.closeCount(for: fixture.root) == 1)
+        #expect(try closeRecorder.closeCount(for: fixture.manifestURL) == 1)
+        #expect(try closeRecorder.closeCount(for: fixture.weightsURL) == 1)
+        #expect(try closeRecorder.closeCount(
+            for: fixture.root.appendingPathComponent("model-00002-of-00002.safetensors")
+        ) == 1)
+        #expect(closeRecorder.closedDescriptors().count == 4)
+        #expect(closeRecorder.maximumCloseCount() == 1)
+    }
+
+    @Test("activation construction cleans retained shards when stopped before the next open")
+    func activationConstructionCleansRetainedShardsBeforeTheNextOpen() throws {
+        let fixture = try Fixture.make(
+            primaryPath: "model-00001-of-00002.safetensors",
+            additionalFiles: ["model-00002-of-00002.safetensors": Data("second".utf8)]
+        )
+        let directory = try adoptedDirectory(from: fixture)
+        let closeRecorder = DescriptorCloseRecorder()
+        let limits = try VerifiedGemmaModelActivationLimits(
+            maximumSmallFileByteCount: 1024 * 1024,
+            maximumTotalSmallFileByteCount: 4 * 1024 * 1024,
+            maximumSafetensorsFileCount: 2,
+            maximumSafetensorsFileByteCount: 1024 * 1024,
+            maximumTotalSafetensorsByteCount: 4 * 1024 * 1024
+        )
+
+        #expect(throws: CocoaError.self) {
+            _ = try directory.consumeActivationAssetsForTesting(
+                limits: limits,
+                beforeOpeningModelFile: { path in
+                    guard path == "model-00002-of-00002.safetensors" else { return }
+                    throw CocoaError(.fileReadUnknown)
+                },
+                ownedDescriptorCloser: { closeRecorder.close($0) }
+            )
+        }
+        #expect(try closeRecorder.closeCount(for: fixture.root) == 1)
+        #expect(try closeRecorder.closeCount(for: fixture.manifestURL) == 1)
+        #expect(try closeRecorder.closeCount(for: fixture.weightsURL) == 1)
+        #expect(try closeRecorder.closeCount(
+            for: fixture.root.appendingPathComponent("model-00002-of-00002.safetensors")
+        ) == 0)
+        #expect(closeRecorder.closedDescriptors().count == 3)
+        #expect(closeRecorder.maximumCloseCount() == 1)
+    }
+
+    @Test("closing activation assets closes retained descriptors exactly once")
+    func closingActivationAssetsPreventsUse() throws {
+        let fixture = try Fixture.make(primaryPath: "model-00001-of-00001.safetensors")
+        let closeRecorder = DescriptorCloseRecorder()
+        let assets = try activatedAssets(from: fixture, closeRecorder: closeRecorder)
+        let ownedDescriptors = assets.ownedDescriptorsForTesting()
+        #expect(ownedDescriptors.count == 2)
+        assets.close()
+        #expect(closeRecorder.closedDescriptors() == Set(ownedDescriptors))
+        #expect(closeRecorder.maximumCloseCount() == 1)
+        assets.close()
+        #expect(closeRecorder.closedDescriptors() == Set(ownedDescriptors))
+        #expect(closeRecorder.maximumCloseCount() == 1)
+
+        #expect(throws: GemmaModelVerificationError.activationAssetsUnavailable) {
+            _ = try assets.consume { _ in () }
+        }
+    }
+
+    @Test("activation open closes a child descriptor rejected after open")
+    func activationOpenClosesRejectedChildDescriptor() throws {
+        let fixture = try Fixture.make(primaryPath: "model-00001-of-00001.safetensors")
+        try Fixture.chmod(fixture.weightsURL, 0o600)
+        defer { _ = Darwin.chmod(fixture.weightsURL.path, 0o400) }
+        let rootDescriptor = Darwin.open(
+            fixture.root.path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        try #require(rootDescriptor >= 0)
+        defer { _ = Darwin.close(rootDescriptor) }
+        let closeRecorder = DescriptorCloseRecorder()
+
+        #expect(throws: GemmaModelVerificationError.unsafePermissions(
+            path: "model-00001-of-00001.safetensors",
+            expected: 0o400,
+            actual: 0o600
+        )) {
+            try GemmaModelVerifier.probeActivationFileForTesting(
+                from: rootDescriptor,
+                relativePath: "model-00001-of-00001.safetensors",
+                openedDescriptorCloser: { closeRecorder.close($0) }
+            )
+        }
+        #expect(closeRecorder.closedDescriptors().count == 1)
+        #expect(closeRecorder.maximumCloseCount() == 1)
+    }
+
+    private func adoptedDirectory(from fixture: Fixture) throws -> VerifiedGemmaModelDirectory {
+        let descriptor = Darwin.open(
+            fixture.root.path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        try #require(descriptor >= 0)
+        return try fixture.verifier.verify(
+            adoptingDirectoryDescriptor: descriptor,
+            expectedRootIdentity: fixture.rootIdentity()
+        )
+    }
+
+    private func activatedAssets(
+        from fixture: Fixture,
+        maximumSafetensorsFileByteCount: Int64 = 1024 * 1024,
+        closeRecorder: DescriptorCloseRecorder? = nil
+    ) throws -> VerifiedGemmaModelActivationAssets {
+        let directory = try adoptedDirectory(from: fixture)
+        let limits = try VerifiedGemmaModelActivationLimits(
+            maximumSmallFileByteCount: 1024 * 1024,
+            maximumTotalSmallFileByteCount: 4 * 1024 * 1024,
+            maximumSafetensorsFileCount: 8,
+            maximumSafetensorsFileByteCount: maximumSafetensorsFileByteCount,
+            maximumTotalSafetensorsByteCount: 8 * 1024 * 1024
+        )
+        if let closeRecorder {
+            let assets = try directory.consumeActivationAssetsForTesting(
+                limits: limits,
+                ownedDescriptorCloser: { closeRecorder.close($0) }
+            )
+            closeRecorder.reset()
+            return assets
+        }
+        return try directory.consumeActivationAssets(limits: limits)
+    }
+
     @Test("a pinned read-only snapshot verifies and remains bound to its inode")
     func completeSnapshotVerifiesAndRevalidates() throws {
         let fixture = try Fixture.make()
@@ -612,6 +1165,148 @@ struct GemmaModelVerifierTests {
     }
 }
 
+private final class DescriptorCloseRecorder: @unchecked Sendable {
+    private struct DescriptorIdentity: Hashable {
+        let deviceID: UInt64
+        let fileID: UInt64
+
+        init(_ status: stat) {
+            deviceID = UInt64(status.st_dev)
+            fileID = UInt64(status.st_ino)
+        }
+    }
+
+    private let lock = NSLock()
+    private var closeCounts: [Int32: Int] = [:]
+    private var closeCountsByIdentity: [DescriptorIdentity: Int] = [:]
+
+    func close(_ descriptor: Int32) {
+        var status = stat()
+        let identity = Darwin.fstat(descriptor, &status) == 0 ? DescriptorIdentity(status) : nil
+        lock.withLock {
+            closeCounts[descriptor, default: 0] += 1
+            if let identity {
+                closeCountsByIdentity[identity, default: 0] += 1
+            }
+        }
+        _ = Darwin.close(descriptor)
+    }
+
+    func closedDescriptors() -> Set<Int32> {
+        lock.withLock { Set(closeCounts.keys) }
+    }
+
+    func maximumCloseCount() -> Int {
+        lock.withLock { closeCounts.values.max() ?? 0 }
+    }
+
+    func reset() {
+        lock.withLock {
+            closeCounts.removeAll()
+            closeCountsByIdentity.removeAll()
+        }
+    }
+
+    func closeCount(for url: URL) throws -> Int {
+        var status = stat()
+        guard Darwin.lstat(url.path, &status) == 0 else {
+            throw CocoaError(.fileReadUnknown)
+        }
+        return lock.withLock { closeCountsByIdentity[DescriptorIdentity(status), default: 0] }
+    }
+}
+
+private final class BorrowedExpirationProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var borrowed: BorrowedGemmaModelActivationAssets?
+    private var firstObservation: Bool?
+
+    func store(_ borrowed: BorrowedGemmaModelActivationAssets) {
+        lock.withLock { self.borrowed = borrowed }
+    }
+
+    func check() {
+        lock.withLock {
+            guard firstObservation == nil, let borrowed else { return }
+            firstObservation = borrowed.data(forRelativePath: "tokenizer.json") == nil
+                && borrowed.safetensorsRelativePaths.isEmpty
+        }
+    }
+
+    func firstObservationAfterBorrow() -> Bool? {
+        lock.withLock { firstObservation }
+    }
+}
+
+private final class MutationDuringCopyHook: @unchecked Sendable {
+    private let lock = NSLock()
+    private let weightsURL: URL
+    private var checks = 0
+
+    init(weightsURL: URL) {
+        self.weightsURL = weightsURL
+    }
+
+    func check() throws {
+        let shouldMutate = lock.withLock {
+            checks += 1
+            return checks == 3
+        }
+        guard shouldMutate else { return }
+        guard Darwin.chmod(weightsURL.path, 0o600) == 0 else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        defer { _ = Darwin.chmod(weightsURL.path, 0o400) }
+        try Data(repeating: 0x71, count: 2 * 1024 * 1024).write(to: weightsURL)
+    }
+}
+
+private final class ShardCopyCheckpoint: @unchecked Sendable {
+    let enteredCopy: AsyncStream<Void>
+
+    private let release = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private let enteredContinuation: AsyncStream<Void>.Continuation
+    private var checkCount = 0
+    private var copyWasBlocked = false
+    private var callbacks = 0
+
+    init() {
+        let stream = AsyncStream<Void>.makeStream()
+        enteredCopy = stream.stream
+        enteredContinuation = stream.continuation
+    }
+
+    func check() {
+        let shouldBlock = lock.withLock {
+            checkCount += 1
+            guard !copyWasBlocked, checkCount == 3 else { return false }
+            copyWasBlocked = true
+            return true
+        }
+        guard shouldBlock else { return }
+        enteredContinuation.yield()
+        release.wait()
+    }
+
+    func releaseCopy() {
+        release.signal()
+        finish()
+    }
+
+    func finish() {
+        enteredContinuation.finish()
+    }
+
+    func recordShardCallback() {
+        lock.withLock { callbacks += 1 }
+    }
+
+    func shardCallbackCount() -> Int {
+        lock.withLock { callbacks }
+    }
+}
+
 private final class Fixture {
     static let modelIdentifier = "mlx-community/gemma-4-2b-it-4bit"
     static let checkpointRevision = "0123456789abcdef0123456789abcdef01234567"
@@ -645,6 +1340,7 @@ private final class Fixture {
 
     static func make(
         primaryPath: String = "weights.bin",
+        primaryContents: Data = Data("payload".utf8),
         additionalFiles: [String: Data] = [:]
     ) throws -> Fixture {
         let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
@@ -652,7 +1348,7 @@ private final class Fixture {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
 
         let weightsURL = root.appendingPathComponent(primaryPath)
-        let weights = Data("payload".utf8)
+        let weights = primaryContents
         try writeFile(weights, to: weightsURL)
         for (path, data) in additionalFiles {
             try writeFile(data, to: root.appendingPathComponent(path))
@@ -724,6 +1420,31 @@ private final class Fixture {
         try Self.chmod(weightsURL, 0o600)
         try Data(contents.utf8).write(to: weightsURL)
         try Self.chmod(weightsURL, 0o400)
+    }
+
+    func replaceWeightsAtomically(with contents: Data) throws {
+        let replacement = weightsURL.deletingLastPathComponent()
+            .appendingPathComponent("replacement-\(UUID().uuidString)")
+        try Self.chmod(root, 0o700)
+        defer { _ = Darwin.chmod(root.path, 0o500) }
+        try contents.write(to: replacement)
+        try Self.chmod(replacement, 0o400)
+        guard Darwin.rename(replacement.path, weightsURL.path) == 0 else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+    }
+
+    func mutateWeightsAndRestore() throws {
+        try Self.chmod(weightsURL, 0o600)
+        defer { _ = Darwin.chmod(weightsURL.path, 0o400) }
+        try Data("payloae".utf8).write(to: weightsURL)
+        try Data("payload".utf8).write(to: weightsURL)
+    }
+
+    func replaceWeightsInPlace(with contents: Data) throws {
+        try Self.chmod(weightsURL, 0o600)
+        defer { _ = Darwin.chmod(weightsURL.path, 0o400) }
+        try contents.write(to: weightsURL)
     }
 
     func replaceManifest(with data: Data) throws {

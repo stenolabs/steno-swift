@@ -336,6 +336,13 @@ public enum GemmaModelVerificationError: Error, Equatable, LocalizedError, Senda
     case fileSizeMismatch(path: String, expected: Int64, actual: Int64)
     case fileHashMismatch(path: String, expected: String, actual: String)
     case unreadableFile(String)
+    case invalidActivationLimits
+    case activationSmallFileTooLarge(path: String, limit: Int, actual: Int)
+    case activationSmallFilesTooLarge(limit: Int, actualAtLeast: Int)
+    case activationSafetensorsFileTooLarge(path: String, limit: Int64, actual: Int64)
+    case activationSafetensorsFilesTooLarge(limit: Int64, actualAtLeast: Int64)
+    case tooManyActivationSafetensorsFiles(limit: Int, actual: Int)
+    case activationAssetsUnavailable
 
     public var errorDescription: String? {
         switch self {
@@ -425,6 +432,20 @@ public enum GemmaModelVerificationError: Error, Equatable, LocalizedError, Senda
             "A Gemma model file does not match the expected checksum: \(path)."
         case .unreadableFile(let path):
             "A Gemma model file cannot be read: \(path)."
+        case .invalidActivationLimits:
+            "The Gemma activation limits are invalid."
+        case .activationSmallFileTooLarge(let path, let limit, _):
+            "The Gemma activation file \(path) exceeds the \(limit)-byte small-file limit."
+        case .activationSmallFilesTooLarge(let limit, _):
+            "Gemma activation small files exceed the \(limit)-byte total limit."
+        case .activationSafetensorsFileTooLarge(let path, let limit, _):
+            "The Gemma safetensors file \(path) exceeds the \(limit)-byte limit."
+        case .activationSafetensorsFilesTooLarge(let limit, _):
+            "Gemma safetensors files exceed the \(limit)-byte total limit."
+        case .tooManyActivationSafetensorsFiles(let limit, _):
+            "Gemma activation has more than \(limit) safetensors files."
+        case .activationAssetsUnavailable:
+            "The Gemma activation assets are closed or already consumed."
         }
     }
 }
