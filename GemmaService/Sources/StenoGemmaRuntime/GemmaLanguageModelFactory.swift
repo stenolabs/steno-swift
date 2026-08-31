@@ -1,6 +1,6 @@
 import Foundation
 import FoundationModels
-import MLXFoundationModels
+import StenoMLXFoundationModels
 import MLXHuggingFace
 import MLXLLM
 import MLXLMCommon
