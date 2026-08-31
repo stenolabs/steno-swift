@@ -73,13 +73,13 @@ public enum NativeGemmaModelImportError: Error, Equatable, LocalizedError, Senda
 
 /// Selects the production store without touching it, or an already-created private root in tests.
 public struct NativeGemmaModelStoreConfiguration: Sendable {
-    fileprivate enum Location: Sendable {
+    enum Location: Sendable {
         case production(@Sendable () throws -> GemmaProcessGateConfiguration)
         case existingRoot(URL, GemmaProcessGateConfiguration)
     }
 
-    fileprivate let location: Location
-    fileprivate let availableByteCountOverride: UInt64?
+    let location: Location
+    let availableByteCountOverride: UInt64?
 
     private init(location: Location, availableByteCountOverride: UInt64? = nil) {
         self.location = location
@@ -96,7 +96,8 @@ public struct NativeGemmaModelStoreConfiguration: Sendable {
         Self(location: .production(processGateConfigurationProvider))
     }
 
-    init(
+    @_spi(StenoTesting)
+    public init(
         testRootDirectory: URL,
         availableByteCountOverride: UInt64? = nil
     ) throws {
@@ -124,7 +125,7 @@ public struct NativeGemmaModelStoreConfiguration: Sendable {
         }
     }
 
-    fileprivate func prepareImportAccess() throws -> NativeGemmaModelStoreImportAccess {
+    func prepareImportAccess() throws -> NativeGemmaModelStoreImportAccess {
         switch location {
         case .production(let processGateConfigurationProvider):
             do {
@@ -145,19 +146,27 @@ public struct NativeGemmaModelStoreConfiguration: Sendable {
     }
 }
 
-private struct NativeGemmaModelStoreImportAccess: Sendable {
+struct NativeGemmaModelStoreImportAccess: Sendable {
     let rootURL: URL
     let processGate: GemmaProcessGate
 }
 
-enum NativeGemmaModelImportCheckpoint: Sendable, Equatable {
+@_spi(StenoTesting)
+public enum NativeGemmaModelImportCheckpoint: Sendable, Equatable {
     case sourceReady
+    case ownershipReserved
+    case stagingCreated
+    case stagingBound
+    case manifestFinalized
+    case stagingPrepared
     case sourceFileOpened(String)
     case copiedChunk(path: String, totalBytes: Int64)
     case stagingFinalized
     case beforePublish
+    case namespaceCommitted
     case afterPublish
     case existingSnapshotSynchronized
+    case cleanupCommitted
 }
 
 typealias NativeGemmaModelImportAction = @Sendable (NativeGemmaModelImportCheckpoint) throws -> Void
@@ -183,9 +192,10 @@ public actor NativeGemmaModelImporter {
         checkpoint = { _ in }
     }
 
-    init(
+    @_spi(StenoTesting)
+    public init(
         configuration: NativeGemmaModelStoreConfiguration,
-        checkpoint: @escaping NativeGemmaModelImportAction
+        checkpoint: @escaping @Sendable (NativeGemmaModelImportCheckpoint) throws -> Void
     ) {
         self.configuration = configuration
         self.checkpoint = checkpoint
@@ -328,15 +338,14 @@ public actor NativeGemmaModelImporter {
 
         let staging = try StagingTree.create(
             parent: store,
-            targetDigest: requirements.expectedManifestSHA256
+            requirements: requirements,
+            checkpoint: checkpoint
         )
         var published = false
         do {
-            let allDirectories = Set(
-                manifest.files.flatMap { GemmaModelManifest.parentDirectories(of: $0.relativePath) }
-                    + GemmaModelManifest.parentDirectories(of: requirements.manifestFileName)
-            )
-            for path in allDirectories.sorted(by: Self.pathDepthOrder) {
+            for path in GemmaModelManifest.parentDirectories(
+                of: requirements.manifestFileName
+            ).sorted(by: Self.pathDepthOrder) {
                 try staging.createDirectory(relativePath: path)
             }
 
@@ -344,6 +353,12 @@ public actor NativeGemmaModelImporter {
                 manifestData,
                 relativePath: requirements.manifestFileName
             )
+            try checkpoint(.manifestFinalized)
+            try staging.preparePayload(
+                manifest: manifest,
+                manifestFileName: requirements.manifestFileName
+            )
+            try checkpoint(.stagingPrepared)
             for file in manifest.files.sorted(by: { $0.relativePath < $1.relativePath }) {
                 try cancellation.check()
                 try source.copyFile(
@@ -384,7 +399,7 @@ public actor NativeGemmaModelImporter {
                 guard let winner else {
                     throw NativeGemmaModelImportError.installedSnapshotCorrupt
                 }
-                try staging.removeOwnedTree()
+                try staging.removeOwnedTree(checkpoint: checkpoint)
                 try store.synchronizeAfterPublish()
                 Self.releaseMutationLease(
                     mutationLease,
@@ -393,7 +408,9 @@ public actor NativeGemmaModelImporter {
                 return winner
             }
 
+            try checkpoint(.namespaceCommitted)
             try store.synchronizeAfterPublish()
+            try staging.finishPublishedTransaction()
             Self.releaseMutationLease(
                 mutationLease,
                 cancellation: cancellation
@@ -418,7 +435,7 @@ public actor NativeGemmaModelImporter {
         } catch let importError {
             if !published {
                 do {
-                    try staging.removeOwnedTree()
+                    try staging.removeOwnedTree(checkpoint: checkpoint)
                 } catch let cleanupError {
                     throw cleanupError
                 }
@@ -1066,7 +1083,7 @@ private final class SourceSnapshotSession {
     }
 }
 
-private final class ModelStoreParent {
+final class ModelStoreParent {
     let descriptor: Int32
     let url: URL
     private let identity: EntryIdentity
@@ -1227,6 +1244,7 @@ private final class ModelStoreParent {
 
 private final class StagingTree {
     private let parent: ModelStoreParent
+    private let ownership: NativeGemmaStagingOwnership
     private(set) var rootName: String
     private(set) var rootIdentity: EntryIdentity
     private var directories: [String: MutableOpenDirectory]
@@ -1240,12 +1258,14 @@ private final class StagingTree {
 
     private init(
         parent: ModelStoreParent,
+        ownership: NativeGemmaStagingOwnership,
         rootName: String,
         rootIdentity: EntryIdentity,
         rootDescriptor: Int32,
         rootMetadata: EntryMetadata
     ) {
         self.parent = parent
+        self.ownership = ownership
         self.rootName = rootName
         self.rootIdentity = rootIdentity
         directories = [
@@ -1264,50 +1284,41 @@ private final class StagingTree {
         }
     }
 
-    static func create(parent: ModelStoreParent, targetDigest: String) throws -> StagingTree {
-        try parent.validatePathIdentity()
-        for _ in 0 ..< 32 {
-            let name = ".\(targetDigest).staging-v1-\(UUID().uuidString.lowercased())"
-            let createResult = name.withCString {
-                Darwin.mkdirat(parent.descriptor, $0, mode_t(0o700))
-            }
-            if createResult != 0 {
-                if errno == EEXIST { continue }
-                throw NativeGemmaModelImportError.unsafeStore
-            }
-            let descriptor = name.withCString {
-                Darwin.openat(
-                    parent.descriptor,
-                    $0,
-                    O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
-                )
-            }
-            guard descriptor >= 0 else {
-                _ = name.withCString {
-                    Darwin.unlinkat(parent.descriptor, $0, AT_REMOVEDIR)
-                }
-                throw NativeGemmaModelImportError.orphanedStaging
-            }
-            var status = stat()
-            guard Darwin.fstat(descriptor, &status) == 0,
-                  status.st_mode & S_IFMT == S_IFDIR,
-                  status.st_uid == geteuid(),
-                  status.st_mode & 0o777 == 0o700 else {
-                Darwin.close(descriptor)
-                _ = name.withCString {
-                    Darwin.unlinkat(parent.descriptor, $0, AT_REMOVEDIR)
-                }
-                throw NativeGemmaModelImportError.orphanedStaging
-            }
-            return StagingTree(
-                parent: parent,
-                rootName: name,
-                rootIdentity: EntryIdentity(status),
-                rootDescriptor: descriptor,
-                rootMetadata: EntryMetadata(status)
+    static func create(
+        parent: ModelStoreParent,
+        requirements: GemmaModelRequirements,
+        checkpoint: NativeGemmaModelImportAction
+    ) throws -> StagingTree {
+        let ownership = try ownershipOperation {
+            try NativeGemmaStagingOwnership.reserve(
+                in: parent,
+                requirements: requirements
             )
         }
-        throw NativeGemmaModelImportError.publishConflict
+        try checkpoint(.ownershipReserved)
+        let staging = try ownershipOperation {
+            try ownership.createAndBindStagingDirectory()
+        }
+        var status = stat()
+        guard Darwin.fstat(staging.descriptor, &status) == 0,
+              EntryIdentity(status) == staging.identity,
+              status.st_mode & S_IFMT == S_IFDIR,
+              status.st_uid == geteuid(),
+              status.st_mode & 0o777 == 0o700 else {
+            Darwin.close(staging.descriptor)
+            throw NativeGemmaModelImportError.orphanedStaging
+        }
+        let tree = StagingTree(
+            parent: parent,
+            ownership: ownership,
+            rootName: staging.name,
+            rootIdentity: staging.identity,
+            rootDescriptor: staging.descriptor,
+            rootMetadata: EntryMetadata(status)
+        )
+        try checkpoint(.stagingCreated)
+        try checkpoint(.stagingBound)
+        return tree
     }
 
     func createDirectory(relativePath: String) throws {
@@ -1368,6 +1379,68 @@ private final class StagingTree {
         try finalizeFile(descriptor: descriptor, path: relativePath)
     }
 
+    /// Makes every payload inode durable before any model payload byte is copied.
+    ///
+    /// The already verified manifest is the only non-empty file before the immutable prepared
+    /// ledger is synchronized. A crash before that ledger can therefore recover only an empty
+    /// expected subset; after it, every descendant is bound to the recorded inode.
+    func preparePayload(
+        manifest: GemmaModelManifest,
+        manifestFileName: String
+    ) throws {
+        let allDirectories = Set(
+            manifest.files.flatMap { GemmaModelManifest.parentDirectories(of: $0.relativePath) }
+                + GemmaModelManifest.parentDirectories(of: manifestFileName)
+        )
+        for path in allDirectories.sorted(by: Self.shallowestPathFirst) {
+            try createDirectory(relativePath: path)
+        }
+
+        for path in manifest.files.map(\.relativePath).sorted() {
+            let descriptor = try createFile(relativePath: path)
+            do {
+                guard Darwin.fsync(descriptor) == 0 else {
+                    throw NativeGemmaModelImportError.filesystemFailure(
+                        operation: "fsync empty staged model file",
+                        code: errno
+                    )
+                }
+                refreshFile(path, descriptor: descriptor)
+                Darwin.close(descriptor)
+            } catch {
+                refreshFile(path, descriptor: descriptor)
+                Darwin.close(descriptor)
+                throw error
+            }
+        }
+
+        for path in directories.keys.sorted(by: Self.deepestPathFirst) {
+            guard let directory = directories[path], Darwin.fsync(directory.descriptor) == 0 else {
+                throw NativeGemmaModelImportError.filesystemFailure(
+                    operation: "fsync prepared staging directory",
+                    code: errno
+                )
+            }
+            try refreshDirectory(path)
+        }
+        try validateExactTree()
+
+        let directoryIdentities = Dictionary(
+            uniqueKeysWithValues: directories.map { ($0.key, $0.value.metadata.identity) }
+        )
+        let ledger = try Self.ownershipOperation {
+            try ownership.makePreparedLedger(
+                manifest: manifest,
+                directoryIdentities: directoryIdentities,
+                fileIdentities: files
+            )
+        }
+        try Self.ownershipOperation {
+            try ownership.markPrepared(ledger)
+        }
+        try validateExactTree()
+    }
+
     func copyFile(
         from sourceDescriptor: Int32,
         expectedByteCount: Int64,
@@ -1375,7 +1448,7 @@ private final class StagingTree {
         checkpoint: NativeGemmaModelImportAction,
         cancellation: NativeGemmaModelImportCancellation
     ) throws -> String {
-        let destinationDescriptor = try createFile(relativePath: relativePath)
+        let destinationDescriptor = try openPreparedFile(relativePath: relativePath)
         defer {
             refreshFile(relativePath, descriptor: destinationDescriptor)
             Darwin.close(destinationDescriptor)
@@ -1512,12 +1585,21 @@ private final class StagingTree {
         isPublished = true
     }
 
-    func removeOwnedTree() throws {
+    func finishPublishedTransaction() throws {
+        guard isPublished, !isRemoved else {
+            throw NativeGemmaModelImportError.orphanedStaging
+        }
+        try Self.ownershipOperation {
+            try ownership.removeDocumentsAfterPublishedTargetSynchronization()
+        }
+    }
+
+    func removeOwnedTree(checkpoint: NativeGemmaModelImportAction) throws {
         guard !isPublished, !isRemoved else { return }
         try validateExactTree()
         try validateRootNameIdentity()
 
-        let quarantineName = ".cleanup-v1-\(UUID().uuidString.lowercased())"
+        let quarantineName = ownership.cleanupName
         let renameResult = rootName.withCString { sourceName in
             quarantineName.withCString { destinationName in
                 Darwin.renameatx_np(
@@ -1534,48 +1616,29 @@ private final class StagingTree {
         }
         rootName = quarantineName
         try validateRootNameIdentity()
+        try parent.synchronizeAfterPublish()
+        try checkpoint(.cleanupCommitted)
 
         for directory in directories.values {
             guard Darwin.fchmod(directory.descriptor, mode_t(0o700)) == 0 else {
                 throw NativeGemmaModelImportError.orphanedStaging
             }
         }
-        for path in files.keys.sorted() {
-            let (parentPath, name) = Self.parentAndLeaf(path)
-            guard let parentDirectory = directories[parentPath],
-                  let identity = files[path]
-            else {
-                throw NativeGemmaModelImportError.orphanedStaging
-            }
-            var status = stat()
-            guard name.withCString({
-                Darwin.fstatat(parentDirectory.descriptor, $0, &status, AT_SYMLINK_NOFOLLOW)
-            }) == 0,
-                EntryIdentity(status) == identity,
-                name.withCString({ Darwin.unlinkat(parentDirectory.descriptor, $0, 0) }) == 0
-            else {
-                throw NativeGemmaModelImportError.orphanedStaging
-            }
+        let manifestPath = ownership.manifestFileName
+        for path in files.keys.filter({ $0 != manifestPath }).sorted() {
+            try removeRecordedFile(path)
         }
-        for path in directories.keys.filter({ !$0.isEmpty }).sorted(by: Self.deepestPathFirst) {
-            guard let directory = directories[path],
-                  let parentPath = directory.parentPath,
-                  let name = directory.name,
-                  let parentDirectory = directories[parentPath]
-            else {
-                throw NativeGemmaModelImportError.orphanedStaging
-            }
-            var status = stat()
-            guard name.withCString({
-                Darwin.fstatat(parentDirectory.descriptor, $0, &status, AT_SYMLINK_NOFOLLOW)
-            }) == 0,
-                EntryIdentity(status) == directory.metadata.identity,
-                name.withCString({
-                    Darwin.unlinkat(parentDirectory.descriptor, $0, AT_REMOVEDIR)
-                }) == 0
-            else {
-                throw NativeGemmaModelImportError.orphanedStaging
-            }
+        let manifestParents = Set(GemmaModelManifest.parentDirectories(of: manifestPath))
+        for path in directories.keys.filter({
+            !$0.isEmpty && !manifestParents.contains($0)
+        }).sorted(by: Self.deepestPathFirst) {
+            try removeRecordedDirectory(path)
+        }
+        if files[manifestPath] != nil {
+            try removeRecordedFile(manifestPath)
+        }
+        for path in manifestParents.sorted(by: Self.deepestPathFirst) {
+            try removeRecordedDirectory(path)
         }
         try validateRootNameIdentity()
         guard rootName.withCString({
@@ -1584,12 +1647,75 @@ private final class StagingTree {
             throw NativeGemmaModelImportError.orphanedStaging
         }
         isRemoved = true
-        guard Darwin.fsync(parent.descriptor) == 0 else {
-            throw NativeGemmaModelImportError.filesystemFailure(
-                operation: "fsync staging cleanup",
-                code: errno
+        try parent.synchronizeAfterPublish()
+        try Self.ownershipOperation {
+            try ownership.removeDocumentsAfterOwnedTreeRemoval()
+        }
+    }
+
+    private func removeRecordedFile(_ path: String) throws {
+        let (parentPath, name) = Self.parentAndLeaf(path)
+        guard let parentDirectory = directories[parentPath],
+              let identity = files[path] else {
+            throw NativeGemmaModelImportError.orphanedStaging
+        }
+        var status = stat()
+        guard name.withCString({
+            Darwin.fstatat(parentDirectory.descriptor, $0, &status, AT_SYMLINK_NOFOLLOW)
+        }) == 0,
+            EntryIdentity(status) == identity,
+            name.withCString({ Darwin.unlinkat(parentDirectory.descriptor, $0, 0) }) == 0 else {
+            throw NativeGemmaModelImportError.orphanedStaging
+        }
+    }
+
+    private func removeRecordedDirectory(_ path: String) throws {
+        guard let directory = directories[path],
+              let parentPath = directory.parentPath,
+              let name = directory.name,
+              let parentDirectory = directories[parentPath] else {
+            throw NativeGemmaModelImportError.orphanedStaging
+        }
+        var status = stat()
+        guard name.withCString({
+            Darwin.fstatat(parentDirectory.descriptor, $0, &status, AT_SYMLINK_NOFOLLOW)
+        }) == 0,
+            EntryIdentity(status) == directory.metadata.identity,
+            name.withCString({
+                Darwin.unlinkat(parentDirectory.descriptor, $0, AT_REMOVEDIR)
+            }) == 0 else {
+            throw NativeGemmaModelImportError.orphanedStaging
+        }
+    }
+
+    private func openPreparedFile(relativePath: String) throws -> Int32 {
+        let (parentPath, name) = Self.parentAndLeaf(relativePath)
+        guard let parentDirectory = directories[parentPath],
+              let expectedIdentity = files[relativePath] else {
+            throw NativeGemmaModelImportError.orphanedStaging
+        }
+        let descriptor = name.withCString {
+            Darwin.openat(
+                parentDirectory.descriptor,
+                $0,
+                O_WRONLY | O_NOFOLLOW | O_CLOEXEC
             )
         }
+        guard descriptor >= 0 else {
+            throw NativeGemmaModelImportError.orphanedStaging
+        }
+        var status = stat()
+        guard Darwin.fstat(descriptor, &status) == 0,
+              EntryIdentity(status) == expectedIdentity,
+              status.st_mode & S_IFMT == S_IFREG,
+              status.st_uid == geteuid(),
+              status.st_nlink == 1,
+              status.st_mode & 0o777 == 0o600,
+              status.st_size == 0 else {
+            Darwin.close(descriptor)
+            throw NativeGemmaModelImportError.orphanedStaging
+        }
+        return descriptor
     }
 
     private func createFile(relativePath: String) throws -> Int32 {
@@ -1706,6 +1832,30 @@ private final class StagingTree {
         return result
     }
 
+    private static func ownershipOperation<Result>(
+        _ body: () throws -> Result
+    ) throws -> Result {
+        do {
+            return try body()
+        } catch let error as NativeGemmaModelStoreRecoveryError {
+            switch error {
+            case .filesystemFailure(let operation, let code):
+                throw NativeGemmaModelImportError.filesystemFailure(
+                    operation: operation,
+                    code: code
+                )
+            case .storeMutationUnavailable:
+                throw NativeGemmaModelImportError.storeMutationUnavailable
+            case .preemptedByRecording:
+                throw NativeGemmaModelImportError.preemptedByRecording
+            case .unsafeStore:
+                throw NativeGemmaModelImportError.unsafeStore
+            case .invalidOwnershipState, .scanLimitExceeded:
+                throw NativeGemmaModelImportError.orphanedStaging
+            }
+        }
+    }
+
     private static func writeAll(
         descriptor: Int32,
         bytes: UnsafeRawBufferPointer,
@@ -1740,6 +1890,12 @@ private final class StagingTree {
         return (components.dropLast().joined(separator: "/"), components.last ?? "")
     }
 
+    private static func shallowestPathFirst(_ lhs: String, _ rhs: String) -> Bool {
+        let leftDepth = lhs.split(separator: "/").count
+        let rightDepth = rhs.split(separator: "/").count
+        return leftDepth == rightDepth ? lhs < rhs : leftDepth < rightDepth
+    }
+
     private static func deepestPathFirst(_ lhs: String, _ rhs: String) -> Bool {
         let leftDepth = lhs.split(separator: "/").count
         let rightDepth = rhs.split(separator: "/").count
@@ -1766,13 +1922,18 @@ private struct MutableOpenDirectory {
     let name: String?
 }
 
-private struct EntryIdentity: Equatable, Sendable {
+struct EntryIdentity: Equatable, Sendable {
     let deviceID: UInt64
     let inode: UInt64
 
     init(_ status: stat) {
         deviceID = UInt64(status.st_dev)
         inode = UInt64(status.st_ino)
+    }
+
+    init(deviceID: UInt64, inode: UInt64) {
+        self.deviceID = deviceID
+        self.inode = inode
     }
 }
 

@@ -4,7 +4,7 @@ import Dispatch
 import Foundation
 import StenoGemmaProcessGate
 import Testing
-@_spi(StenoApp) @testable import StenoGemmaModelStore
+@_spi(StenoApp) @_spi(StenoTesting) @testable import StenoGemmaModelStore
 
 @Suite("Native Gemma model importer", .serialized)
 struct NativeGemmaModelImporterTests {
@@ -797,7 +797,10 @@ private final class ImportFixture: @unchecked Sendable {
         return try FileManager.default.contentsOfDirectory(
             at: modelsURL,
             includingPropertiesForKeys: nil
-        ).filter { $0.lastPathComponent.contains(".staging-v1-") }
+        ).filter {
+            $0.lastPathComponent.hasPrefix(".native-gemma-import-v2-")
+                && $0.lastPathComponent.hasSuffix(".staging")
+        }
     }
 
     func storeListing() throws -> [String] {

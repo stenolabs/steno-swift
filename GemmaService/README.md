@@ -68,7 +68,25 @@ The importer verifies the source before store access, acquires a mutation lease 
 The store root and gate-file path come from the same gate configuration.
 Each store hierarchy parent is synchronized even on an idempotent retry, so a later authorized import can complete namespace durability after an earlier crash.
 The app-level coordinator still drains the exact active import task before it grants the recording lease.
-Explicit recovery for retained corrupt installs and crash-orphaned staging remains open.
+
+## Accepted crash-recovery design
+
+Native Gemma crash recovery is an explicit, manually invoked engine.
+It is not startup or UI wiring, does not auto-publish, and does not run a model.
+
+Recovery uses monotone v2 owner, bound, and prepared documents that are write-once after their initial durable record.
+The owner document is durable before staging begins.
+The bound document records the exact root identity before any staging contents are created.
+The complete manifest is durable in staging before any other model path is created.
+All model files are pre-created as empty regular files, and the prepared canonical inode ledger is durable before any payload is written.
+
+Recovery uses byte 1 of the same mutation lease and byte 0 recording intent.
+All inspection and mutation is descriptor-based, uses no-follow operations, and checks ownership, modes, and inode identity before cleanup.
+Cleanup uses a deterministic no-replace rename, synchronizes the parent directory, removes only the resulting descriptor-bound tree, and synchronizes the parent again.
+Old v1 entries, malformed v2 documents, and suspicious entries are retained and reported.
+Published targets named by 64 lowercase hexadecimal characters are never deleted.
+A valid committed target is only synchronized and verified.
+A corrupt published target is retained and reported separately from any future user-authorized repair.
 
 ## Model boundary
 
@@ -156,7 +174,7 @@ It must not be read from the same untrusted checkpoint directory it is meant to 
 
 ## Remaining production work
 
-The remaining production work is to review and add one exact checkpoint and matching resource profile to all three currently empty production catalogs, expose the consented import and provider-selection flows, define explicit orphan and corrupt-install recovery, complete end-to-end Release recording and calendar validation under Hardened Runtime, and complete a resource-measured real offline model run.
+The remaining production work is to review and add one exact checkpoint and matching resource profile to all three currently empty production catalogs, expose the consented import and provider-selection flows, add an explicit user-authorized repair flow for retained corrupt targets, complete end-to-end Release recording and calendar validation under Hardened Runtime, and complete a resource-measured real offline model run.
 Negative signed abuse and multiprocess XPC coverage must be complete before native Gemma is activated.
 The normative design for that boundary is [Native Gemma cross-process gate](../docs/NATIVE-GEMMA-GATE.md).
 Approved manifests and expected digests must live in Steno-controlled metadata, and installation must route through `ModelInstallationCoordinator` with explicit consent.
