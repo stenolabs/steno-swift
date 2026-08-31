@@ -8,6 +8,7 @@ import StenoPipeline
 
 enum NativeGemmaModelStoreAdapterError: Error, Equatable, Sendable {
     case adapterRevisionMismatch(expected: String, actual: String)
+    case modelNotApproved
     case provenanceMismatch
 }
 
@@ -67,6 +68,41 @@ struct NativeGemmaModelStoreAdapter: NativeGemmaModelImporting, Sendable {
             licenseIdentifier: pin.licenseIdentifier,
             expectedManifestSHA256: pin.manifestSHA256
         )
+    }
+
+    /// Resolves only an exact app-approved snapshot from Steno's immutable store.
+    ///
+    /// This is the app side of the double allowlist. The helper independently requires the same
+    /// exact pin in its activation catalog before it materializes MLX.
+    static func productionInstalledModelDirectory(
+        for model: GemmaModelSnapshotPin
+    ) throws -> VerifiedGemmaModelDirectory {
+        let configuration = NativeGemmaModelStoreConfiguration.production {
+            try GemmaProcessGateConfiguration.production().directoryURL
+        }
+        return try resolveInstalledModelDirectory(
+            for: model,
+            resolver: NativeGemmaInstalledModelResolver(configuration: configuration),
+            isApproved: ApprovedNativeGemmaModelCatalog.production.contains
+        )
+    }
+
+    static func resolveInstalledModelDirectory(
+        for model: GemmaModelSnapshotPin,
+        resolver: NativeGemmaInstalledModelResolver,
+        isApproved: (ApprovedNativeGemmaModelPin) -> Bool
+    ) throws -> VerifiedGemmaModelDirectory {
+        let approvedPin = try ApprovedNativeGemmaModelPin(
+            modelIdentifier: model.modelIdentifier,
+            checkpointRevision: model.checkpointRevision,
+            adapterRevision: model.adapterRevision,
+            licenseIdentifier: model.licenseIdentifier,
+            manifestSHA256: model.manifestSHA256
+        )
+        guard isApproved(approvedPin) else {
+            throw NativeGemmaModelStoreAdapterError.modelNotApproved
+        }
+        return try resolver.resolve(requirements: requirements(for: approvedPin))
     }
 }
 

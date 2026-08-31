@@ -26,6 +26,11 @@ protocol NativeGemmaCoordinator: AnyObject, Sendable {
 
     #if canImport(StenoGemmaClient)
     func send(_ body: GemmaIPCRequestBody) async throws -> GemmaIPCResponseBody
+
+    func withNativeModelSession<Value: Sendable>(
+        model: GemmaModelSnapshotPin,
+        _ operation: @escaping @Sendable (NativeGemmaClientModelSession) async throws -> Value
+    ) async throws -> Value
     #endif
 }
 
@@ -347,15 +352,73 @@ extension NativeGemmaCoordinator {
     func send(_ body: GemmaIPCRequestBody) async throws -> GemmaIPCResponseBody {
         throw NativeGemmaCoordinatorError.unavailable
     }
+
+    func withNativeModelSession<Value: Sendable>(
+        model: GemmaModelSnapshotPin,
+        _ operation: @escaping @Sendable (NativeGemmaClientModelSession) async throws -> Value
+    ) async throws -> Value {
+        throw NativeGemmaCoordinatorError.unavailable
+    }
 }
 
-protocol NativeGemmaClientControlling: Sendable {
+struct NativeGemmaClientModelSession: Sendable {
+    let model: GemmaModelSnapshotPin
+    private let sender: @Sendable (GemmaIPCRequestBody) async throws -> GemmaIPCResponseBody
+
+    init(
+        model: GemmaModelSnapshotPin,
+        sender: @escaping @Sendable (
+            GemmaIPCRequestBody
+        ) async throws -> GemmaIPCResponseBody
+    ) {
+        self.model = model
+        self.sender = sender
+    }
+
+    func send(_ body: GemmaIPCRequestBody) async throws -> GemmaIPCResponseBody {
+        guard body.modelPin == model else {
+            throw GemmaClientControllerError.modelPinMismatch
+        }
+        return try await sender(body)
+    }
+}
+
+protocol NativeGemmaClientControlling: AnyObject, Sendable {
     func acquireRecordingLease(_ lease: GemmaRecordingLease) async throws -> GemmaRecordingLease
     func releaseRecordingLease(_ lease: GemmaRecordingLease) async throws
     func send(_ body: GemmaIPCRequestBody) async throws -> GemmaIPCResponseBody
+
+    func withNativeModelSession<Value: Sendable>(
+        model: GemmaModelSnapshotPin,
+        _ operation: @escaping @Sendable (NativeGemmaClientModelSession) async throws -> Value
+    ) async throws -> Value
 }
 
-extension GemmaClientController: NativeGemmaClientControlling {}
+extension NativeGemmaClientControlling {
+    func withNativeModelSession<Value: Sendable>(
+        model: GemmaModelSnapshotPin,
+        _ operation: @escaping @Sendable (NativeGemmaClientModelSession) async throws -> Value
+    ) async throws -> Value {
+        try await operation(NativeGemmaClientModelSession(
+            model: model,
+            sender: { body in try await self.send(body) }
+        ))
+    }
+}
+
+extension GemmaClientController: NativeGemmaClientControlling {
+    func withNativeModelSession<Value: Sendable>(
+        model: GemmaModelSnapshotPin,
+        _ operation: @escaping @Sendable (NativeGemmaClientModelSession) async throws -> Value
+    ) async throws -> Value {
+        try await withModelSession(model: model) { session in
+            try await operation(NativeGemmaClientModelSession(
+                model: model,
+                sender: { body in try await session.send(body) }
+            ))
+        }
+    }
+}
 
 typealias NativeGemmaClientInitializer = @Sendable () async throws -> any NativeGemmaClientControlling
 
@@ -422,10 +485,13 @@ private actor NativeGemmaRecordingBarrierController: NativeGemmaCoordinator {
             let transportFactory = try GemmaRawXPCTransportFactory(
                 helperBundleURL: helperBundleURL,
                 processGate: processGate,
-                resolveModelDirectory: { _ in
-                    // Activation remains fail closed until the installed-model store can vend a
-                    // fresh descriptor-rooted capability for the exact requested snapshot.
+                resolveModelDirectory: { model in
+                    #if STENO_NATIVE_GEMMA_MODEL_STORE
+                    return try NativeGemmaModelStoreAdapter
+                        .productionInstalledModelDirectory(for: model)
+                    #else
                     throw NativeGemmaCoordinatorError.unavailable
+                    #endif
                 }
             )
             return try GemmaClientController(
@@ -635,14 +701,42 @@ private actor NativeGemmaRecordingBarrierController: NativeGemmaCoordinator {
         do {
             return try await controller.send(body)
         } catch {
-            if Self.isActivationFailure(error) {
-                // A broken or resource-incompatible approved pin must not relaunch the helper on
-                // every request. The existing recording lifecycle discards this breaker only
-                // after it has independently proven helper absence through the process gate.
-                modelState = .faulted
-            } else if Self.requiresFreshController(after: error) {
-                modelState = .uninitialized
+            handleModelError(error, from: controller)
+            throw error
+        }
+    }
+
+    func withNativeModelSession<Value: Sendable>(
+        model: GemmaModelSnapshotPin,
+        _ operation: @escaping @Sendable (NativeGemmaClientModelSession) async throws -> Value
+    ) async throws -> Value {
+        guard case .idle = recordingState else {
+            throw NativeGemmaCoordinatorError.unavailable
+        }
+        try await initializeIfNeeded()
+        guard case .idle = recordingState,
+              case .available(let controller) = modelState else {
+            throw NativeGemmaCoordinatorError.unavailable
+        }
+        do {
+            return try await controller.withNativeModelSession(
+                model: model
+            ) { session in
+                let observedSession = NativeGemmaClientModelSession(
+                    model: model,
+                    sender: { body in
+                        do {
+                            return try await session.send(body)
+                        } catch {
+                            await self.handleModelError(error, from: controller)
+                            throw error
+                        }
+                    }
+                )
+                return try await operation(observedSession)
             }
+        } catch {
+            handleModelError(error, from: controller)
             throw error
         }
     }
@@ -694,6 +788,22 @@ private actor NativeGemmaRecordingBarrierController: NativeGemmaCoordinator {
 
     private func discardFaultedModelController() {
         if case .faulted = modelState {
+            modelState = .uninitialized
+        }
+    }
+
+    private func handleModelError(
+        _ error: any Error,
+        from controller: any NativeGemmaClientControlling
+    ) {
+        guard case .available(let current) = modelState,
+              current === controller else { return }
+        if Self.isActivationFailure(error) {
+            // A broken or resource-incompatible approved pin must not relaunch the helper on
+            // every request. The existing recording lifecycle discards this breaker only
+            // after it has independently proven helper absence through the process gate.
+            modelState = .faulted
+        } else if Self.requiresFreshController(after: error) {
             modelState = .uninitialized
         }
     }

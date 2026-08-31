@@ -17,6 +17,15 @@ struct TextModelSettingsTests {
             nativeGemmaModelSnapshot: nativeGemmaSnapshot()
         )
 
+        #if STENO_NATIVE_GEMMA_MODEL_STORE && canImport(StenoGemmaClient)
+        #expect(throws: NativeGemmaTextModelProviderError.modelNotApproved) {
+            _ = try TextModelSettings.makeProviderResolver(
+                defaults: fixture.defaults,
+                secrets: fixture.secrets,
+                registry: fixture.registry
+            )(selection)
+        }
+        #else
         #expect(throws: PipelineError.nativeGemmaProviderUnavailable) {
             _ = try TextModelSettings.makeProviderResolver(
                 defaults: fixture.defaults,
@@ -24,6 +33,7 @@ struct TextModelSettingsTests {
                 registry: fixture.registry
             )(selection)
         }
+        #endif
     }
 
     @Test("endpoint deletion names the keychain consequence before removal")

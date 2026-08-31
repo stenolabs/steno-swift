@@ -24,6 +24,7 @@ public enum NativeGemmaModelImportError: Error, Equatable, LocalizedError, Senda
     case sourceRejected(String)
     case unsafeStore
     case insufficientSpace(required: UInt64, available: UInt64)
+    case installedSnapshotMissing
     case installedSnapshotCorrupt
     case storeParentChanged
     case importAlreadyInProgress
@@ -45,6 +46,8 @@ public enum NativeGemmaModelImportError: Error, Equatable, LocalizedError, Senda
             "Steno's native Gemma model store is unsafe."
         case .insufficientSpace:
             "There is not enough free space to import the native Gemma model."
+        case .installedSnapshotMissing:
+            "The approved native Gemma snapshot is not installed."
         case .installedSnapshotCorrupt:
             "An installed native Gemma snapshot exists but does not match its pinned manifest."
         case .storeParentChanged:
@@ -427,6 +430,69 @@ public actor NativeGemmaModelImporter {
 
     private static func sha256(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+/// Opens one exact installed snapshot as a descriptor-owned activation capability.
+///
+/// Resolution never discovers a model, repairs storage, follows a link, or creates the `Models/v1`
+/// hierarchy. The caller supplies the complete approved requirements and receives no filesystem
+/// path. The returned capability remains usable if a later path rename occurs, while its retained
+/// descriptor continues to name the exact tree that passed verification.
+@_spi(StenoApp)
+public struct NativeGemmaInstalledModelResolver: Sendable {
+    private let configuration: NativeGemmaModelStoreConfiguration
+
+    public init(configuration: NativeGemmaModelStoreConfiguration) {
+        self.configuration = configuration
+    }
+
+    public func resolve(
+        requirements: GemmaModelRequirements,
+        cancellationCheck: @Sendable () throws -> Void = {
+            try Task.checkCancellation()
+        }
+    ) throws -> VerifiedGemmaModelDirectory {
+        try cancellationCheck()
+        let root = try configuration.prepareRoot()
+        let store = try ModelStoreParent.openExisting(rootURL: root)
+        defer { store.close() }
+        try store.validatePathIdentity()
+
+        let leaf = requirements.expectedManifestSHA256
+        let descriptor = leaf.withCString {
+            Darwin.openat(
+                store.descriptor,
+                $0,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+            )
+        }
+        guard descriptor >= 0 else {
+            if errno == ENOENT {
+                throw NativeGemmaModelImportError.installedSnapshotMissing
+            }
+            throw NativeGemmaModelImportError.installedSnapshotCorrupt
+        }
+
+        do {
+            try cancellationCheck()
+            try store.validatePathIdentity()
+        } catch {
+            _ = Darwin.close(descriptor)
+            throw error
+        }
+
+        // Ownership transfers at this call. The verifier closes the descriptor on every failure.
+        do {
+            return try GemmaModelVerifier(requirements: requirements).verify(
+                adoptingDirectoryDescriptor: descriptor,
+                cancellationCheck: cancellationCheck
+            )
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw NativeGemmaModelImportError.installedSnapshotCorrupt
+        }
     }
 }
 
@@ -893,6 +959,17 @@ private final class ModelStoreParent {
     }
 
     static func open(rootURL: URL) throws -> ModelStoreParent {
+        try open(rootURL: rootURL, createHierarchyIfMissing: true)
+    }
+
+    static func openExisting(rootURL: URL) throws -> ModelStoreParent {
+        try open(rootURL: rootURL, createHierarchyIfMissing: false)
+    }
+
+    private static func open(
+        rootURL: URL,
+        createHierarchyIfMissing: Bool
+    ) throws -> ModelStoreParent {
         let rootDescriptor = rootURL.path.withCString {
             Darwin.open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         }
@@ -908,16 +985,21 @@ private final class ModelStoreParent {
             if ownsCurrent { Darwin.close(current) }
         }
         for component in ["Models", "v1"] {
-            let createResult = component.withCString {
-                Darwin.mkdirat(current, $0, mode_t(0o700))
-            }
-            guard createResult == 0 || errno == EEXIST else {
-                throw NativeGemmaModelImportError.unsafeStore
+            if createHierarchyIfMissing {
+                let createResult = component.withCString {
+                    Darwin.mkdirat(current, $0, mode_t(0o700))
+                }
+                guard createResult == 0 || errno == EEXIST else {
+                    throw NativeGemmaModelImportError.unsafeStore
+                }
             }
             let next = component.withCString {
                 Darwin.openat(current, $0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
             }
             guard next >= 0 else {
+                if !createHierarchyIfMissing, errno == ENOENT {
+                    throw NativeGemmaModelImportError.installedSnapshotMissing
+                }
                 throw NativeGemmaModelImportError.unsafeStore
             }
             do {

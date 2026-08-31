@@ -87,14 +87,15 @@ struct NativeGemmaModelExecutorTests {
             },
             generateResponse: { prompt, maximumTokens in
                 await calls.recordGeneration(prompt, maximumTokens: maximumTokens)
-                return "result"
+                return "result\n\(NativeGemmaModelExecutor.responseCompletionMarker)"
             }
         )
 
         #expect(try await executor.countTokens(in: "same prompt") == 7)
         #expect(try await executor.generate(prompt: "same prompt", maximumTokens: 12) == "result")
-        #expect(await calls.countPrompts == ["same prompt", "same prompt"])
-        #expect(await calls.generations == [.init(prompt: "same prompt", maximumTokens: 12)])
+        let markedPrompt = NativeGemmaModelExecutor.completionMarkedPrompt("same prompt")
+        #expect(await calls.countPrompts == [markedPrompt, markedPrompt])
+        #expect(await calls.generations == [.init(prompt: markedPrompt, maximumTokens: 12)])
     }
 
     @Test("an oversized prepared prompt fails before Foundation Models generation")
@@ -105,7 +106,7 @@ struct NativeGemmaModelExecutorTests {
             countPreparedTokens: { _ in 5 },
             generateResponse: { prompt, maximumTokens in
                 await calls.recordGeneration(prompt, maximumTokens: maximumTokens)
-                return "must not run"
+                return "must not run\n\(NativeGemmaModelExecutor.responseCompletionMarker)"
             }
         )
 
@@ -113,6 +114,31 @@ struct NativeGemmaModelExecutorTests {
             _ = try await executor.generate(prompt: "too large", maximumTokens: 1)
         }
         #expect(await calls.generations.isEmpty)
+    }
+
+    @Test("a response without the completion marker is reported as truncation")
+    func missingCompletionMarkerMapsExactly() async {
+        let executor = NativeGemmaModelExecutor(
+            maximumPromptTokens: 32,
+            countPreparedTokens: { _ in 1 },
+            generateResponse: { _, _ in "partial" }
+        )
+
+        await #expect(throws: GemmaModelExecutionError.responseTruncated) {
+            _ = try await executor.generate(prompt: "prompt", maximumTokens: 8)
+        }
+    }
+
+    @Test("only a terminal completion marker is stripped")
+    func terminalCompletionMarkerIsRequiredAndStripped() {
+        let marker = NativeGemmaModelExecutor.responseCompletionMarker
+
+        #expect(NativeGemmaModelExecutor.completedResponse(
+            from: "{\"value\":\"\(marker)\"}"
+        ) == nil)
+        #expect(NativeGemmaModelExecutor.completedResponse(
+            from: "{\"value\":true}\n\(marker)\n"
+        ) == "{\"value\":true}")
     }
 
     @Test("Foundation Models context errors map to the fixed IPC vocabulary")
