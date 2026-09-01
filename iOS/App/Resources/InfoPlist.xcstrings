@@ -1,76 +1,118 @@
 {
-  "sourceLanguage":  "en",
-  "strings":  {
-    "CFBundleDisplayName":  {
-      "comment":  "Bundle display name",
-      "extractionState":  "extracted_with_value",
-      "localizations":  {
-        "en":  {
-          "stringUnit":  {
-            "state":  "new",
-            "value":  "Steno"
-          }
-        }
-      },
-      "shouldTranslate":  false
-    },
-    "CFBundleName":  {
-      "comment":  "Bundle name",
-      "extractionState":  "extracted_with_value",
-      "localizations":  {
-        "en":  {
-          "stringUnit":  {
-            "state":  "new",
-            "value":  "Steno"
-          }
-        }
-      },
-      "shouldTranslate":  false
-    },
-    "NSLocalNetworkUsageDescription":  {
-      "extractionState":  "manual",
-      "localizations":  {
-        "de":  {
-          "stringUnit":  {
-            "state":  "translated",
-            "value":  "Steno verbindet sich mit einem Sprachmodellserver nur, wenn du ihn testest oder ausdrücklich ein Protokoll erstellst."
+  "sourceLanguage": "en",
+  "strings": {
+    "CFBundleDisplayName": {
+      "comment": "Bundle display name",
+      "extractionState": "extracted_with_value",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steno"
           }
         },
-        "en":  {
-          "stringUnit":  {
-            "state":  "translated",
-            "value":  "Steno connects to a language model server only when you test it or explicitly generate minutes with it."
+        "en": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Steno"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steno"
+          }
+        }
+      },
+      "shouldTranslate": false
+    },
+    "CFBundleName": {
+      "comment": "Bundle name",
+      "extractionState": "extracted_with_value",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steno"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Steno"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steno"
+          }
+        }
+      },
+      "shouldTranslate": false
+    },
+    "NSLocalNetworkUsageDescription": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steno verbindet sich mit einem Sprachmodellserver nur, wenn du ihn testest oder ausdrücklich ein Protokoll erstellst."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steno connects to a language model server only when you test it or explicitly generate minutes with it."
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steno 僅在您測試連線或明確生成會議紀錄時連接語言模型伺服器。"
           }
         }
       }
     },
-    "NSMicrophoneUsageDescription":  {
-      "extractionState":  "manual",
-      "localizations":  {
-        "de":  {
-          "stringUnit":  {
-            "state":  "translated",
-            "value":  "Steno zeichnet dein Mikrofon auf, damit Gespräche lokal auf diesem Gerät transkribiert werden können."
+    "NSMicrophoneUsageDescription": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steno zeichnet dein Mikrofon auf, damit Gespräche lokal auf diesem Gerät transkribiert werden können."
           }
         },
-        "en":  {
-          "stringUnit":  {
-            "state":  "translated",
-            "value":  "Steno records your microphone so it can transcribe conversations locally on this device."
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steno records your microphone so it can transcribe conversations locally on this device."
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steno 錄製您的麥克風以在此裝置本機轉錄對話。"
           }
         }
       }
     },
-    "Steno Meeting":  {
-      "localizations":  {
-        "de":  {
-          "stringUnit":  {
-            "state":  "translated",
-            "value":  "Steno-Meeting"
+    "Steno Meeting": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steno-Meeting"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steno 會議"
           }
         }
       }
     }
   },
-  "version":  "1.0"
+  "version": "1.0"
 }
