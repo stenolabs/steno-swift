@@ -292,7 +292,13 @@ The order follows the handoff with one correction: milestone 1 already needs min
    The separate Xcode 27 project variant now embeds a signed App Sandbox XPC helper with incoming and outgoing network access disabled.
    Mutual caller authentication, strict IPC correlation, bounded client deadlines, a server-side request registry with targeted cancellation and true task-and-reply quiescence, exact helper-process exit proof, and one app-process-wide recording coordinator are implemented and covered by model-free tests.
    That coordinator also excludes model import from recording, requests cancellation of the exact active import, and waits for complete import quiescence before recording permission or capture.
-   The crash-releasing cross-process gate and first-frame file-descriptor binding are implemented and documented in `docs/NATIVE-GEMMA-GATE.md`.
+   The crash-releasing cross-process gate and protocol-v4 atomic gate-and-model-directory descriptor bind are implemented and documented in `docs/NATIVE-GEMMA-GATE.md`.
+   The helper performs descriptor-rooted verification at bind time, retains the root capability, and binds every model request to the exact session model pin.
    The consented local importer, app import facade, and content-addressed model store are implemented as an MLX-free boundary and documented in `docs/NATIVE-GEMMA-MODEL-STORE.md`; the production checkpoint catalog remains empty.
-   An authenticated model-directory descriptor handoff into the sandboxed helper, descriptor-rooted helper verification, a reviewed checkpoint, user-facing import flow, explicit recovery for retained corrupt installs or crash-orphaned staging, production Hardened Runtime validation, a buildable matched MLX dependency snapshot, and verified model-runtime activation remain unresolved.
+   The exact MLX dependency snapshot builds with Xcode 27 Beta 6 and its matching Metal Toolchain component without loading a model.
+   The model-free adapter seam now accepts a prebuilt `ModelContainer` with an immutable `ModelDescriptor`, while the existing production factory remains deferred, path-backed, and unwired to the helper.
+   A one-shot child-file activation boundary retains exact shard descriptors and immutable non-shard bytes, strictly parses every verified shard before the trusted callback, and rejects duplicate raw tensor names across shards.
+   MLX materialization from those parsed verified bytes remains unresolved.
+   Whole-shard `Data` has caller-provided bounds, and checkpoint fit remains unknown until an exact reviewed checkpoint is selected.
+   A reviewed production checkpoint, user-facing import flow, explicit recovery for retained corrupt installs or crash-orphaned staging, production Hardened Runtime validation, and verified model-runtime activation remain unresolved.
 9. Whether a speaker-count field should ever exist. If it does, ask "how many people spoke?", not "how many people attended?".

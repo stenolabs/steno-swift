@@ -64,23 +64,31 @@ Code must not explicitly unlock byte 1 because duplicated descriptors in the hel
 
 A model session performs these steps without creating or activating a transport first:
 
-1. Open and validate a fresh gate file description.
-2. Acquire a shared nonblocking OFD lock on byte 0.
-3. Acquire an exclusive nonblocking OFD lock on byte 1.
-4. Unlock byte 0.
-5. Create the XPC transport.
-6. Send a strict gate-binding control frame carrying the descriptor as the first XPC control frame.
-7. Wait for the authenticated binding acknowledgement before sending any model frame.
+1. Reserve one exact session, model pin, and transport-construction identity in the client actor.
+2. Resolve and fully verify a fresh model-directory capability asynchronously without a process-gate lease or helper.
+3. Revalidate the session, pin, and construction identity in the client actor after verification returns.
+4. Open and validate a fresh gate file description.
+5. Acquire a shared nonblocking OFD lock on byte 0.
+6. Acquire an exclusive nonblocking OFD lock on byte 1.
+7. Unlock byte 0.
+8. Create and immediately register the XPC transport in the same non-suspending actor turn.
+9. Send one strict session-binding control frame carrying both descriptors as the first XPC control frame.
+10. Wait for the authenticated acknowledgement of the exact model pin and root identity before sending any model frame.
+
+Concurrent first requests in the same session share one construction reservation.
+Recording preemption cancels a pending verifier and invalidates any late model capability without activating it.
+Because expensive verification occurs before gate acquisition, it cannot strand an unregistered execution lease or block the client actor.
 
 Failure to acquire byte 0 means a recording transition is in progress.
 Failure to acquire byte 1 means either a recording is active or another native Gemma session owns execution.
 Both outcomes reject model admission without starting a replacement helper.
 
-The gate-binding frame carries the descriptor with `xpc_fd_create` and never serializes a numeric descriptor value.
-The helper adopts it with `xpc_fd_dup`, validates its structure with `fstat`, and performs an acquire-or-confirm exclusive OFD lock operation on byte 1.
-The helper cannot prove the descriptor path, so correctness also relies on mutual code-signature authentication of the app and helper.
-The helper retains its duplicate until process exit.
-The client closes its own reference on every terminal path, including cancellation, infrastructure failure, retirement failure, and recording preemption.
+The session-binding frame carries the execution-gate and model-directory descriptors with `xpc_fd_create` and never serializes numeric descriptor values.
+The helper adopts both descriptors with `xpc_fd_dup`.
+It validates the gate structure with `fstat`, performs an acquire-or-confirm exclusive OFD lock operation on byte 1, and fully revalidates the model from the retained root descriptor against the expected device, inode, manifest, hashes, and five-field model pin.
+The helper cannot prove the gate descriptor path, so gate correctness also relies on mutual code-signature authentication of the app and helper.
+The helper retains both adopted capabilities until process exit.
+The client closes its own references on every terminal path, including resolver failure, cancellation, infrastructure failure, retirement failure, and recording preemption.
 The session-scoped client retires automatically after the final high-level request reaches a terminal state.
 
 The XPC fileport or helper duplicate retains the same open file description if the app exits after sending the binding frame.
@@ -151,14 +159,18 @@ The model-session and recording descriptors use different lease types so the cli
 Automatic retirement after the final high-level model session prevents an idle helper from blocking another process indefinitely.
 The future native provider must wrap handshake, token counting, and generation in one explicit session so this policy does not reload the model between low-level frames.
 
-## XPC protocol version 3
+## XPC protocol version 4
 
-Adding gate binding changes the strict raw XPC contract and requires protocol version 3.
-The control schema adds one `bindExecutionGate` operation and one authenticated binding response containing the helper instance identity.
-Only that request may carry the extra `executionGateFD` outer-dictionary key.
+Version 4 atomically binds the execution-gate descriptor and verified model-directory descriptor in one strict `bindSession` control frame.
+The frame carries both descriptors out of band as `executionGateFD` and `modelDirectoryFD`; descriptor numbers are never serialized.
+The helper adopts both descriptors, verifies the model root from the retained descriptor against the expected device, inode, and pinned manifest, checks recording intent, and acknowledges only the exact bound model pin and root identity together with its helper identity.
+Every subsequent handshake, token-counting, or generation request must carry the same model pin as the bound session.
+Only the bind request may carry the two descriptor keys.
 All other requests and every reply retain their exact existing key set.
 Missing, duplicated, late, malformed, or second binding frames are rejected and terminate the helper.
 The helper starts its byte 0 monitor before acknowledging the binding, and the monitor poll interval is a documented bound on preemption latency.
+The acknowledgement proves the descriptor-rooted scan at bind time, but a root directory descriptor alone does not make its child files immutable for the rest of the session.
+The helper therefore remains model-free until activation can open and retain the exact manifest-listed child files, materialize MLX from those capabilities, and verify them again before publishing the in-memory model.
 
 Before binding succeeds, the helper rejects model work, cancellation, shutdown, prepare, and arm operations.
 The MLX actor and runtime cannot be created before binding succeeds.

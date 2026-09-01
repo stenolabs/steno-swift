@@ -12,7 +12,9 @@ struct GemmaLanguageModelFactoryTests {
         let fixture = try FactoryFixture.make(modelType: "gemma4")
         let verified = try fixture.verifiedModel()
 
-        let model = try GemmaLanguageModelFactory.makeLanguageModel(from: verified)
+        let model = try GemmaLanguageModelFactory.makePrototypePathBackedLanguageModel(
+            from: verified
+        )
 
         #expect(model.modelID == "steno-local/\(fixture.manifestDigest)")
     }
@@ -23,7 +25,7 @@ struct GemmaLanguageModelFactoryTests {
         let verified = try fixture.verifiedModel()
 
         #expect(throws: GemmaLanguageModelFactoryError.unsupportedModelType("qwen3")) {
-            _ = try GemmaLanguageModelFactory.makeLanguageModel(from: verified)
+            _ = try GemmaLanguageModelFactory.makePrototypePathBackedLanguageModel(from: verified)
         }
     }
 
@@ -33,7 +35,7 @@ struct GemmaLanguageModelFactoryTests {
         let verified = try fixture.verifiedModel()
 
         #expect(throws: GemmaLanguageModelFactoryError.configurationMissing) {
-            _ = try GemmaLanguageModelFactory.makeLanguageModel(from: verified)
+            _ = try GemmaLanguageModelFactory.makePrototypePathBackedLanguageModel(from: verified)
         }
     }
 
@@ -49,7 +51,7 @@ struct GemmaLanguageModelFactoryTests {
             expected: GemmaServiceBuildInfo.adapterRevision,
             actual: "0000000000000000000000000000000000000000"
         )) {
-            _ = try GemmaLanguageModelFactory.makeLanguageModel(from: verified)
+            _ = try GemmaLanguageModelFactory.makePrototypePathBackedLanguageModel(from: verified)
         }
     }
 }

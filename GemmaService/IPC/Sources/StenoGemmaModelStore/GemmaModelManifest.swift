@@ -119,6 +119,60 @@ public struct GemmaModelManifest: Sendable, Equatable, Codable {
         self.files = files
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case formatVersion
+        case modelIdentifier
+        case checkpointRevision
+        case adapterRevision
+        case licenseIdentifier
+        case files
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        formatVersion = try container.decode(Int.self, forKey: .formatVersion)
+        modelIdentifier = try container.decode(String.self, forKey: .modelIdentifier)
+        checkpointRevision = try container.decode(String.self, forKey: .checkpointRevision)
+        adapterRevision = try container.decode(String.self, forKey: .adapterRevision)
+        licenseIdentifier = try container.decode(String.self, forKey: .licenseIdentifier)
+
+        var filesContainer = try container.nestedUnkeyedContainer(forKey: .files)
+        var decodedFiles: [GemmaModelFile] = []
+        while !filesContainer.isAtEnd {
+            guard decodedFiles.count < Self.maximumFileCount else {
+                throw GemmaModelVerificationError.tooManyFiles(
+                    limit: Self.maximumFileCount,
+                    actual: Self.maximumFileCount + 1
+                )
+            }
+            decodedFiles.append(try filesContainer.decode(GemmaModelFile.self))
+        }
+        files = decodedFiles
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(formatVersion, forKey: .formatVersion)
+        try container.encode(modelIdentifier, forKey: .modelIdentifier)
+        try container.encode(checkpointRevision, forKey: .checkpointRevision)
+        try container.encode(adapterRevision, forKey: .adapterRevision)
+        try container.encode(licenseIdentifier, forKey: .licenseIdentifier)
+        try container.encode(files, forKey: .files)
+    }
+
+    static func decode(from data: Data) throws -> GemmaModelManifest {
+        do {
+            return try JSONDecoder().decode(Self.self, from: data)
+        } catch let error as GemmaModelVerificationError {
+            if case .tooManyFiles(_, _) = error {
+                throw error
+            }
+            throw GemmaModelVerificationError.malformedManifest
+        } catch {
+            throw GemmaModelVerificationError.malformedManifest
+        }
+    }
+
     public struct GemmaModelFile: Sendable, Equatable, Codable {
         public let relativePath: String
         public let size: Int64
@@ -129,6 +183,11 @@ public struct GemmaModelManifest: Sendable, Equatable, Codable {
             self.size = size
             self.sha256 = sha256
         }
+    }
+
+    /// Classifies the safetensors extension without case folding.
+    static func isSafetensorsFile(_ path: String) -> Bool {
+        path.hasSuffix(".safetensors")
     }
 
     static func validateRelativePath(_ value: String) throws {
@@ -294,6 +353,8 @@ public struct GemmaModelManifest: Sendable, Equatable, Codable {
 
 public enum GemmaModelVerificationError: Error, Equatable, LocalizedError, Sendable {
     case invalidRequirement(String)
+    case invalidRootDescriptor
+    case rootDescriptorNotReadOnly
     case rootIsNotDirectory
     case rootIdentityMismatch
     case symbolicLinkNotAllowed(String)
@@ -334,11 +395,23 @@ public enum GemmaModelVerificationError: Error, Equatable, LocalizedError, Senda
     case fileSizeMismatch(path: String, expected: Int64, actual: Int64)
     case fileHashMismatch(path: String, expected: String, actual: String)
     case unreadableFile(String)
+    case invalidActivationLimits
+    case activationSmallFileTooLarge(path: String, limit: Int, actual: Int)
+    case activationSmallFilesTooLarge(limit: Int, actualAtLeast: Int)
+    case activationSafetensorsFileTooLarge(path: String, limit: Int64, actual: Int64)
+    case activationSafetensorsFilesTooLarge(limit: Int64, actualAtLeast: Int64)
+    case tooManyActivationSafetensorsFiles(limit: Int, actual: Int)
+    case duplicateSafetensorsTensorName(name: String, firstShard: String, duplicateShard: String)
+    case activationAssetsUnavailable
 
     public var errorDescription: String? {
         switch self {
         case .invalidRequirement(let detail):
             "Invalid Gemma model requirements: \(detail)."
+        case .invalidRootDescriptor:
+            "The Gemma model root descriptor is invalid."
+        case .rootDescriptorNotReadOnly:
+            "The Gemma model root descriptor is not read-only."
         case .rootIsNotDirectory:
             "The Gemma model root is not a directory."
         case .rootIdentityMismatch:
@@ -419,6 +492,22 @@ public enum GemmaModelVerificationError: Error, Equatable, LocalizedError, Senda
             "A Gemma model file does not match the expected checksum: \(path)."
         case .unreadableFile(let path):
             "A Gemma model file cannot be read: \(path)."
+        case .invalidActivationLimits:
+            "The Gemma activation limits are invalid."
+        case .activationSmallFileTooLarge(let path, let limit, _):
+            "The Gemma activation file \(path) exceeds the \(limit)-byte small-file limit."
+        case .activationSmallFilesTooLarge(let limit, _):
+            "Gemma activation small files exceed the \(limit)-byte total limit."
+        case .activationSafetensorsFileTooLarge(let path, let limit, _):
+            "The Gemma safetensors file \(path) exceeds the \(limit)-byte limit."
+        case .activationSafetensorsFilesTooLarge(let limit, _):
+            "Gemma safetensors files exceed the \(limit)-byte total limit."
+        case .tooManyActivationSafetensorsFiles(let limit, _):
+            "Gemma activation has more than \(limit) safetensors files."
+        case .duplicateSafetensorsTensorName(let name, let firstShard, let duplicateShard):
+            "Gemma safetensors tensor \(name) occurs in both \(firstShard) and \(duplicateShard)."
+        case .activationAssetsUnavailable:
+            "The Gemma activation assets are closed or already consumed."
         }
     }
 }

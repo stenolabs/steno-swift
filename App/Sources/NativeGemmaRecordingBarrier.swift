@@ -421,7 +421,12 @@ private actor NativeGemmaRecordingBarrierController: NativeGemmaCoordinator {
             }
             let transportFactory = try GemmaRawXPCTransportFactory(
                 helperBundleURL: helperBundleURL,
-                processGate: processGate
+                processGate: processGate,
+                resolveModelDirectory: { _ in
+                    // Activation remains fail closed until the installed-model store can vend a
+                    // fresh descriptor-rooted capability for the exact requested snapshot.
+                    throw NativeGemmaCoordinatorError.unavailable
+                }
             )
             return try GemmaClientController(
                 maximumInFlightRequests: 2,
@@ -705,7 +710,7 @@ private actor NativeGemmaRecordingBarrierController: NativeGemmaCoordinator {
              .invalidExitPreparation, .exitObservationMismatch, .exitArmMismatch,
              .authenticatedExitProofMismatch, .invalidRecordingLease,
              .modelSessionActive, .modelSessionRetiring, .modelSessionInactive,
-             .modelAdmissionBusy:
+             .modelPinMismatch, .modelAdmissionBusy:
             return false
         }
     }

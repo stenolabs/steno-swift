@@ -276,6 +276,409 @@ struct GemmaIPCTests {
         #expect(countResponse.body == .failure(.init(code: .modelUnavailable)))
     }
 
+    @Test("an injected executor advertises and handles only native model operations")
+    func coreRoutesInferenceToInjectedExecutor() async throws {
+        let executor = GemmaModelExecutorProbe()
+        let core = GemmaServiceCore(
+            buildInfo: .current,
+            boundModelExecutor: .init(model: pin, executor: executor)
+        )
+
+        let handshake = try GemmaIPCRequestEnvelope(body: .handshake(.init(model: pin)))
+        let handshakeResponse = try GemmaIPCCodec.decodeResponse(
+            await core.handle(
+                encodedRequest: GemmaIPCCodec.encode(handshake),
+                expectedRequestID: handshake.requestID
+            ),
+            expectedRequestID: handshake.requestID,
+            expectedOperation: .handshake
+        )
+        #expect(handshakeResponse.body == .handshake(.init(
+            serviceIdentifier: GemmaIPCBuildInfo.serviceIdentifier,
+            adapterRevision: pin.adapterRevision,
+            supportedOperations: [.handshake, .countTokens, .generate, .cancel, .shutdown]
+        )))
+
+        let count = try GemmaIPCRequestEnvelope(
+            body: .countTokens(try .init(model: pin, text: "count these words"))
+        )
+        let countResponse = try GemmaIPCCodec.decodeResponse(
+            await core.handle(
+                encodedRequest: GemmaIPCCodec.encode(count),
+                expectedRequestID: count.requestID
+            ),
+            expectedRequestID: count.requestID,
+            expectedOperation: .countTokens
+        )
+        #expect(countResponse.body == .tokenCount(.init(tokenCount: 3)))
+
+        let generate = try GemmaIPCRequestEnvelope(body: .generate(try .init(
+            model: pin,
+            prompt: "Summarize",
+            maximumTokens: 17
+        )))
+        let generateResponse = try GemmaIPCCodec.decodeResponse(
+            await core.handle(
+                encodedRequest: GemmaIPCCodec.encode(generate),
+                expectedRequestID: generate.requestID
+            ),
+            expectedRequestID: generate.requestID,
+            expectedOperation: .generate
+        )
+        #expect(generateResponse.body == .generate(.init(text: "Summarize:17")))
+        #expect(await executor.receivedCountTexts() == ["count these words"])
+        #expect(await executor.receivedGenerationCalls() == [
+            .init(prompt: "Summarize", maximumTokens: 17),
+        ])
+    }
+
+    @Test("a bound executor rejects every request for a different model pin")
+    func coreRejectsExecutorPinMismatch() async throws {
+        let executor = GemmaModelExecutorProbe()
+        let core = GemmaServiceCore(
+            buildInfo: .current,
+            boundModelExecutor: .init(model: pin, executor: executor)
+        )
+        let otherPin = try GemmaModelSnapshotPin(
+            modelIdentifier: pin.modelIdentifier,
+            checkpointRevision: String(repeating: "2", count: 40),
+            adapterRevision: pin.adapterRevision,
+            licenseIdentifier: pin.licenseIdentifier,
+            manifestSHA256: pin.manifestSHA256
+        )
+
+        let handshake = try GemmaIPCRequestEnvelope(body: .handshake(.init(model: otherPin)))
+        let handshakeResponse = try GemmaIPCCodec.decodeResponse(
+            await core.handle(
+                encodedRequest: GemmaIPCCodec.encode(handshake),
+                expectedRequestID: handshake.requestID
+            ),
+            expectedRequestID: handshake.requestID,
+            expectedOperation: .handshake
+        )
+        #expect(handshakeResponse.body == .failure(.init(code: .modelIntegrityFailure)))
+
+        let count = try GemmaIPCRequestEnvelope(
+            body: .countTokens(try .init(model: otherPin, text: "never count"))
+        )
+        let countResponse = try GemmaIPCCodec.decodeResponse(
+            await core.handle(
+                encodedRequest: GemmaIPCCodec.encode(count),
+                expectedRequestID: count.requestID
+            ),
+            expectedRequestID: count.requestID,
+            expectedOperation: .countTokens
+        )
+        #expect(countResponse.body == .failure(.init(code: .modelIntegrityFailure)))
+
+        let generate = try GemmaIPCRequestEnvelope(body: .generate(try .init(
+            model: otherPin,
+            prompt: "never generate",
+            maximumTokens: 8
+        )))
+        let generateResponse = try GemmaIPCCodec.decodeResponse(
+            await core.handle(
+                encodedRequest: GemmaIPCCodec.encode(generate),
+                expectedRequestID: generate.requestID
+            ),
+            expectedRequestID: generate.requestID,
+            expectedOperation: .generate
+        )
+        #expect(generateResponse.body == .failure(.init(code: .modelIntegrityFailure)))
+        #expect(await executor.receivedCountTexts().isEmpty)
+        #expect(await executor.receivedGenerationCalls().isEmpty)
+    }
+
+    @Test("an executor bound to another adapter revision cannot run without a handshake")
+    func coreRejectsBoundExecutorAdapterMismatch() async throws {
+        let executor = GemmaModelExecutorProbe()
+        let incompatiblePin = try GemmaModelSnapshotPin(
+            modelIdentifier: pin.modelIdentifier,
+            checkpointRevision: pin.checkpointRevision,
+            adapterRevision: String(repeating: "2", count: 40),
+            licenseIdentifier: pin.licenseIdentifier,
+            manifestSHA256: pin.manifestSHA256
+        )
+        let core = GemmaServiceCore(
+            buildInfo: .current,
+            boundModelExecutor: .init(model: incompatiblePin, executor: executor)
+        )
+
+        let count = try GemmaIPCRequestEnvelope(
+            body: .countTokens(try .init(model: incompatiblePin, text: "never count"))
+        )
+        let countResponse = try GemmaIPCCodec.decodeResponse(
+            await core.handle(
+                encodedRequest: GemmaIPCCodec.encode(count),
+                expectedRequestID: count.requestID
+            ),
+            expectedRequestID: count.requestID,
+            expectedOperation: .countTokens
+        )
+        #expect(countResponse.body == .failure(.init(code: .adapterMismatch)))
+
+        let generate = try GemmaIPCRequestEnvelope(body: .generate(try .init(
+            model: incompatiblePin,
+            prompt: "never generate",
+            maximumTokens: 8
+        )))
+        let generateResponse = try GemmaIPCCodec.decodeResponse(
+            await core.handle(
+                encodedRequest: GemmaIPCCodec.encode(generate),
+                expectedRequestID: generate.requestID
+            ),
+            expectedRequestID: generate.requestID,
+            expectedOperation: .generate
+        )
+        #expect(generateResponse.body == .failure(.init(code: .adapterMismatch)))
+        #expect(await executor.receivedCountTexts().isEmpty)
+        #expect(await executor.receivedGenerationCalls().isEmpty)
+    }
+
+    @Test("executor failures use only the fixed IPC error vocabulary")
+    func coreMapsExecutorFailuresWithoutLeakingDetails() async throws {
+        let mappings: [(GemmaModelExecutionError, GemmaIPCErrorCode)] = [
+            (.modelUnavailable, .modelUnavailable),
+            (.unsupportedModel, .unsupportedModel),
+            (.contextWindowExceeded, .contextWindowExceeded),
+            (.responseTruncated, .responseTruncated),
+            (.cancelled, .cancelled),
+            (.generationFailed, .generationFailed),
+            (.internalFailure, .internalFailure),
+        ]
+
+        for (executionError, expectedCode) in mappings {
+            let response = try await generationResponse(
+                from: GemmaServiceCore(
+                    buildInfo: .current,
+                    boundModelExecutor: .init(
+                        model: pin,
+                        executor: FailingGemmaModelExecutor(error: executionError)
+                    )
+                )
+            )
+            #expect(response.body == .failure(.init(code: expectedCode)))
+        }
+
+        let unknown = try await generationResponse(
+            from: GemmaServiceCore(
+                buildInfo: .current,
+                boundModelExecutor: .init(
+                    model: pin,
+                    executor: FailingGemmaModelExecutor(
+                        error: UnknownGemmaModelExecutorError()
+                    )
+                )
+            )
+        )
+        #expect(unknown.body == .failure(.init(code: .internalFailure)))
+
+        let cancelled = try await generationResponse(
+            from: GemmaServiceCore(
+                buildInfo: .current,
+                boundModelExecutor: .init(
+                    model: pin,
+                    executor: FailingGemmaModelExecutor(error: CancellationError())
+                )
+            )
+        )
+        #expect(cancelled.body == .failure(.init(code: .cancelled)))
+    }
+
+    @Test("the core serializes generation and token counting with a shared in-flight slot")
+    func coreRejectsConcurrentInferenceAcrossOperationKinds() async throws {
+        let executor = BlockingGemmaModelExecutor()
+        let core = GemmaServiceCore(
+            buildInfo: .current,
+            boundModelExecutor: .init(model: pin, executor: executor)
+        )
+        let generation = try GemmaIPCRequestEnvelope(body: .generate(try .init(
+            model: pin,
+            prompt: "first",
+            maximumTokens: 8
+        )))
+
+        let firstResponse = Task { [core, generation] in
+            await core.handle(
+                encodedRequest: try GemmaIPCCodec.encode(generation),
+                expectedRequestID: generation.requestID
+            )
+        }
+        await executor.waitForInferenceStart()
+
+        let count = try GemmaIPCRequestEnvelope(
+            body: .countTokens(try .init(model: pin, text: "must not reach executor"))
+        )
+        let busyResponse = try GemmaIPCCodec.decodeResponse(
+            await core.handle(
+                encodedRequest: GemmaIPCCodec.encode(count),
+                expectedRequestID: count.requestID
+            ),
+            expectedRequestID: count.requestID,
+            expectedOperation: .countTokens
+        )
+        #expect(busyResponse.body == .failure(.init(code: .busy)))
+
+        await executor.releaseInference()
+        let completedResponse = try GemmaIPCCodec.decodeResponse(
+            try await firstResponse.value,
+            expectedRequestID: generation.requestID,
+            expectedOperation: .generate
+        )
+        #expect(completedResponse.body == .generate(.init(text: "first:8")))
+
+        let recoveredCount = try GemmaIPCCodec.decodeResponse(
+            await core.handle(
+                encodedRequest: GemmaIPCCodec.encode(count),
+                expectedRequestID: count.requestID
+            ),
+            expectedRequestID: count.requestID,
+            expectedOperation: .countTokens
+        )
+        #expect(recoveredCount.body == .tokenCount(.init(tokenCount: 1)))
+
+        let countExecutor = BlockingGemmaModelExecutor()
+        let countCore = GemmaServiceCore(
+            buildInfo: .current,
+            boundModelExecutor: .init(model: pin, executor: countExecutor)
+        )
+        let firstCount = Task { [countCore, count] in
+            await countCore.handle(
+                encodedRequest: try GemmaIPCCodec.encode(count),
+                expectedRequestID: count.requestID
+            )
+        }
+        await countExecutor.waitForInferenceStart()
+
+        let rejectedGeneration = try await generationResponse(from: countCore)
+        #expect(rejectedGeneration.body == .failure(.init(code: .busy)))
+
+        await countExecutor.releaseInference()
+        let completedCount = try GemmaIPCCodec.decodeResponse(
+            try await firstCount.value,
+            expectedRequestID: count.requestID,
+            expectedOperation: .countTokens
+        )
+        #expect(completedCount.body == .tokenCount(.init(tokenCount: 1)))
+    }
+
+    @Test("the core releases its inference slot after an executor failure")
+    func coreReleasesInferenceSlotAfterExecutorFailure() async throws {
+        let core = GemmaServiceCore(
+            buildInfo: .current,
+            boundModelExecutor: .init(model: pin, executor: ThrowOnceGemmaModelExecutor())
+        )
+
+        let failed = try await generationResponse(from: core)
+        #expect(failed.body == .failure(.init(code: .generationFailed)))
+
+        let recovered = try await generationResponse(from: core)
+        #expect(recovered.body == .generate(.init(text: "recovered")))
+    }
+
+    @Test("the core releases its inference slot after cancellation")
+    func coreReleasesInferenceSlotAfterCancellation() async throws {
+        let executor = CancellationAwareGemmaModelExecutor()
+        let core = GemmaServiceCore(
+            buildInfo: .current,
+            boundModelExecutor: .init(model: pin, executor: executor)
+        )
+        let generation = try GemmaIPCRequestEnvelope(body: .generate(try .init(
+            model: pin,
+            prompt: "cancel",
+            maximumTokens: 8
+        )))
+
+        let cancelledResponse = Task { [core, generation] in
+            await core.handle(
+                encodedRequest: try GemmaIPCCodec.encode(generation),
+                expectedRequestID: generation.requestID
+            )
+        }
+        await executor.waitForGenerationStart()
+        cancelledResponse.cancel()
+
+        let response = try GemmaIPCCodec.decodeResponse(
+            try await cancelledResponse.value,
+            expectedRequestID: generation.requestID,
+            expectedOperation: .generate
+        )
+        #expect(response.body == .failure(.init(code: .cancelled)))
+
+        let count = try GemmaIPCRequestEnvelope(
+            body: .countTokens(try .init(model: pin, text: "available again"))
+        )
+        let recoveredCount = try GemmaIPCCodec.decodeResponse(
+            await core.handle(
+                encodedRequest: GemmaIPCCodec.encode(count),
+                expectedRequestID: count.requestID
+            ),
+            expectedRequestID: count.requestID,
+            expectedOperation: .countTokens
+        )
+        #expect(recoveredCount.body == .tokenCount(.init(tokenCount: 1)))
+    }
+
+    @Test("invalid executor output fails closed")
+    func coreRejectsInvalidExecutorOutput() async throws {
+        let negativeCore = GemmaServiceCore(
+            buildInfo: .current,
+            boundModelExecutor: .init(
+                model: pin,
+                executor: FixedGemmaModelExecutor(
+                    tokenCount: -1,
+                    generatedText: "unused"
+                )
+            )
+        )
+        let count = try GemmaIPCRequestEnvelope(
+            body: .countTokens(try .init(model: pin, text: "count"))
+        )
+        let negativeResponse = try GemmaIPCCodec.decodeResponse(
+            await negativeCore.handle(
+                encodedRequest: GemmaIPCCodec.encode(count),
+                expectedRequestID: count.requestID
+            ),
+            expectedRequestID: count.requestID,
+            expectedOperation: .countTokens
+        )
+        #expect(negativeResponse.body == .failure(.init(code: .internalFailure)))
+
+        let oversizedCore = GemmaServiceCore(
+            buildInfo: .current,
+            boundModelExecutor: .init(
+                model: pin,
+                executor: FixedGemmaModelExecutor(
+                    tokenCount: 0,
+                    generatedText: String(
+                        repeating: "x",
+                        count: GemmaIPCProtocol.maximumTextBytes + 1
+                    )
+                )
+            )
+        )
+        let oversizedResponse = try await generationResponse(from: oversizedCore)
+        #expect(oversizedResponse.body == .failure(.init(code: .responseTruncated)))
+    }
+
+    private func generationResponse(
+        from core: GemmaServiceCore
+    ) async throws -> GemmaIPCResponseEnvelope {
+        let request = try GemmaIPCRequestEnvelope(body: .generate(try .init(
+            model: pin,
+            prompt: "Generate",
+            maximumTokens: 8
+        )))
+        return try GemmaIPCCodec.decodeResponse(
+            await core.handle(
+                encodedRequest: GemmaIPCCodec.encode(request),
+                expectedRequestID: request.requestID
+            ),
+            expectedRequestID: request.requestID,
+            expectedOperation: .generate
+        )
+    }
+
     @Test("the core rejects malformed, oversized, and incompatible requests")
     func coreRejectsUnsafeRequests() async throws {
         let core = GemmaServiceCore(buildInfo: .current)
@@ -374,30 +777,42 @@ struct GemmaIPCTests {
         }
     }
 
-    @Test("protocol v3 control frames round-trip and require the exact response kind")
+    @Test("protocol v4 atomically binds a model session and requires an exact response mirror")
     func controlFramesRoundTrip() throws {
         let identity = GemmaIPCBoundHelperIdentity(
             helperInstanceID: UUID(),
             processIdentifier: 42
+        )
+        let binding = GemmaIPCBindSessionRequest(
+            model: pin,
+            expectedModelRootIdentity: try GemmaIPCModelRootIdentity(
+                deviceID: 17,
+                fileID: 23
+            )
         )
         let prepared = GemmaIPCPreparedHelperExit(
             helperInstanceID: identity.helperInstanceID,
             processIdentifier: identity.processIdentifier
         )
 
-        let bindRequest = GemmaXPCControlRequestEnvelope(body: .bindExecutionGate)
+        let bindRequest = GemmaXPCControlRequestEnvelope(body: .bindSession(binding))
         #expect(try GemmaXPCControlCodec.decodeRequest(
             GemmaXPCControlCodec.encode(bindRequest)
         ) == bindRequest)
         let bindResponse = GemmaXPCControlResponseEnvelope(
             requestID: bindRequest.requestID,
-            body: .executionGateBound(identity)
+            body: .sessionBound(.init(binding: binding, helperIdentity: identity))
         )
         #expect(try GemmaXPCControlCodec.decodeResponse(
             GemmaXPCControlCodec.encode(bindResponse),
             expectedRequestID: bindRequest.requestID,
-            expectedOperation: .bindExecutionGate
+            expectedOperation: .bindSession
         ) == bindResponse)
+        #expect(try GemmaXPCControlCodec.decodeBindSessionResponse(
+            GemmaXPCControlCodec.encode(bindResponse),
+            expectedRequestID: bindRequest.requestID,
+            expectedBinding: binding
+        ) == .init(binding: binding, helperIdentity: identity))
 
         let prepareRequest = GemmaXPCControlRequestEnvelope(body: .prepareForExit)
         #expect(try GemmaXPCControlCodec.decodeRequest(
@@ -438,8 +853,8 @@ struct GemmaIPCTests {
         }
 
         let mismatches: [(GemmaXPCControlOperation, GemmaXPCControlResponseBody)] = [
-            (.bindExecutionGate, .prepared(prepared)),
-            (.prepareForExit, .executionGateBound(identity)),
+            (.bindSession, .prepared(prepared)),
+            (.prepareForExit, .sessionBound(.init(binding: binding, helperIdentity: identity))),
             (.armAndExit, .prepared(prepared)),
         ]
         for (expectedOperation, wrongBody) in mismatches {
@@ -457,7 +872,7 @@ struct GemmaIPCTests {
         }
 
         for operation in [
-            GemmaXPCControlOperation.bindExecutionGate,
+            GemmaXPCControlOperation.bindSession,
             .prepareForExit,
             .armAndExit,
         ] {
@@ -476,12 +891,19 @@ struct GemmaIPCTests {
         #expect(GemmaXPCChannel.control.rawValue == "control")
     }
 
-    @Test("control JSON requires exact keys and rejects duplicates")
+    @Test("control bind JSON requires exact keys and rejects malformed fields")
     func controlFramesRequireExactJSONKeys() throws {
         let requestID = UUID()
+        let binding = GemmaIPCBindSessionRequest(
+            model: pin,
+            expectedModelRootIdentity: try GemmaIPCModelRootIdentity(
+                deviceID: 17,
+                fileID: 23
+            )
+        )
         let bindRequest = GemmaXPCControlRequestEnvelope(
             requestID: requestID,
-            body: .bindExecutionGate
+            body: .bindSession(binding)
         )
         let requestData = try GemmaXPCControlCodec.encode(bindRequest)
         let requestObject = try #require(
@@ -490,11 +912,20 @@ struct GemmaIPCTests {
         #expect(Set(requestObject.keys) == ["protocolVersion", "requestID", "body"])
         let requestBody = try #require(requestObject["body"] as? [String: Any])
         #expect(Set(requestBody.keys) == ["operation", "payload"])
-        #expect((requestBody["payload"] as? [String: Any])?.isEmpty == true)
+        let requestPayload = try #require(requestBody["payload"] as? [String: Any])
+        #expect(Set(requestPayload.keys) == ["model", "expectedModelRootIdentity"])
+        #expect(Set(try #require(requestPayload["model"] as? [String: Any]).keys) == [
+            "modelIdentifier", "checkpointRevision", "adapterRevision", "licenseIdentifier", "manifestSHA256",
+        ])
+        #expect(Set(try #require(requestPayload["expectedModelRootIdentity"] as? [String: Any]).keys) == [
+            "deviceID", "fileID",
+        ])
 
         var requestWithExtraPayloadKey = requestObject
         var extraRequestBody = requestBody
-        extraRequestBody["payload"] = ["gateFD": 7]
+        var extraRequestPayload = requestPayload
+        extraRequestPayload["executionGateFD"] = 7
+        extraRequestBody["payload"] = extraRequestPayload
         requestWithExtraPayloadKey["body"] = extraRequestBody
         #expect(throws: GemmaIPCCodecError.malformedMessage) {
             _ = try GemmaXPCControlCodec.decodeRequest(
@@ -502,8 +933,34 @@ struct GemmaIPCTests {
             )
         }
 
+        var requestMissingModel = requestObject
+        var missingModelBody = requestBody
+        var missingModelPayload = requestPayload
+        missingModelPayload.removeValue(forKey: "model")
+        missingModelBody["payload"] = missingModelPayload
+        requestMissingModel["body"] = missingModelBody
+        #expect(throws: GemmaIPCCodecError.malformedMessage) {
+            _ = try GemmaXPCControlCodec.decodeRequest(
+                JSONSerialization.data(withJSONObject: requestMissingModel)
+            )
+        }
+
+        var requestWithInvalidRoot = requestObject
+        var invalidRootBody = requestBody
+        var invalidRootPayload = requestPayload
+        var invalidRoot = try #require(invalidRootPayload["expectedModelRootIdentity"] as? [String: Any])
+        invalidRoot["fileID"] = 0
+        invalidRootPayload["expectedModelRootIdentity"] = invalidRoot
+        invalidRootBody["payload"] = invalidRootPayload
+        requestWithInvalidRoot["body"] = invalidRootBody
+        #expect(throws: GemmaIPCCodecError.malformedMessage) {
+            _ = try GemmaXPCControlCodec.decodeRequest(
+                JSONSerialization.data(withJSONObject: requestWithInvalidRoot)
+            )
+        }
+
         let duplicateOperation = Data("""
-        {"protocolVersion":\(GemmaIPCProtocol.currentVersion),"requestID":"\(requestID.uuidString)","body":{"operation":"bindExecutionGate","operation":"prepareForExit","payload":{}}}
+        {"protocolVersion":\(GemmaIPCProtocol.currentVersion),"requestID":"\(requestID.uuidString)","body":{"operation":"bindSession","operation":"prepareForExit","payload":{}}}
         """.utf8)
         #expect(throws: GemmaIPCCodecError.malformedMessage) {
             _ = try GemmaXPCControlCodec.decodeRequest(duplicateOperation)
@@ -515,7 +972,7 @@ struct GemmaIPCTests {
         )
         let response = GemmaXPCControlResponseEnvelope(
             requestID: requestID,
-            body: .executionGateBound(identity)
+            body: .sessionBound(.init(binding: binding, helperIdentity: identity))
         )
         let responseData = try GemmaXPCControlCodec.encode(response)
         var responseObject = try #require(
@@ -525,37 +982,64 @@ struct GemmaIPCTests {
         var responseBody = try #require(responseObject["body"] as? [String: Any])
         #expect(Set(responseBody.keys) == ["kind", "payload"])
         var responsePayload = try #require(responseBody["payload"] as? [String: Any])
-        #expect(Set(responsePayload.keys) == ["helperInstanceID", "processIdentifier"])
-        responsePayload["path"] = "/tmp/not-allowed"
+        #expect(Set(responsePayload.keys) == ["model", "expectedModelRootIdentity", "helperIdentity"])
+        var helperIdentity = try #require(responsePayload["helperIdentity"] as? [String: Any])
+        #expect(Set(helperIdentity.keys) == ["helperInstanceID", "processIdentifier"])
+        helperIdentity["path"] = "/tmp/not-allowed"
+        responsePayload["helperIdentity"] = helperIdentity
         responseBody["payload"] = responsePayload
         responseObject["body"] = responseBody
         #expect(throws: GemmaIPCCodecError.malformedMessage) {
             _ = try GemmaXPCControlCodec.decodeResponse(
                 JSONSerialization.data(withJSONObject: responseObject),
                 expectedRequestID: requestID,
-                expectedOperation: .bindExecutionGate
+                expectedOperation: .bindSession
+            )
+        }
+
+        let mismatchedBinding = GemmaIPCBindSessionRequest(
+            model: pin,
+            expectedModelRootIdentity: try GemmaIPCModelRootIdentity(deviceID: 17, fileID: 24)
+        )
+        let mismatchedResponse = GemmaXPCControlResponseEnvelope(
+            requestID: requestID,
+            body: .sessionBound(.init(binding: mismatchedBinding, helperIdentity: identity))
+        )
+        #expect(throws: GemmaIPCCodecError.malformedMessage) {
+            _ = try GemmaXPCControlCodec.decodeBindSessionResponse(
+                GemmaXPCControlCodec.encode(mismatchedResponse),
+                expectedRequestID: requestID,
+                expectedBinding: binding
             )
         }
 
         let duplicateKind = Data("""
-        {"protocolVersion":\(GemmaIPCProtocol.currentVersion),"requestID":"\(requestID.uuidString)","body":{"kind":"executionGateBound","kind":"failure","payload":{"helperInstanceID":"\(identity.helperInstanceID.uuidString)","processIdentifier":42}}}
+        {"protocolVersion":\(GemmaIPCProtocol.currentVersion),"requestID":"\(requestID.uuidString)","body":{"kind":"sessionBound","kind":"failure","payload":{}}}
         """.utf8)
         #expect(throws: GemmaIPCCodecError.malformedMessage) {
             _ = try GemmaXPCControlCodec.decodeResponse(
                 duplicateKind,
                 expectedRequestID: requestID,
-                expectedOperation: .bindExecutionGate
+                expectedOperation: .bindSession
             )
         }
     }
 
-    @Test("control protocol v3 rejects request and response version skew")
+    @Test("control protocol v4 rejects request and response version skew")
     func controlFramesRejectVersionSkew() throws {
-        #expect(GemmaIPCProtocol.currentVersion == 3)
+        #expect(GemmaIPCProtocol.currentVersion == 4)
+
+        let binding = GemmaIPCBindSessionRequest(
+            model: pin,
+            expectedModelRootIdentity: try GemmaIPCModelRootIdentity(
+                deviceID: 17,
+                fileID: 23
+            )
+        )
 
         let incompatible = GemmaXPCControlRequestEnvelope(
             protocolVersion: GemmaIPCProtocol.currentVersion - 1,
-            body: .bindExecutionGate
+            body: .bindSession(binding)
         )
         #expect(throws: GemmaIPCCodecError.protocolMismatch) {
             _ = try GemmaXPCControlCodec.decodeRequest(
@@ -567,17 +1051,156 @@ struct GemmaIPCTests {
         let incompatibleResponse = GemmaXPCControlResponseEnvelope(
             protocolVersion: GemmaIPCProtocol.currentVersion + 1,
             requestID: requestID,
-            body: .executionGateBound(.init(
-                helperInstanceID: UUID(),
-                processIdentifier: 42
+            body: .sessionBound(.init(
+                binding: binding,
+                helperIdentity: .init(helperInstanceID: UUID(), processIdentifier: 42)
             ))
         )
         #expect(throws: GemmaIPCCodecError.malformedMessage) {
             _ = try GemmaXPCControlCodec.decodeResponse(
                 GemmaXPCControlCodec.encode(incompatibleResponse),
                 expectedRequestID: requestID,
-                expectedOperation: .bindExecutionGate
+                expectedOperation: .bindSession
             )
+        }
+    }
+}
+
+private actor GemmaModelExecutorProbe: GemmaModelExecuting {
+    struct GenerationCall: Equatable, Sendable {
+        let prompt: String
+        let maximumTokens: Int
+    }
+
+    private var countTexts: [String] = []
+    private var generationCalls: [GenerationCall] = []
+
+    func countTokens(in text: String) -> Int {
+        countTexts.append(text)
+        return text.split(whereSeparator: { $0.isWhitespace }).count
+    }
+
+    func generate(prompt: String, maximumTokens: Int) -> String {
+        generationCalls.append(.init(prompt: prompt, maximumTokens: maximumTokens))
+        return "\(prompt):\(maximumTokens)"
+    }
+
+    func receivedCountTexts() -> [String] {
+        countTexts
+    }
+
+    func receivedGenerationCalls() -> [GenerationCall] {
+        generationCalls
+    }
+}
+
+private struct FailingGemmaModelExecutor: GemmaModelExecuting {
+    let error: any Error & Sendable
+
+    func countTokens(in text: String) async throws -> Int {
+        throw error
+    }
+
+    func generate(prompt: String, maximumTokens: Int) async throws -> String {
+        throw error
+    }
+}
+
+private struct FixedGemmaModelExecutor: GemmaModelExecuting {
+    let tokenCount: Int
+    let generatedText: String
+
+    func countTokens(in text: String) async throws -> Int {
+        tokenCount
+    }
+
+    func generate(prompt: String, maximumTokens: Int) async throws -> String {
+        generatedText
+    }
+}
+
+private struct UnknownGemmaModelExecutorError: Error, Sendable {}
+
+private actor BlockingGemmaModelExecutor: GemmaModelExecuting {
+    private var didBlockFirstInference = false
+    private var startWaiter: CheckedContinuation<Void, Never>?
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+    func countTokens(in text: String) async throws -> Int {
+        await waitForReleaseAfterRecordingStart()
+        return 1
+    }
+
+    func generate(prompt: String, maximumTokens: Int) async throws -> String {
+        await waitForReleaseAfterRecordingStart()
+        return "\(prompt):\(maximumTokens)"
+    }
+
+    func waitForInferenceStart() async {
+        guard !didBlockFirstInference else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            startWaiter = continuation
+        }
+    }
+
+    func releaseInference() {
+        releaseWaiter?.resume()
+        releaseWaiter = nil
+    }
+
+    private func waitForReleaseAfterRecordingStart() async {
+        guard !didBlockFirstInference else {
+            return
+        }
+        didBlockFirstInference = true
+        startWaiter?.resume()
+        startWaiter = nil
+        await withCheckedContinuation { continuation in
+            releaseWaiter = continuation
+        }
+    }
+}
+
+private actor ThrowOnceGemmaModelExecutor: GemmaModelExecuting {
+    private var shouldFail = true
+
+    func countTokens(in text: String) -> Int {
+        1
+    }
+
+    func generate(prompt: String, maximumTokens: Int) throws -> String {
+        if shouldFail {
+            shouldFail = false
+            throw GemmaModelExecutionError.generationFailed
+        }
+        return "recovered"
+    }
+}
+
+private actor CancellationAwareGemmaModelExecutor: GemmaModelExecuting {
+    private var didStart = false
+    private var startWaiter: CheckedContinuation<Void, Never>?
+
+    func countTokens(in text: String) -> Int {
+        1
+    }
+
+    func generate(prompt: String, maximumTokens: Int) async throws -> String {
+        didStart = true
+        startWaiter?.resume()
+        startWaiter = nil
+        try await Task.sleep(for: .seconds(60))
+        return "unreachable"
+    }
+
+    func waitForGenerationStart() async {
+        guard !didStart else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            startWaiter = continuation
         }
     }
 }

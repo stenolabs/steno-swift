@@ -27,7 +27,9 @@ enum StenoGemmaServiceCommand {
 
                 // Constructing the adapter proves the Foundation Models bridge and local-only
                 // source wiring without loading weights or running Metal inference.
-                _ = try GemmaLanguageModelFactory.makeLanguageModel(from: verified)
+                _ = try GemmaLanguageModelFactory.makePrototypePathBackedLanguageModel(
+                    from: verified
+                )
 
                 try writeResponse(.verified(verified))
             }

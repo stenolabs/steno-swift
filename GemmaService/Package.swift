@@ -16,8 +16,13 @@ let package = Package(
     dependencies: [
         .package(path: "IPC"),
         .package(
+            url: "https://github.com/ml-explore/mlx-swift.git",
+            revision: "0bb916c67f4b9e5c682cbe02a42c701c93ab5021"
+        ),
+        .package(
             url: "https://github.com/ml-explore/mlx-swift-lm.git",
-            revision: "37688d2cf7d3906e08c74479c9d9949ce6b81136"
+            revision: "37688d2cf7d3906e08c74479c9d9949ce6b81136",
+            traits: []
         ),
         .package(
             url: "https://github.com/huggingface/swift-transformers.git",
@@ -26,15 +31,31 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "StenoMLXFoundationModels",
+            dependencies: [
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+                .product(name: "MLXGuidedGeneration", package: "mlx-swift-lm"),
+            ],
+            path: "Vendor/StenoMLXFoundationModels",
+            exclude: ["README.md", "NOTICE.md", "LICENSE"],
+            swiftSettings: [
+                .define("FoundationModelsIntegration"),
+                .define("STENO_VENDORED_ADAPTER"),
+            ]
+        ),
+        .target(
             name: "StenoGemmaRuntime",
             dependencies: [
                 .product(name: "StenoGemmaIPC", package: "ipc"),
                 .product(name: "StenoGemmaModelStore", package: "ipc"),
-                .product(name: "MLXFoundationModels", package: "mlx-swift-lm"),
+                "StenoMLXFoundationModels",
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
                 .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
-                .product(name: "MLXVLM", package: "mlx-swift-lm"),
+                .product(name: "Hub", package: "swift-transformers"),
                 .product(name: "Tokenizers", package: "swift-transformers"),
             ],
             swiftSettings: [
@@ -56,6 +77,18 @@ let package = Package(
             dependencies: [
                 "StenoGemmaRuntime",
                 .product(name: "StenoGemmaModelStore", package: "ipc"),
+            ],
+            swiftSettings: [
+                .enableExperimentalFeature("StrictConcurrency"),
+            ]
+        ),
+        .testTarget(
+            name: "StenoMLXFoundationModelsTests",
+            dependencies: [
+                "StenoMLXFoundationModels",
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
             ],
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency"),
