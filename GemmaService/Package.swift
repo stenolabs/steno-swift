@@ -29,6 +29,7 @@ let package = Package(
             name: "StenoGemmaRuntime",
             dependencies: [
                 .product(name: "StenoGemmaIPC", package: "ipc"),
+                .product(name: "StenoGemmaModelStore", package: "ipc"),
                 .product(name: "MLXFoundationModels", package: "mlx-swift-lm"),
                 .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
@@ -42,14 +43,20 @@ let package = Package(
         ),
         .executableTarget(
             name: "steno-gemma-service",
-            dependencies: ["StenoGemmaRuntime"],
+            dependencies: [
+                "StenoGemmaRuntime",
+                .product(name: "StenoGemmaModelStore", package: "ipc"),
+            ],
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency"),
             ]
         ),
         .testTarget(
             name: "StenoGemmaRuntimeTests",
-            dependencies: ["StenoGemmaRuntime"],
+            dependencies: [
+                "StenoGemmaRuntime",
+                .product(name: "StenoGemmaModelStore", package: "ipc"),
+            ],
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency"),
             ]

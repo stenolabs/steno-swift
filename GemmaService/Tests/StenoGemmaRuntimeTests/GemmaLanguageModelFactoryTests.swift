@@ -1,5 +1,7 @@
 import CryptoKit
+import Darwin
 import Foundation
+import StenoGemmaModelStore
 import Testing
 @testable import StenoGemmaRuntime
 
@@ -68,6 +70,15 @@ private final class FactoryFixture {
     }
 
     deinit {
+        _ = Darwin.chmod(root.path, 0o700)
+        if let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) {
+            while let url = enumerator.nextObject() as? URL {
+                var isDirectory: ObjCBool = false
+                if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) {
+                    _ = Darwin.chmod(url.path, isDirectory.boolValue ? 0o700 : 0o600)
+                }
+            }
+        }
         try? FileManager.default.removeItem(at: root)
     }
 
@@ -102,6 +113,20 @@ private final class FactoryFixture {
         try manifestData.write(
             to: root.appendingPathComponent("gemma-model-manifest.json")
         )
+        guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else {
+            throw CocoaError(.fileReadUnknown)
+        }
+        while let url = enumerator.nextObject() as? URL {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+                  Darwin.chmod(url.path, isDirectory.boolValue ? 0o500 : 0o400) == 0
+            else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+        }
+        guard Darwin.chmod(root.path, 0o500) == 0 else {
+            throw CocoaError(.fileWriteUnknown)
+        }
 
         return FactoryFixture(
             root: root,

@@ -1,4 +1,7 @@
 import Foundation
+#if STENO_NATIVE_GEMMA_MODEL_STORE
+import StenoDomain
+#endif
 import StenoGemmaProcessGate
 
 #if canImport(StenoGemmaClient)
@@ -15,10 +18,150 @@ protocol NativeGemmaCoordinator: AnyObject, Sendable {
     func acquire() async throws
     func release() async throws
 
+    #if STENO_NATIVE_GEMMA_MODEL_STORE
+    func performModelImport(
+        _ operation: @escaping @Sendable () async throws -> NativeGemmaModelSnapshot
+    ) async throws -> NativeGemmaModelSnapshot
+    #endif
+
     #if canImport(StenoGemmaClient)
     func send(_ body: GemmaIPCRequestBody) async throws -> GemmaIPCResponseBody
     #endif
 }
+
+#if STENO_NATIVE_GEMMA_MODEL_STORE
+/// Serializes native Gemma imports with recording without coupling the model store to audio.
+///
+/// Recording intent is published before cancellation begins. A new import therefore cannot enter
+/// the gap between cancellation and the process-level recording lease. Import cancellation is only
+/// a request: recording admission waits for the exact task to finish, including any intentionally
+/// non-cancellable post-publication synchronization and verification.
+private actor NativeGemmaImportRecordingGate {
+    struct RecordingLease: Hashable, Sendable {
+        fileprivate let identifier: UUID
+    }
+
+    private enum State {
+        case idle
+        case importing(
+            id: UUID,
+            task: Task<NativeGemmaModelSnapshot, any Error>
+        )
+        case drainingForRecording(
+            recordingID: UUID,
+            importID: UUID,
+            task: Task<NativeGemmaModelSnapshot, any Error>
+        )
+        case recording(UUID)
+    }
+
+    private var state: State = .idle
+
+    func performImport(
+        _ operation: @escaping @Sendable () async throws -> NativeGemmaModelSnapshot
+    ) async throws -> NativeGemmaModelSnapshot {
+        guard case .idle = state else {
+            throw NativeGemmaCoordinatorError.unavailable
+        }
+
+        let importID = UUID()
+        let task = Task.detached {
+            try await operation()
+        }
+        state = .importing(id: importID, task: task)
+
+        return try await withTaskCancellationHandler {
+            let result = await task.result
+            clearImportIfCurrent(importID)
+            return try result.get()
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    func acquireRecordingLease() async throws -> RecordingLease {
+        let recordingID = UUID()
+        switch state {
+        case .idle:
+            state = .recording(recordingID)
+            return RecordingLease(identifier: recordingID)
+
+        case .importing(let importID, let task):
+            state = .drainingForRecording(
+                recordingID: recordingID,
+                importID: importID,
+                task: task
+            )
+            task.cancel()
+            _ = await task.result
+
+            guard case .drainingForRecording(
+                let currentRecordingID,
+                let currentImportID,
+                _
+            ) = state,
+                currentRecordingID == recordingID,
+                currentImportID == importID
+            else {
+                await recoverToIdle()
+                throw NativeGemmaCoordinatorError.invalidTransition
+            }
+            guard !Task.isCancelled else {
+                state = .idle
+                throw CancellationError()
+            }
+            state = .recording(recordingID)
+            return RecordingLease(identifier: recordingID)
+
+        case .drainingForRecording, .recording:
+            throw NativeGemmaCoordinatorError.invalidTransition
+        }
+    }
+
+    func releaseRecordingLease(_ lease: RecordingLease) async {
+        guard case .recording(let identifier) = state,
+              identifier == lease.identifier
+        else {
+            await recoverToIdle()
+            return
+        }
+        state = .idle
+    }
+
+    /// Recovers bookkeeping without ever abandoning a still-running import.
+    private func recoverToIdle() async {
+        switch state {
+        case .idle:
+            return
+
+        case .recording:
+            state = .idle
+
+        case .importing(let importID, let task):
+            state = .drainingForRecording(
+                recordingID: UUID(),
+                importID: importID,
+                task: task
+            )
+            task.cancel()
+            _ = await task.result
+            state = .idle
+
+        case .drainingForRecording(_, _, let task):
+            task.cancel()
+            _ = await task.result
+            state = .idle
+        }
+    }
+
+    private func clearImportIfCurrent(_ importID: UUID) {
+        guard case .importing(let currentID, _) = state,
+              currentID == importID
+        else { return }
+        state = .idle
+    }
+}
+#endif
 
 enum NativeGemmaRecordingBarrierFactory {
     private static let sharedLiveCoordinator: any NativeGemmaCoordinator = {
@@ -66,12 +209,23 @@ private actor NativeGemmaGateOnlyRecordingBarrier: NativeGemmaCoordinator {
     private enum State {
         case idle
         case acquiring(UUID)
+        #if STENO_NATIVE_GEMMA_MODEL_STORE
+        case held(
+            UUID,
+            GemmaRecordingGateLease,
+            NativeGemmaImportRecordingGate.RecordingLease
+        )
+        #else
         case held(UUID, GemmaRecordingGateLease)
+        #endif
         case releasing(UUID)
     }
 
     private let processGateResult: Result<GemmaProcessGate, NativeGemmaCoordinatorError>
     private let recordingGateTimeout: Duration
+    #if STENO_NATIVE_GEMMA_MODEL_STORE
+    private let importRecordingGate = NativeGemmaImportRecordingGate()
+    #endif
     private var state: State = .idle
 
     init(
@@ -96,12 +250,37 @@ private actor NativeGemmaGateOnlyRecordingBarrier: NativeGemmaCoordinator {
         guard case .idle = state else {
             throw NativeGemmaCoordinatorError.invalidTransition
         }
+        let id = UUID()
+        state = .acquiring(id)
+
+        #if STENO_NATIVE_GEMMA_MODEL_STORE
+        let importRecordingLease: NativeGemmaImportRecordingGate.RecordingLease
+        do {
+            importRecordingLease = try await importRecordingGate.acquireRecordingLease()
+        } catch {
+            if case .acquiring(let currentID) = state, currentID == id {
+                state = .idle
+            }
+            throw error
+        }
+        guard case .acquiring(let currentID) = state,
+              currentID == id,
+              !Task.isCancelled
+        else {
+            await importRecordingGate.releaseRecordingLease(importRecordingLease)
+            state = .idle
+            throw NativeGemmaCoordinatorError.invalidTransition
+        }
+        #endif
+
         guard case .success(let processGate) = processGateResult else {
+            #if STENO_NATIVE_GEMMA_MODEL_STORE
+            await importRecordingGate.releaseRecordingLease(importRecordingLease)
+            #endif
+            state = .idle
             throw NativeGemmaCoordinatorError.gateUnavailable
         }
 
-        let id = UUID()
-        state = .acquiring(id)
         let deadline = ContinuousClock().now.advanced(by: recordingGateTimeout)
         do {
             let lease = try await processGate.acquireRecordingLease(until: deadline)
@@ -113,8 +292,15 @@ private actor NativeGemmaGateOnlyRecordingBarrier: NativeGemmaCoordinator {
                 state = .idle
                 throw NativeGemmaCoordinatorError.invalidTransition
             }
+            #if STENO_NATIVE_GEMMA_MODEL_STORE
+            state = .held(id, lease, importRecordingLease)
+            #else
             state = .held(id, lease)
+            #endif
         } catch {
+            #if STENO_NATIVE_GEMMA_MODEL_STORE
+            await importRecordingGate.releaseRecordingLease(importRecordingLease)
+            #endif
             if case .acquiring(let currentID) = state, currentID == id {
                 state = .idle
             }
@@ -123,17 +309,37 @@ private actor NativeGemmaGateOnlyRecordingBarrier: NativeGemmaCoordinator {
     }
 
     func release() async throws {
+        #if STENO_NATIVE_GEMMA_MODEL_STORE
+        guard case .held(let id, let lease, let importRecordingLease) = state else {
+            throw NativeGemmaCoordinatorError.invalidTransition
+        }
+        #else
         guard case .held(let id, let lease) = state else {
             throw NativeGemmaCoordinatorError.invalidTransition
         }
+        #endif
         state = .releasing(id)
         lease.close()
+        #if STENO_NATIVE_GEMMA_MODEL_STORE
+        await importRecordingGate.releaseRecordingLease(importRecordingLease)
+        #endif
         guard case .releasing(let currentID) = state, currentID == id else {
             state = .idle
             throw NativeGemmaCoordinatorError.invalidTransition
         }
         state = .idle
     }
+
+    #if STENO_NATIVE_GEMMA_MODEL_STORE
+    func performModelImport(
+        _ operation: @escaping @Sendable () async throws -> NativeGemmaModelSnapshot
+    ) async throws -> NativeGemmaModelSnapshot {
+        guard case .idle = state else {
+            throw NativeGemmaCoordinatorError.unavailable
+        }
+        return try await importRecordingGate.performImport(operation)
+    }
+    #endif
 }
 
 #if canImport(StenoGemmaClient)
@@ -157,6 +363,9 @@ private actor NativeGemmaRecordingBarrierController: NativeGemmaCoordinator {
     private struct HeldRecording {
         let identifier: UUID
         let globalLease: GemmaRecordingGateLease
+        #if STENO_NATIVE_GEMMA_MODEL_STORE
+        let importRecordingLease: NativeGemmaImportRecordingGate.RecordingLease
+        #endif
         let localLease: GemmaRecordingLease?
         let localController: (any NativeGemmaClientControlling)?
     }
@@ -185,6 +394,9 @@ private actor NativeGemmaRecordingBarrierController: NativeGemmaCoordinator {
     private let processGateResult: Result<GemmaProcessGate, NativeGemmaCoordinatorError>
     private let controllerInitializer: NativeGemmaClientInitializer
     private let recordingGateTimeout: Duration
+    #if STENO_NATIVE_GEMMA_MODEL_STORE
+    private let importRecordingGate = NativeGemmaImportRecordingGate()
+    #endif
     private var modelState = ModelState.uninitialized
     private var recordingState = RecordingState.idle
 
@@ -234,18 +446,47 @@ private actor NativeGemmaRecordingBarrierController: NativeGemmaCoordinator {
         guard case .idle = recordingState else {
             throw NativeGemmaCoordinatorError.invalidTransition
         }
+        let acquisitionID = UUID()
+        recordingState = .acquiring(acquisitionID)
+
+        #if STENO_NATIVE_GEMMA_MODEL_STORE
+        let importRecordingLease: NativeGemmaImportRecordingGate.RecordingLease
+        do {
+            importRecordingLease = try await importRecordingGate.acquireRecordingLease()
+        } catch {
+            if case .acquiring(let currentID) = recordingState,
+               currentID == acquisitionID {
+                recordingState = .idle
+            }
+            throw error
+        }
+        guard case .acquiring(let currentID) = recordingState,
+              currentID == acquisitionID,
+              !Task.isCancelled
+        else {
+            await importRecordingGate.releaseRecordingLease(importRecordingLease)
+            recordingState = .idle
+            throw NativeGemmaCoordinatorError.invalidTransition
+        }
+        #endif
+
         guard case .success(let processGate) = processGateResult else {
+            #if STENO_NATIVE_GEMMA_MODEL_STORE
+            await importRecordingGate.releaseRecordingLease(importRecordingLease)
+            #endif
+            recordingState = .idle
             throw NativeGemmaCoordinatorError.gateUnavailable
         }
 
-        let acquisitionID = UUID()
-        recordingState = .acquiring(acquisitionID)
         let deadline = ContinuousClock().now.advanced(by: recordingGateTimeout)
         let transition: GemmaRecordingGateTransition
         do {
             // Holding byte 0 begins cross-process preemption before cooperative local retirement.
             transition = try await processGate.beginRecordingTransition(until: deadline)
         } catch {
+            #if STENO_NATIVE_GEMMA_MODEL_STORE
+            await importRecordingGate.releaseRecordingLease(importRecordingLease)
+            #endif
             if case .acquiring(let currentID) = recordingState,
                currentID == acquisitionID {
                 recordingState = .idle
@@ -285,6 +526,9 @@ private actor NativeGemmaRecordingBarrierController: NativeGemmaCoordinator {
                     modelState = .faulted
                 }
             }
+            #if STENO_NATIVE_GEMMA_MODEL_STORE
+            await importRecordingGate.releaseRecordingLease(importRecordingLease)
+            #endif
             if case .acquiring(let currentID) = recordingState,
                currentID == acquisitionID {
                 recordingState = .idle
@@ -305,16 +549,30 @@ private actor NativeGemmaRecordingBarrierController: NativeGemmaCoordinator {
                 }
             }
             globalLease.close()
-            recordingState = .idle
             discardFaultedModelController()
+            #if STENO_NATIVE_GEMMA_MODEL_STORE
+            await importRecordingGate.releaseRecordingLease(importRecordingLease)
+            #endif
+            recordingState = .idle
             throw NativeGemmaCoordinatorError.invalidTransition
         }
+
+        #if STENO_NATIVE_GEMMA_MODEL_STORE
+        recordingState = .held(HeldRecording(
+            identifier: acquisitionID,
+            globalLease: globalLease,
+            importRecordingLease: importRecordingLease,
+            localLease: localLease,
+            localController: localController
+        ))
+        #else
         recordingState = .held(HeldRecording(
             identifier: acquisitionID,
             globalLease: globalLease,
             localLease: localLease,
             localController: localController
         ))
+        #endif
     }
 
     func release() async throws {
@@ -332,6 +590,9 @@ private actor NativeGemmaRecordingBarrierController: NativeGemmaCoordinator {
             }
         }
         held.globalLease.close()
+        #if STENO_NATIVE_GEMMA_MODEL_STORE
+        await importRecordingGate.releaseRecordingLease(held.importRecordingLease)
+        #endif
 
         guard case .releasing(let currentID) = recordingState,
               currentID == held.identifier
@@ -344,6 +605,17 @@ private actor NativeGemmaRecordingBarrierController: NativeGemmaCoordinator {
         // Discard the old controller so a later explicit model session starts from a fresh gate.
         discardFaultedModelController()
     }
+
+    #if STENO_NATIVE_GEMMA_MODEL_STORE
+    func performModelImport(
+        _ operation: @escaping @Sendable () async throws -> NativeGemmaModelSnapshot
+    ) async throws -> NativeGemmaModelSnapshot {
+        guard case .idle = recordingState else {
+            throw NativeGemmaCoordinatorError.unavailable
+        }
+        return try await importRecordingGate.performImport(operation)
+    }
+    #endif
 
     func send(_ body: GemmaIPCRequestBody) async throws -> GemmaIPCResponseBody {
         guard case .idle = recordingState else {

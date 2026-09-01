@@ -6,6 +6,7 @@ import MLXLLM
 import MLXLMCommon
 import MLXVLM
 import StenoGemmaIPC
+import StenoGemmaModelStore
 import Tokenizers
 
 public enum GemmaServiceBuildInfo {

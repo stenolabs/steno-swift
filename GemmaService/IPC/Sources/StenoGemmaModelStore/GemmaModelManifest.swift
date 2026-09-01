@@ -1,10 +1,8 @@
-import CryptoKit
 import Foundation
 
 /// The pinned identity and exact contents expected for one locally imported Gemma snapshot.
 ///
-/// This value is configuration supplied by Steno, not metadata supplied by a model directory.
-/// A model directory is accepted only when its manifest bytes and decoded identity exactly match it.
+/// This value is Steno configuration, not metadata trusted from a model directory.
 public struct GemmaModelRequirements: Sendable, Equatable {
     public let modelIdentifier: String
     public let checkpointRevision: String
@@ -21,20 +19,26 @@ public struct GemmaModelRequirements: Sendable, Equatable {
         manifestFileName: String = "gemma-model-manifest.json",
         expectedManifestSHA256: String
     ) throws {
-        guard !modelIdentifier.isEmpty else {
-            throw GemmaModelVerificationError.invalidRequirement("modelIdentifier must not be empty")
+        guard Self.isSafeModelIdentifier(modelIdentifier) else {
+            throw GemmaModelVerificationError.invalidRequirement("modelIdentifier is unsafe")
         }
-        guard !checkpointRevision.isEmpty else {
-            throw GemmaModelVerificationError.invalidRequirement("checkpointRevision must not be empty")
+        guard Self.isGitRevision(checkpointRevision) else {
+            throw GemmaModelVerificationError.invalidRequirement(
+                "checkpointRevision must be exactly 40 lowercase hexadecimal characters"
+            )
         }
-        guard !adapterRevision.isEmpty else {
-            throw GemmaModelVerificationError.invalidRequirement("adapterRevision must not be empty")
+        guard Self.isGitRevision(adapterRevision) else {
+            throw GemmaModelVerificationError.invalidRequirement(
+                "adapterRevision must be exactly 40 lowercase hexadecimal characters"
+            )
         }
-        guard !licenseIdentifier.isEmpty else {
-            throw GemmaModelVerificationError.invalidRequirement("licenseIdentifier must not be empty")
+        guard Self.isSafeLicenseIdentifier(licenseIdentifier) else {
+            throw GemmaModelVerificationError.invalidRequirement("licenseIdentifier is unsafe")
         }
         guard Self.isSHA256(expectedManifestSHA256) else {
-            throw GemmaModelVerificationError.invalidRequirement("expectedManifestSHA256 must be a lowercase SHA-256 digest")
+            throw GemmaModelVerificationError.invalidRequirement(
+                "expectedManifestSHA256 must be a lowercase SHA-256 digest"
+            )
         }
 
         try GemmaModelManifest.validateRelativePath(manifestFileName)
@@ -47,10 +51,38 @@ public struct GemmaModelRequirements: Sendable, Equatable {
         self.expectedManifestSHA256 = expectedManifestSHA256
     }
 
+    static func isGitRevision(_ value: String) -> Bool {
+        value.utf8.count == 40 && value.utf8.allSatisfy(Self.isLowercaseHexDigit)
+    }
+
     static func isSHA256(_ value: String) -> Bool {
-        value.utf8.count == 64 && value.utf8.allSatisfy { byte in
-            (48 ... 57).contains(byte) || (97 ... 102).contains(byte)
+        value.utf8.count == 64 && value.utf8.allSatisfy(Self.isLowercaseHexDigit)
+    }
+
+    static func isSafeModelIdentifier(_ value: String) -> Bool {
+        let bytes = value.utf8
+        guard !bytes.isEmpty, bytes.count <= 256 else { return false }
+        guard bytes.allSatisfy({ byte in
+            Self.isASCIIAlphaNumeric(byte) || [45, 46, 47, 95].contains(byte)
+        }) else { return false }
+        let components = value.split(separator: "/", omittingEmptySubsequences: false)
+        return !components.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." })
+    }
+
+    static func isSafeLicenseIdentifier(_ value: String) -> Bool {
+        let bytes = value.utf8
+        guard !bytes.isEmpty, bytes.count <= 128 else { return false }
+        return bytes.allSatisfy { byte in
+            Self.isASCIIAlphaNumeric(byte) || [43, 45, 46, 58, 95].contains(byte)
         }
+    }
+
+    private static func isASCIIAlphaNumeric(_ byte: UInt8) -> Bool {
+        (48 ... 57).contains(byte) || (65 ... 90).contains(byte) || (97 ... 122).contains(byte)
+    }
+
+    private static func isLowercaseHexDigit(_ byte: UInt8) -> Bool {
+        (48 ... 57).contains(byte) || (97 ... 102).contains(byte)
     }
 }
 
@@ -58,6 +90,11 @@ public struct GemmaModelRequirements: Sendable, Equatable {
 public struct GemmaModelManifest: Sendable, Equatable, Codable {
     public static let currentFormatVersion = 1
     public static let maximumManifestByteCount = 4 * 1024 * 1024
+    public static let maximumFileCount = 4_096
+    public static let maximumDirectoryCount = 64
+    public static let maximumPathDepth = 8
+    public static let maximumPathByteCount = 1_024
+    public static let maximumPathComponentByteCount = 255
 
     public let formatVersion: Int
     public let modelIdentifier: String
@@ -82,7 +119,6 @@ public struct GemmaModelManifest: Sendable, Equatable, Codable {
         self.files = files
     }
 
-    /// A single regular file that must be present in a verified snapshot.
     public struct GemmaModelFile: Sendable, Equatable, Codable {
         public let relativePath: String
         public let size: Int64
@@ -96,12 +132,22 @@ public struct GemmaModelManifest: Sendable, Equatable, Codable {
     }
 
     static func validateRelativePath(_ value: String) throws {
-        guard !value.isEmpty, !value.hasPrefix("/"), !value.hasPrefix("~") else {
+        let bytes = value.utf8
+        guard !bytes.isEmpty,
+              bytes.count <= maximumPathByteCount,
+              !value.hasPrefix("/"),
+              !value.hasPrefix("~"),
+              bytes.allSatisfy({ (0x21 ... 0x7e).contains($0) && $0 != 0x5c && $0 != 0x3a })
+        else {
             throw GemmaModelVerificationError.invalidRelativePath(value)
         }
 
         let components = value.split(separator: "/", omittingEmptySubsequences: false)
-        guard !components.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) else {
+        guard components.count <= maximumPathDepth,
+              !components.contains(where: {
+                  $0.isEmpty || $0.hasPrefix(".") || $0.utf8.count > maximumPathComponentByteCount
+              })
+        else {
             throw GemmaModelVerificationError.invalidRelativePath(value)
         }
     }
@@ -112,6 +158,21 @@ public struct GemmaModelManifest: Sendable, Equatable, Codable {
                 expected: Self.currentFormatVersion,
                 actual: formatVersion
             )
+        }
+        guard GemmaModelRequirements.isSafeModelIdentifier(modelIdentifier) else {
+            throw GemmaModelVerificationError.unsafeModelIdentifier(modelIdentifier)
+        }
+        guard GemmaModelRequirements.isGitRevision(checkpointRevision) else {
+            throw GemmaModelVerificationError.invalidCheckpointRevision(checkpointRevision)
+        }
+        guard GemmaModelRequirements.isGitRevision(adapterRevision) else {
+            throw GemmaModelVerificationError.invalidAdapterRevision(adapterRevision)
+        }
+        guard !licenseIdentifier.isEmpty else {
+            throw GemmaModelVerificationError.emptyLicenseIdentifier
+        }
+        guard GemmaModelRequirements.isSafeLicenseIdentifier(licenseIdentifier) else {
+            throw GemmaModelVerificationError.unsafeLicenseIdentifier(licenseIdentifier)
         }
         guard modelIdentifier == requirements.modelIdentifier else {
             throw GemmaModelVerificationError.modelIdentifierMismatch(
@@ -131,9 +192,6 @@ public struct GemmaModelManifest: Sendable, Equatable, Codable {
                 actual: adapterRevision
             )
         }
-        guard !licenseIdentifier.isEmpty else {
-            throw GemmaModelVerificationError.emptyLicenseIdentifier
-        }
         guard licenseIdentifier == requirements.licenseIdentifier else {
             throw GemmaModelVerificationError.licenseIdentifierMismatch(
                 expected: requirements.licenseIdentifier,
@@ -143,32 +201,107 @@ public struct GemmaModelManifest: Sendable, Equatable, Codable {
         guard !files.isEmpty else {
             throw GemmaModelVerificationError.emptyFileManifest
         }
+        guard files.count <= Self.maximumFileCount else {
+            throw GemmaModelVerificationError.tooManyFiles(
+                limit: Self.maximumFileCount,
+                actual: files.count
+            )
+        }
 
-        var paths = Set<String>()
+        var exactFilePaths = Set<String>()
+        let reservedParents = Set(Self.parentDirectories(of: requirements.manifestFileName))
+        var canonicalEntries = Dictionary(
+            uniqueKeysWithValues: Self.pathAndParents(requirements.manifestFileName).map {
+                (Self.canonicalPathKey($0), $0)
+            }
+        )
         for file in files {
             try Self.validateRelativePath(file.relativePath)
             guard file.relativePath != requirements.manifestFileName else {
                 throw GemmaModelVerificationError.manifestPathReserved(file.relativePath)
             }
             guard file.size >= 0 else {
-                throw GemmaModelVerificationError.invalidFileSize(path: file.relativePath, size: file.size)
+                throw GemmaModelVerificationError.invalidFileSize(
+                    path: file.relativePath,
+                    size: file.size
+                )
             }
             guard GemmaModelRequirements.isSHA256(file.sha256) else {
-                throw GemmaModelVerificationError.invalidFileChecksum(path: file.relativePath, checksum: file.sha256)
+                throw GemmaModelVerificationError.invalidFileChecksum(
+                    path: file.relativePath,
+                    checksum: file.sha256
+                )
             }
-            guard paths.insert(file.relativePath).inserted else {
+            guard exactFilePaths.insert(file.relativePath).inserted else {
                 throw GemmaModelVerificationError.duplicateManifestPath(file.relativePath)
             }
+            if let reservedParent = reservedParents.first(where: { $0 == file.relativePath }) {
+                throw GemmaModelVerificationError.pathCollision(
+                    first: reservedParent,
+                    second: requirements.manifestFileName
+                )
+            }
+            if Self.parentDirectories(of: file.relativePath).contains(requirements.manifestFileName) {
+                throw GemmaModelVerificationError.pathCollision(
+                    first: requirements.manifestFileName,
+                    second: file.relativePath
+                )
+            }
+
+            for entry in Self.pathAndParents(file.relativePath) {
+                let canonical = Self.canonicalPathKey(entry)
+                if let first = canonicalEntries[canonical], first != entry {
+                    throw GemmaModelVerificationError.pathCollision(first: first, second: entry)
+                }
+                canonicalEntries[canonical] = entry
+            }
         }
+
+        for path in exactFilePaths {
+            for parent in Self.parentDirectories(of: path) where exactFilePaths.contains(parent) {
+                throw GemmaModelVerificationError.pathCollision(first: parent, second: path)
+            }
+        }
+
+        let directories = Set(
+            files.flatMap { Self.parentDirectories(of: $0.relativePath) }
+                + Self.parentDirectories(of: requirements.manifestFileName)
+        )
+        guard directories.count <= Self.maximumDirectoryCount else {
+            throw GemmaModelVerificationError.tooManyDirectories(
+                limit: Self.maximumDirectoryCount,
+                actual: directories.count
+            )
+        }
+    }
+
+    static func parentDirectories(of path: String) -> [String] {
+        let components = path.split(separator: "/")
+        guard components.count > 1 else { return [] }
+        return (1 ..< components.count).map { components.prefix($0).joined(separator: "/") }
+    }
+
+    private static func pathAndParents(_ path: String) -> [String] {
+        parentDirectories(of: path) + [path]
+    }
+
+    private static func canonicalPathKey(_ path: String) -> String {
+        path.decomposedStringWithCanonicalMapping.lowercased(
+            with: Locale(identifier: "en_US_POSIX")
+        )
     }
 }
 
-/// Errors produced while rejecting an incomplete, altered, or unsafe local model snapshot.
 public enum GemmaModelVerificationError: Error, Equatable, LocalizedError, Sendable {
     case invalidRequirement(String)
     case rootIsNotDirectory
+    case rootIdentityMismatch
     case symbolicLinkNotAllowed(String)
     case unsupportedDirectoryEntry(String)
+    case unsafeOwnership(String)
+    case unsafePermissions(path: String, expected: UInt16, actual: UInt16)
+    case hardLinkNotAllowed(String)
+    case entryChanged(String)
     case manifestFileMissing(String)
     case manifestTooLarge(limit: Int, actualAtLeast: Int)
     case manifestDigestMismatch(expected: String, actual: String)
@@ -177,14 +310,21 @@ public enum GemmaModelVerificationError: Error, Equatable, LocalizedError, Senda
     case unsafeSafetensorsIndexPath(String)
     case unmanifestedSafetensorsFile(String)
     case unsupportedFormatVersion(expected: Int, actual: Int)
+    case unsafeModelIdentifier(String)
+    case invalidCheckpointRevision(String)
+    case invalidAdapterRevision(String)
     case modelIdentifierMismatch(expected: String, actual: String)
     case checkpointRevisionMismatch(expected: String, actual: String)
     case adapterRevisionMismatch(expected: String, actual: String)
     case emptyLicenseIdentifier
+    case unsafeLicenseIdentifier(String)
     case licenseIdentifierMismatch(expected: String, actual: String)
     case emptyFileManifest
+    case tooManyFiles(limit: Int, actual: Int)
+    case tooManyDirectories(limit: Int, actual: Int)
     case invalidRelativePath(String)
     case duplicateManifestPath(String)
+    case pathCollision(first: String, second: String)
     case invalidFileSize(path: String, size: Int64)
     case invalidFileChecksum(path: String, checksum: String)
     case manifestPathReserved(String)
@@ -201,10 +341,20 @@ public enum GemmaModelVerificationError: Error, Equatable, LocalizedError, Senda
             "Invalid Gemma model requirements: \(detail)."
         case .rootIsNotDirectory:
             "The Gemma model root is not a directory."
+        case .rootIdentityMismatch:
+            "The Gemma model root is not the expected directory."
         case .symbolicLinkNotAllowed(let path):
             "Gemma model snapshots must not contain symbolic links: \(path)."
         case .unsupportedDirectoryEntry(let path):
             "Gemma model snapshots may contain only regular files and directories: \(path)."
+        case .unsafeOwnership(let path):
+            "A Gemma model snapshot entry is not owned by the current user: \(path)."
+        case .unsafePermissions(let path, let expected, let actual):
+            "A Gemma model snapshot entry has unsafe permissions at \(path): expected \(String(expected, radix: 8)), found \(String(actual, radix: 8))."
+        case .hardLinkNotAllowed(let path):
+            "Gemma model snapshot files must not be hard linked: \(path)."
+        case .entryChanged(let path):
+            "A Gemma model snapshot entry changed during verification: \(path)."
         case .manifestFileMissing(let path):
             "The Gemma model manifest is missing: \(path)."
         case .manifestTooLarge(let limit, _):
@@ -221,6 +371,12 @@ public enum GemmaModelVerificationError: Error, Equatable, LocalizedError, Senda
             "The Gemma safetensors index references an unmanifested file: \(path)."
         case .unsupportedFormatVersion:
             "The Gemma model manifest format is unsupported."
+        case .unsafeModelIdentifier:
+            "The Gemma model manifest contains an unsafe model identifier."
+        case .invalidCheckpointRevision:
+            "The Gemma model manifest checkpoint revision is not a pinned Git revision."
+        case .invalidAdapterRevision:
+            "The Gemma model manifest adapter revision is not a pinned Git revision."
         case .modelIdentifierMismatch:
             "The Gemma model identifier does not match the selected model."
         case .checkpointRevisionMismatch:
@@ -229,14 +385,22 @@ public enum GemmaModelVerificationError: Error, Equatable, LocalizedError, Senda
             "The Gemma adapter revision does not match the selected model."
         case .emptyLicenseIdentifier:
             "The Gemma model manifest does not declare a license identifier."
+        case .unsafeLicenseIdentifier:
+            "The Gemma model manifest contains an unsafe license identifier."
         case .licenseIdentifierMismatch:
             "The Gemma model license identifier does not match the selected model."
         case .emptyFileManifest:
             "The Gemma model manifest does not list any files."
+        case .tooManyFiles(let limit, _):
+            "The Gemma model manifest lists more than \(limit) files."
+        case .tooManyDirectories(let limit, _):
+            "The Gemma model manifest requires more than \(limit) directories."
         case .invalidRelativePath(let path):
             "The Gemma model manifest contains an unsafe relative path: \(path)."
         case .duplicateManifestPath(let path):
             "The Gemma model manifest lists a file more than once: \(path)."
+        case .pathCollision(let first, let second):
+            "The Gemma model manifest contains colliding paths: \(first) and \(second)."
         case .invalidFileSize(let path, _):
             "The Gemma model manifest contains an invalid size for \(path)."
         case .invalidFileChecksum(let path, _):
