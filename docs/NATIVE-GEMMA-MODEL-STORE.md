@@ -1,6 +1,6 @@
 # Native Gemma model store
 
-Status: the model store is implemented as an inactive MLX-free boundary, and its production-intended byte consumer is implemented but not provider-activated, as of 31 August 2026.
+Status: the model store is implemented as an inactive MLX-free app boundary, and its byte-backed runtime is connected only inside the helper behind an empty production activation catalog, as of 31 August 2026.
 
 The production checkpoint catalog is empty, no import UI is exposed, no model is downloaded, and no imported model is activated.
 This document defines the boundary that must remain intact when a reviewed checkpoint and UI are added later.
@@ -91,7 +91,8 @@ The capability exposes neither filesystem paths nor raw file-descriptor numbers,
 An explicit close during `consume` marks the capability closed immediately, makes the next close-aware copy or verification checkpoint fail, and defers descriptor closure until the synchronous consume callback has returned.
 The size limits bound the verified source bytes handed to the trusted consumer, not allocations that the consumer or MLX may derive from them, and their fit for a checkpoint remains unknown until an exact reviewed checkpoint is selected.
 The trusted runtime publishes only the value returned by a successful activation consume operation and does not publish callback side effects before final revalidation.
-MLX materialization is implemented only through this byte boundary but is not yet wired into the XPC provider.
+MLX materialization is implemented only through this byte boundary and is wired into the XPC helper behind an exact helper-controlled activation profile.
+Because the production activation catalog is empty, no installed pin can currently instantiate that runtime.
 The whole-shard `Data` bridge has caller-provided bounds and is consumed synchronously by the inactive loader.
 Whether those bounds fit a checkpoint remains unknown until an exact reviewed checkpoint is selected.
 Every complete verified shard is strictly parsed before the trusted callback receives it.
@@ -106,6 +107,8 @@ Within the synchronous activation callback, Steno compares MLX's loaded tensor n
 It rejects duplicate JSON keys and sanitizer-unsafe MoE tensor shapes, validates every quantization declaration before invoking MLX, checks applicable group sizes against the constructed layer dimensions, and requires compatible parameter dtypes and a sanitized weight set that exactly equals the model-generated parameter set before structural decoding or update.
 No model container is published until all shards, model updates, preparation, evaluation, cancellation checks, and the final descriptor-rooted activation revalidation succeed.
 Asynchronous MLX evaluation is not permitted across this trust boundary.
+The exact tokenizer and input processor returned by activation perform both prompt counting and generation preparation.
+Each generation request uses a fresh Foundation Models `LanguageModelSession`, and the helper rejects prompts above the fixed profile limit before generation.
 
 Small configuration and tokenizer inputs come from the already copied activation data.
 The loader must not enumerate or reopen weight paths, and availability must use the stored verified-container predicate instead of a fabricated filesystem URL.
@@ -115,7 +118,8 @@ The alternatives are a deterministic tensor-preserving re-shard during consented
 That choice remains open because no production checkpoint has been selected or measured.
 
 Steno must not redeclare or dynamically resolve private `Cmlx` symbols, depend on checkout-internal header paths, expose lazy custom-reader arrays, or use a temporary named clone as the integrity boundary.
-No dependency fork or upstream change has been published, and the production helper remains model-free until the byte-backed loader is activated through the authenticated helper after final review.
+No dependency fork or upstream change has been published.
+The production helper remains model-free in practice because its activation catalog contains no approved pin, even though the authenticated helper now contains the reviewed byte-backed activation path.
 
 ## Activation boundary
 
@@ -135,6 +139,9 @@ The sandboxed helper cannot reopen the user store by path.
 The authenticated XPC bind now transfers a verified model-directory descriptor together with the execution-gate descriptor.
 The helper revalidates the tree from that retained descriptor at bind time and preserves the pinned root identity and exact model pin for the session.
 The one-shot child-file activation boundary now retains exact shard descriptors and immutable non-shard bytes for a trusted consumer and strictly parses every verified shard before delivery.
-The inactive production-intended loader now performs complete byte-backed MLX materialization inside that one-shot callback and constructs a stored, path-free adapter only after the activation capability's final revalidation.
+For an exact helper-approved profile, the loader performs complete byte-backed MLX materialization inside that one-shot callback and constructs a stored, path-free adapter only after the activation capability's final revalidation.
+The helper binds that executor atomically before acknowledging the session, checks recording intent around activation, and closes an unapproved model capability without publishing an executor.
+The app completes the authenticated helper bind under a distinct 600-second activation deadline before it starts the first ordinary request deadline.
+An activation or pre-bind connection failure faults model use until a later recording cycle independently proves helper absence through the process gate, rather than immediately relaunching the helper.
 The exact MLX dependency snapshot builds with Xcode 27 Beta 6 and its matching Metal Toolchain component without loading a model.
-Provider activation remains unavailable until a reviewed production checkpoint, user-facing consent and import flow, explicit recovery for retained corrupt installs or crash-orphaned staging, production Hardened Runtime validation, authenticated XPC wiring of this resource-bounded loader, and a real offline model run are accepted.
+Provider activation remains unavailable until a reviewed production checkpoint and matching limits, user-facing consent and import flow, explicit recovery for retained corrupt installs or crash-orphaned staging, production Hardened Runtime validation, app-facing provider selection, and a real offline model run are accepted.

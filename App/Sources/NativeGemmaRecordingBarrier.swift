@@ -432,7 +432,8 @@ private actor NativeGemmaRecordingBarrierController: NativeGemmaCoordinator {
                 maximumInFlightRequests: 2,
                 transportFactory: transportFactory,
                 exitProver: GemmaDispatchSourceExitProver(),
-                deadline: GemmaContinuousClockDeadline(timeout: .seconds(30))
+                deadline: GemmaContinuousClockDeadline(timeout: .seconds(30)),
+                activationDeadline: GemmaContinuousClockDeadline(timeout: .seconds(600))
             )
         }
     }
@@ -634,7 +635,12 @@ private actor NativeGemmaRecordingBarrierController: NativeGemmaCoordinator {
         do {
             return try await controller.send(body)
         } catch {
-            if Self.requiresFreshController(after: error) {
+            if Self.isActivationFailure(error) {
+                // A broken or resource-incompatible approved pin must not relaunch the helper on
+                // every request. The existing recording lifecycle discards this breaker only
+                // after it has independently proven helper absence through the process gate.
+                modelState = .faulted
+            } else if Self.requiresFreshController(after: error) {
                 modelState = .uninitialized
             }
             throw error
@@ -712,6 +718,16 @@ private actor NativeGemmaRecordingBarrierController: NativeGemmaCoordinator {
              .modelSessionActive, .modelSessionRetiring, .modelSessionInactive,
              .modelPinMismatch, .modelAdmissionBusy:
             return false
+        }
+    }
+
+    private static func isActivationFailure(_ error: any Error) -> Bool {
+        guard let error = error as? GemmaClientControllerError else { return false }
+        return switch error {
+        case .timedOut(.sessionActivation), .operationFailed(.sessionActivation):
+            true
+        default:
+            false
         }
     }
 }

@@ -128,7 +128,10 @@ final class StenoGemmaXPCIntegrationTests: XCTestCase {
             _ = try await controller.send(.handshake(.init(model: fixture.pin)))
             XCTFail("a failed resolver must not create a model session")
         } catch {
-            XCTAssertEqual(error as? GemmaClientControllerError, .connectionFailed)
+        XCTAssertEqual(
+            error as? GemmaClientControllerError,
+            .operationFailed(.sessionActivation)
+        )
         }
 
         let recordingLease = try await processGate.acquireRecordingLease(

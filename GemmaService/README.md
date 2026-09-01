@@ -6,8 +6,8 @@ Apple's Foundation Models framework does not load external Gemma checkpoints.
 The `MLXFoundationModels` adapter provides API compatibility with `LanguageModelSession`; it does not turn Gemma into Apple's `SystemLanguageModel` or make Apple responsible for the model runtime.
 
 It is intentionally a separate Swift package.
-The MLX runtime package is not a dependency of `StenoKit`, either supported Xcode 26 application target, or the model-free Xcode 27 application target.
-The Xcode 27 application target links the MLX-free IPC client and model store and embeds the model-free helper.
+The MLX runtime package is not a dependency of `StenoKit`, either supported Xcode 26 application target, or the Xcode 27 application process.
+Only the embedded Xcode 27 XPC helper links the MLX runtime.
 This keeps MLX and Metal out of the process that owns an irreplaceable recording and leaves the supported Xcode 26 build unchanged.
 
 ## Current status
@@ -22,7 +22,7 @@ This first slice provides:
 - a one-shot byte-backed Gemma 4 loader that constructs that container only after strict configuration, tokenizer, Safetensors, quantization, parameter-set, preparation, and checked-evaluation validation; and
 - tests that do not download or execute model weights;
 - a dependency-free strict-concurrency IPC module with a closed, size-bounded request and response schema;
-- a model-free, fail-closed XPC service core that handles handshake while rejecting token counting and generation as unavailable, with lifecycle operations owned by the process-wide registry;
+- a fail-closed XPC service core whose process runtime atomically binds at most one exact model executor before handling requests, with lifecycle operations owned by the process-wide registry;
 - a separate Xcode 27 project variant that embeds and code-signs the XPC helper with App Sandbox enabled and incoming and outgoing network access disabled; and
 - mutual designated-requirement, dynamic-code, canonical-path, request-ID, and channel validation between the signed app and helper;
 - a bounded client request lifecycle with cancellable deadlines and no eager helper launch or reconnect;
@@ -35,6 +35,7 @@ This first slice provides:
 - a consent chokepoint with one-shot, pin-bound, source-inode-bound confirmations and an empty production checkpoint catalog;
 - an MLX-free importer that copies only a fully pinned local manifest into a content-addressed Steno-controlled store, publishes without replacement, and returns path-free provenance;
 - descriptor-bound source and installed-tree verification with exact ownership, mode, hard-link, entry, size, checksum, and root-inode checks; and
+- helper-side exact-profile activation with fixed memory and prompt limits, byte-backed MLX materialization, one shared tokenizer and input processor for counting and generation, and a fresh `LanguageModelSession` for every generation request; and
 - signed positive XPC integration and app tests that verify fail-closed inference, exact helper absence within the owning app process before a recording lease, failure before permission UI, permission-denial release, and concurrent first-use initialization.
 
 It does not yet provide:
@@ -44,18 +45,20 @@ It does not yet provide:
 - report generation from the Steno app;
 - Hardened Runtime validation for the production app and a Release-specific entitlement policy;
 - negative signed abuse and multiprocess XPC integration coverage;
-- activation of the MLX provider through the XPC helper;
+- an approved production activation profile and app-facing provider selection;
 - a real model run; or
 - a production support commitment for any specific converted checkpoint.
 
-The standalone SwiftPM package contains the verified local model-loading path, while the Xcode 27 variant currently exercises the model-free XPC, gate, consent, and store boundaries.
-The helper has no incoming or outgoing network entitlement in that project variant, and the app-facing provider remains deliberately unavailable.
-The verified model runtime is not yet activated through the helper, and the app does not expose this provider.
+The standalone SwiftPM package contains the verified local model-loading path, and the Xcode 27 variant links that runtime only into the XPC helper.
+The helper has no incoming or outgoing network entitlement in that project variant, while the application process remains MLX-free.
+The pinned tokenizer and MLX dependency graph still contributes dormant Hub and URL-session code to the helper binary, but Steno's activation path never calls it and App Sandbox denies network access because the helper has no network entitlement.
+The production helper activation catalog is deliberately empty, so no checkpoint can currently create an executor and the app-facing provider remains unavailable.
 A standalone SwiftPM executable has no operating-system network sandbox, so source-level absence of a download path must not be described as a hard network guarantee.
 
-The standalone command-line factory remains a package-only path-backed prototype.
+The standalone command-line factory is isolated in a package-only prototype target that is not linked into the XPC helper.
 The production-intended loader instead consumes one-shot activation bytes and constructs the path-free adapter around a prebuilt `ModelContainer` before final descriptor-rooted revalidation publishes it.
-Neither loader is wired into the XPC helper, and the app-facing provider remains unavailable.
+That loader is wired into the helper only behind an exact helper-controlled activation profile.
+An unapproved pin is verified, closed without retaining a filesystem capability, and kept model-free.
 
 ## Model boundary
 
@@ -70,6 +73,8 @@ The standalone command-line prototype repeats that complete path-backed check im
 The one-shot activation boundary now retains the exact manifest-listed child files, copies non-shard files into immutable `Data`, and exposes shard bytes only through a synchronous consume operation with full-hash revalidation.
 The strict Safetensors parser validates every complete verified shard before the trusted activation callback and exposes immutable metadata and tensor descriptors.
 The byte-backed loader rejects duplicate JSON keys, correlates MLX's decoded tensor names, metadata, dtypes, and shapes with that parser, evaluates every shard before its bytes expire, rejects raw and sanitized collisions and sanitizer-unsafe MoE shapes, validates quantization before MLX, requires compatible parameter dtypes and an exact sanitized model weight set, and publishes no adapter until preparation, checked evaluation, cancellation checks, and final activation revalidation succeed.
+The client completes the helper's authenticated bind under a distinct activation deadline before starting the first ordinary request deadline.
+An activation failure faults model use until a later recording cycle independently proves helper absence through the process gate, which prevents immediate helper relaunch loops.
 The importer writes through retained descriptors into a private sibling staging directory, synchronizes files and directories, sets files to `0400` and directories to `0500`, and publishes to `~/Library/Application Support/Steno/NativeGemma/Models/v1/<manifest-sha256>` with a no-replace rename.
 Those modes prevent accidental changes and expose tampering, but they are not a security boundary against another process running as the same macOS user.
 The complete import and recovery contract is documented in [Native Gemma model store](../docs/NATIVE-GEMMA-MODEL-STORE.md).
@@ -87,7 +92,7 @@ Do not add a checkpoint to a Steno installation catalog until its exact source, 
 Use Xcode 27 or later and install its Metal Toolchain component.
 
 The exact MLX dependency snapshot builds with Xcode 27 Beta 6 after its matching Metal Toolchain component is installed.
-The full package and its four model-free runtime tests pass without downloading or loading a checkpoint.
+The full package passes 37 tests with one intentional Metal opt-in sentinel skipped, without downloading or loading a checkpoint.
 Keep the dependency revisions exact and do not replace them with floating versions.
 
 ```bash
@@ -103,7 +108,7 @@ swift test --package-path GemmaService/Client
 
 If Xcode 27 is not the active developer directory, prefix the command with `DEVELOPER_DIR` pointing to that installation.
 
-Generate the separate Xcode 27 project variant and run the model-free XPC integration test with:
+Generate the separate Xcode 27 project variant and run the XPC integration test with:
 
 ```bash
 xcodegen generate --spec project-xcode27.yml
@@ -141,7 +146,7 @@ It must not be read from the same untrusted checkpoint directory it is meant to 
 
 ## Remaining production work
 
-The remaining production work is to review and add one exact checkpoint to the currently empty production catalog, expose the consented import flow, define explicit orphan and corrupt-install recovery, validate Hardened Runtime and the Release entitlement policy, activate the reviewed byte-backed MLX provider through the helper, and complete a resource-measured real model run.
+The remaining production work is to review and add one exact checkpoint and matching resource profile to the currently empty production catalogs, expose the consented import and provider-selection flows, define explicit orphan and corrupt-install recovery, validate Hardened Runtime and the Release entitlement policy, and complete a resource-measured real offline model run.
 Negative signed abuse and multiprocess XPC coverage must be complete before native Gemma is activated.
 The normative design for that boundary is [Native Gemma cross-process gate](../docs/NATIVE-GEMMA-GATE.md).
 Approved manifests and expected digests must live in Steno-controlled metadata, and installation must route through `ModelInstallationCoordinator` with explicit consent.

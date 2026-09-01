@@ -254,6 +254,10 @@ public final class GemmaRawXPCTransport: GemmaClientTransport, @unchecked Sendab
         invalidate()
     }
 
+    public func bindSession() async throws {
+        try await ensureSessionBound()
+    }
+
     public func send(_ encodedRequest: Data, requestID: UUID) async throws -> Data {
         guard encodedRequest.count <= GemmaIPCProtocol.maximumEncodedMessageBytes else {
             throw GemmaRawXPCTransportError.invalidOuterFrame

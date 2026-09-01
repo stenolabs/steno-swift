@@ -25,6 +25,18 @@ extension GemmaLanguageModelFactory {
             try Task.checkCancellation()
         }
     ) throws -> MLXLanguageModel {
+        try makeActivatedLanguageModel(
+            consuming: activationAssets,
+            cancellationCheck: cancellationCheck
+        ).languageModel
+    }
+
+    static func makeActivatedLanguageModel(
+        consuming activationAssets: VerifiedGemmaModelActivationAssets,
+        cancellationCheck: @escaping @Sendable () throws -> Void = {
+            try Task.checkCancellation()
+        }
+    ) throws -> ActivatedGemmaLanguageModel {
         guard activationAssets.adapterRevision == GemmaServiceBuildInfo.adapterRevision else {
             throw GemmaLanguageModelFactoryError.adapterRevisionMismatch(
                 expected: GemmaServiceBuildInfo.adapterRevision,
@@ -114,12 +126,17 @@ extension GemmaLanguageModelFactory {
                 )
                 try cancellationCheck()
 
-                return try MLXLanguageModel(
+                let languageModel = try MLXLanguageModel(
                     configuration: modelConfiguration,
                     capabilities: [.guidedGeneration, .toolCalling],
+                    configurationResolver: StenoGemmaConfigurationResolver(),
                     context: context,
                     descriptorModelType: validatedConfiguration.baseConfiguration.modelType,
                     descriptorConfigData: configurationData
+                )
+                return ActivatedGemmaLanguageModel(
+                    languageModel: languageModel,
+                    processor: processor
                 )
             }
         }
@@ -207,6 +224,22 @@ extension GemmaLanguageModelFactory {
             jsonTemplateData: jsonTemplateData
         )
         return object["chat_template"] as? String
+    }
+}
+
+struct ActivatedGemmaLanguageModel: Sendable {
+    let languageModel: MLXLanguageModel
+    let processor: any UserInputProcessor
+}
+
+private struct StenoGemmaConfigurationResolver: ModelConfigurationResolver {
+    func resolve(
+        _ configuration: ModelConfiguration,
+        for descriptor: ModelDescriptor
+    ) -> ModelConfiguration {
+        var resolved = configuration
+        resolved.reasoningConfig = nil
+        return resolved
     }
 }
 
