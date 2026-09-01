@@ -27,12 +27,14 @@ extension GemmaLanguageModelFactory {
     ) throws -> MLXLanguageModel {
         try makeActivatedLanguageModel(
             consuming: activationAssets,
+            modelLayout: .strictTextOnly,
             cancellationCheck: cancellationCheck
         ).languageModel
     }
 
     static func makeActivatedLanguageModel(
         consuming activationAssets: VerifiedGemmaModelActivationAssets,
+        modelLayout: NativeGemmaActivationModelLayout,
         cancellationCheck: @escaping @Sendable () throws -> Void = {
             try Task.checkCancellation()
         }
@@ -47,7 +49,10 @@ extension GemmaLanguageModelFactory {
         return try activationAssets.consume(cancellationCheck: cancellationCheck) { assets in
             try cancellationCheck()
             let configurationData = try requiredData("config.json", in: assets)
-            let validatedConfiguration = try validateConfiguration(configurationData)
+            let validatedConfiguration = try validateConfiguration(
+                configurationData,
+                modelLayout: modelLayout
+            )
             let tokenizer = try makeTokenizer(from: assets)
             try cancellationCheck()
 
@@ -57,6 +62,7 @@ extension GemmaLanguageModelFactory {
                 }
                 var (weights, metadata) = try loadVerifiedWeights(
                     from: assets,
+                    modelLayout: modelLayout,
                     cancellationCheck: cancellationCheck
                 )
                 try cancellationCheck()
@@ -142,8 +148,11 @@ extension GemmaLanguageModelFactory {
         }
     }
 
-    static func validateVerifiedConfigurationForTesting(_ data: Data) throws {
-        _ = try validateConfiguration(data)
+    static func validateVerifiedConfigurationForTesting(
+        _ data: Data,
+        modelLayout: NativeGemmaActivationModelLayout = .strictTextOnly
+    ) throws {
+        _ = try validateConfiguration(data, modelLayout: modelLayout)
     }
 
     static func validateSafetensorsIndexForTesting(
@@ -168,16 +177,36 @@ extension GemmaLanguageModelFactory {
         }
     }
 
-    static func validateWeightNamesForTesting(_ names: [String]) throws {
+    static func validateWeightNamesForTesting(
+        _ names: [String],
+        modelLayout: NativeGemmaActivationModelLayout = .strictTextOnly
+    ) throws {
         var sanitizedNames = Set<String>()
         for name in names {
-            try validateTextWeightName(name)
+            let disposition = try weightDisposition(
+                for: name,
+                modelLayout: modelLayout
+            )
+            guard disposition == .text else { continue }
             for target in sanitizedTargets(for: name) {
                 guard sanitizedNames.insert(target).inserted else {
                     throw GemmaLanguageModelFactoryError.sanitizedWeightNameCollision(target)
                 }
             }
         }
+    }
+
+    static func weightNamesSelectedForEvaluationForTesting(
+        _ names: [String],
+        modelLayout: NativeGemmaActivationModelLayout
+    ) throws -> Set<String> {
+        var selected = Set<String>()
+        for name in names {
+            if try weightDisposition(for: name, modelLayout: modelLayout) == .text {
+                selected.insert(name)
+            }
+        }
+        return selected
     }
 
     static func validateModelWeightSetForTesting(
@@ -325,7 +354,10 @@ private extension GemmaLanguageModelFactory {
         }
     }
 
-    static func validateConfiguration(_ data: Data) throws -> ValidatedConfiguration {
+    static func validateConfiguration(
+        _ data: Data,
+        modelLayout: NativeGemmaActivationModelLayout
+    ) throws -> ValidatedConfiguration {
         do {
             try GemmaStrictJSONValidation.validateNoDuplicateObjectKeys(data)
         } catch {
@@ -340,15 +372,28 @@ private extension GemmaLanguageModelFactory {
         guard let rootObject = object as? [String: Any] else {
             throw GemmaLanguageModelFactoryError.configurationMalformed
         }
-        if let mediaKey = firstMediaConfigurationKey(in: rootObject) {
-            throw GemmaLanguageModelFactoryError.unsupportedMediaConfiguration(mediaKey)
-        }
-        if let architectures = rootObject["architectures"] as? [String],
-           architectures.contains(where: {
-               $0.localizedCaseInsensitiveContains("ConditionalGeneration")
-           })
-        {
-            throw GemmaLanguageModelFactoryError.unsupportedMediaConfiguration("architectures")
+        switch modelLayout {
+        case .strictTextOnly:
+            if let mediaKey = firstMediaConfigurationKey(in: rootObject) {
+                throw GemmaLanguageModelFactoryError.unsupportedMediaConfiguration(mediaKey)
+            }
+            if let architectures = rootObject["architectures"] as? [String],
+               architectures.contains(where: {
+                   $0.localizedCaseInsensitiveContains("ConditionalGeneration")
+               })
+            {
+                throw GemmaLanguageModelFactoryError.unsupportedMediaConfiguration(
+                    "architectures"
+                )
+            }
+        case .gemma4E2BConditionalTextProjection:
+            guard let architectures = rootObject["architectures"] as? [String],
+                  architectures == ["Gemma4ForConditionalGeneration"]
+            else {
+                throw GemmaLanguageModelFactoryError.unsupportedMediaConfiguration(
+                    "architectures"
+                )
+            }
         }
 
         let decoder = JSONDecoder.json5()
@@ -360,6 +405,11 @@ private extension GemmaLanguageModelFactory {
         }
         guard root.modelType == "gemma4" else {
             throw GemmaLanguageModelFactoryError.unsupportedModelType(root.modelType)
+        }
+        if modelLayout == .gemma4E2BConditionalTextProjection,
+           root.textConfiguration == nil
+        {
+            throw unsafe("the Gemma 4 E2B text projection requires text_config")
         }
         if let nestedType = root.textConfiguration?.modelType,
            nestedType != "gemma4_text"
@@ -815,6 +865,7 @@ private extension GemmaLanguageModelFactory {
 
     static func loadVerifiedWeights(
         from assets: BorrowedGemmaModelActivationAssets,
+        modelLayout: NativeGemmaActivationModelLayout,
         cancellationCheck: @escaping @Sendable () throws -> Void
     ) throws -> ([String: MLXArray], [String: String]) {
         let shardPaths = assets.safetensorsRelativePaths.sorted()
@@ -833,19 +884,17 @@ private extension GemmaLanguageModelFactory {
         try assets.consumeSafetensorsFiles(cancellationCheck: cancellationCheck) { shard in
             try cancellationCheck()
             let expectedNames = Set(shard.tensors.map(\.name))
-            for tensor in shard.tensors {
+            var dispositions: [String: WeightDisposition] = [:]
+            dispositions.reserveCapacity(shard.tensors.count)
+            for (descriptorIndex, tensor) in shard.tensors.enumerated() {
+                if descriptorIndex.isMultiple(of: 64) {
+                    try cancellationCheck()
+                }
                 guard seenTensorNames.insert(tensor.name).inserted else {
                     throw GemmaLanguageModelFactoryError.safetensorsIndexMismatch
                 }
                 if let index, index.weightMap[tensor.name] != shard.relativePath {
                     throw GemmaLanguageModelFactoryError.safetensorsIndexMismatch
-                }
-                try validateTextWeightName(tensor.name)
-                try validateSanitizerTensor(name: tensor.name, shape: tensor.shape)
-                for name in sanitizedTargets(for: tensor.name) {
-                    guard sanitizedNames.insert(name).inserted else {
-                        throw GemmaLanguageModelFactoryError.sanitizedWeightNameCollision(name)
-                    }
                 }
                 guard tensor.dtype.mlxDType != nil else {
                     throw GemmaLanguageModelFactoryError.unsupportedSafetensorsDType(
@@ -854,9 +903,24 @@ private extension GemmaLanguageModelFactory {
                         dtype: tensor.dtype.rawValue
                     )
                 }
+                let disposition = try weightDisposition(
+                    for: tensor.name,
+                    modelLayout: modelLayout
+                )
+                dispositions[tensor.name] = disposition
+                if disposition == .text {
+                    try validateSanitizerTensor(name: tensor.name, shape: tensor.shape)
+                    for name in sanitizedTargets(for: tensor.name) {
+                        guard sanitizedNames.insert(name).inserted else {
+                            throw GemmaLanguageModelFactoryError
+                                .sanitizedWeightNameCollision(name)
+                        }
+                    }
+                }
             }
+            try cancellationCheck()
 
-            let loaded: [String: MLXArray]
+            var loaded: [String: MLXArray]
             let loadedMetadata: [String: String]
             do {
                 (loaded, loadedMetadata) = try MLX.loadArraysAndMetadata(data: shard.data)
@@ -873,7 +937,10 @@ private extension GemmaLanguageModelFactory {
                     tensor: "<metadata-or-name-set>"
                 )
             }
-            for descriptor in shard.tensors {
+            for (descriptorIndex, descriptor) in shard.tensors.enumerated() {
+                if descriptorIndex.isMultiple(of: 64) {
+                    try cancellationCheck()
+                }
                 guard let array = loaded[descriptor.name],
                       array.dtype == descriptor.dtype.mlxDType,
                       descriptor.shape.compactMap(Int.init(exactly:)).count
@@ -886,7 +953,30 @@ private extension GemmaLanguageModelFactory {
                     )
                 }
             }
-            try MLX.checkedEval(Array(loaded.values))
+            try cancellationCheck()
+
+            var textWeights: [String: MLXArray] = [:]
+            textWeights.reserveCapacity(loaded.count)
+            for descriptor in shard.tensors {
+                guard let disposition = dispositions[descriptor.name] else {
+                    throw GemmaLanguageModelFactoryError.safetensorsTensorMismatch(
+                        path: shard.relativePath,
+                        tensor: descriptor.name
+                    )
+                }
+                if disposition == .text {
+                    guard let array = loaded.removeValue(forKey: descriptor.name) else {
+                        throw GemmaLanguageModelFactoryError.safetensorsTensorMismatch(
+                            path: shard.relativePath,
+                            tensor: descriptor.name
+                        )
+                    }
+                    textWeights[descriptor.name] = array
+                }
+            }
+            loaded.removeAll(keepingCapacity: false)
+            try cancellationCheck()
+            try MLX.checkedEval(Array(textWeights.values))
             try cancellationCheck()
 
             if !loadedMetadata.isEmpty {
@@ -899,7 +989,7 @@ private extension GemmaLanguageModelFactory {
                     canonicalMetadata = loadedMetadata
                 }
             }
-            for (name, array) in loaded {
+            for (name, array) in textWeights {
                 weights[name] = array
             }
         }
@@ -934,6 +1024,36 @@ private extension GemmaLanguageModelFactory {
             throw GemmaLanguageModelFactoryError.safetensorsIndexMismatch
         }
         return index
+    }
+
+    enum WeightDisposition: Equatable {
+        case text
+        case discardedE2BMedia
+    }
+
+    static func weightDisposition(
+        for rawName: String,
+        modelLayout: NativeGemmaActivationModelLayout
+    ) throws -> WeightDisposition {
+        switch modelLayout {
+        case .strictTextOnly:
+            try validateTextWeightName(rawName)
+            return .text
+        case .gemma4E2BConditionalTextProjection:
+            if rawName.hasPrefix("language_model.") {
+                return .text
+            }
+            let discardedPrefixes = [
+                "audio_tower.",
+                "vision_tower.",
+                "embed_audio.",
+                "embed_vision.",
+            ]
+            if discardedPrefixes.contains(where: rawName.hasPrefix) {
+                return .discardedE2BMedia
+            }
+            throw GemmaLanguageModelFactoryError.mediaWeightRejected(rawName)
+        }
     }
 
     static func validateTextWeightName(_ rawName: String) throws {

@@ -141,6 +141,9 @@ struct TextModelSettingsView: View {
                 }
                 .disabled(settings.recoveryErrorMessage != nil)
             }
+            #if STENO_NATIVE_GEMMA_MODEL_STORE && canImport(StenoGemmaClient)
+            NativeGemmaModelSettingsView()
+            #endif
         }
         .formStyle(.grouped)
         .frame(minWidth: 520, minHeight: 320)

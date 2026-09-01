@@ -603,6 +603,7 @@ extension AppModel {
         templateID: String? = nil,
         textModelEndpointID: String? = nil,
         textModelEndpointSnapshot: TextModelEndpointSnapshot? = nil,
+        nativeGemmaModelSnapshot: NativeGemmaModelSnapshot? = nil,
         preflight: TemplateRenderPreflight
     ) async throws -> Job {
         guard let runtime else {
@@ -625,6 +626,7 @@ extension AppModel {
             templateID: resolvedTemplateID,
             textModelEndpointID: textModelEndpointID,
             textModelEndpointSnapshot: textModelEndpointSnapshot,
+            nativeGemmaModelSnapshot: nativeGemmaModelSnapshot,
             preflight: preflight
         )
         return job

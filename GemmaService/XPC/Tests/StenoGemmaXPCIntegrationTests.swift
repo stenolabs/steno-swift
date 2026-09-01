@@ -8,7 +8,7 @@ import StenoGemmaProcessGate
 import XCTest
 
 final class StenoGemmaXPCIntegrationTests: XCTestCase {
-    func testSignedHelperBindsVerifiedSnapshotRefusesInferenceAndExitsBeforeRecordingLease() async throws {
+    func testSignedHelperRejectsVerifiedButUnapprovedSnapshotBeforeRecordingLease() async throws {
         let fixture = try SyntheticModelFixture.make()
         let resolver = FreshModelDirectoryResolver(fixture: fixture)
         let helperBundleURL = Bundle.main.bundleURL
@@ -23,36 +23,32 @@ final class StenoGemmaXPCIntegrationTests: XCTestCase {
             configuration: try GemmaProcessGateConfiguration(directoryURL: gateDirectory)
         )
 
-        let results = try await Task.detached {
-            try await Self.exerciseProtocol(
+        let controller = try GemmaClientController(
+            maximumInFlightRequests: 1,
+            transportFactory: try GemmaRawXPCTransportFactory(
                 helperBundleURL: helperBundleURL,
                 processGate: processGate,
-                pin: fixture.pin,
-                resolver: resolver
-            )
-        }.value
+                resolveModelDirectory: resolver.resolve
+            ),
+            exitProver: GemmaDispatchSourceExitProver(),
+            deadline: GemmaContinuousClockDeadline(timeout: .seconds(20))
+        )
 
-        XCTAssertEqual(
-            results.handshake,
-            .handshake(.init(
-                serviceIdentifier: GemmaIPCBuildInfo.serviceIdentifier,
-                adapterRevision: GemmaIPCBuildInfo.adapterRevision,
-                supportedOperations: [.handshake, .cancel, .shutdown]
-            ))
+        do {
+            _ = try await controller.send(.handshake(.init(model: fixture.pin)))
+            XCTFail("a verified snapshot outside the reviewed production catalog must not bind")
+        } catch {
+            XCTAssertEqual(
+                error as? GemmaClientControllerError,
+                .operationFailed(.sessionActivation)
+            )
+        }
+
+        let recordingLease = try await processGate.acquireRecordingLease(
+            until: ContinuousClock().now.advanced(by: .seconds(2))
         )
-        XCTAssertEqual(results.countTokens, .failure(.init(code: .modelUnavailable)))
-        XCTAssertEqual(results.generate, .failure(.init(code: .modelUnavailable)))
-        XCTAssertEqual(results.stateDuringLease, .recording)
-        XCTAssertEqual(results.stateAfterRelease, .idle)
-        XCTAssertEqual(
-            results.handshakeAfterRelease,
-            .handshake(.init(
-                serviceIdentifier: GemmaIPCBuildInfo.serviceIdentifier,
-                adapterRevision: GemmaIPCBuildInfo.adapterRevision,
-                supportedOperations: [.handshake, .cancel, .shutdown]
-            ))
-        )
-        XCTAssertEqual(resolver.callCount, 2, "each helper must receive a fresh verified capability")
+        recordingLease.close()
+        XCTAssertEqual(resolver.callCount, 1)
     }
 
     func testSyntheticResolverRejectsWrongPinAndRootOrFileDescriptorVerificationFailsClosed() throws {

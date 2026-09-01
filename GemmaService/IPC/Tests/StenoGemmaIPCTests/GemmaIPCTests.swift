@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import StenoGemmaIPC
+@_spi(StenoGemmaRuntime) @testable import StenoGemmaIPC
 @testable import StenoGemmaServiceCore
 
 @Suite("Gemma IPC")
@@ -12,6 +12,18 @@ struct GemmaIPCTests {
         licenseIdentifier: "Apache-2.0",
         manifestSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     )
+    private let modelFiles = try! [
+        GemmaIPCModelFileMetadata(
+            relativePath: "gemma-model-manifest.json",
+            size: 1,
+            sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ),
+        GemmaIPCModelFileMetadata(
+            relativePath: "model.safetensors",
+            size: 2,
+            sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ),
+    ]
 
     @Test("a path-free generation request round-trips with its UUID")
     func generationRequestRoundTrip() throws {
@@ -107,6 +119,17 @@ struct GemmaIPCTests {
             actual: oversized.count
         )) {
             _ = try GemmaIPCCodec.decodeRequest(oversized)
+        }
+    }
+
+    @Test("strict JSON keeps binary-distinct canonical-equivalent keys")
+    func strictJSONUsesDecodedScalarSequencesForObjectKeys() throws {
+        let binaryDistinct = Data(#"{"য়":1,"য়":2}"#.utf8)
+        try GemmaStrictJSONValidation.validateNoDuplicateObjectKeys(binaryDistinct)
+
+        let escapeEquivalent = Data(#"{"a":1,"\u0061":2}"#.utf8)
+        #expect(throws: GemmaIPCCodecError.malformedMessage) {
+            try GemmaStrictJSONValidation.validateNoDuplicateObjectKeys(escapeEquivalent)
         }
     }
 
@@ -777,18 +800,19 @@ struct GemmaIPCTests {
         }
     }
 
-    @Test("protocol v4 atomically binds a model session and requires an exact response mirror")
+    @Test("protocol v5 atomically binds a model session and requires an exact response mirror")
     func controlFramesRoundTrip() throws {
         let identity = GemmaIPCBoundHelperIdentity(
             helperInstanceID: UUID(),
             processIdentifier: 42
         )
-        let binding = GemmaIPCBindSessionRequest(
+        let binding = try GemmaIPCBindSessionRequest(
             model: pin,
             expectedModelRootIdentity: try GemmaIPCModelRootIdentity(
                 deviceID: 17,
                 fileID: 23
-            )
+            ),
+            expectedModelFiles: modelFiles
         )
         let prepared = GemmaIPCPreparedHelperExit(
             helperInstanceID: identity.helperInstanceID,
@@ -894,12 +918,13 @@ struct GemmaIPCTests {
     @Test("control bind JSON requires exact keys and rejects malformed fields")
     func controlFramesRequireExactJSONKeys() throws {
         let requestID = UUID()
-        let binding = GemmaIPCBindSessionRequest(
+        let binding = try GemmaIPCBindSessionRequest(
             model: pin,
             expectedModelRootIdentity: try GemmaIPCModelRootIdentity(
                 deviceID: 17,
                 fileID: 23
-            )
+            ),
+            expectedModelFiles: modelFiles
         )
         let bindRequest = GemmaXPCControlRequestEnvelope(
             requestID: requestID,
@@ -913,7 +938,7 @@ struct GemmaIPCTests {
         let requestBody = try #require(requestObject["body"] as? [String: Any])
         #expect(Set(requestBody.keys) == ["operation", "payload"])
         let requestPayload = try #require(requestBody["payload"] as? [String: Any])
-        #expect(Set(requestPayload.keys) == ["model", "expectedModelRootIdentity"])
+        #expect(Set(requestPayload.keys) == ["model", "expectedModelRootIdentity", "expectedModelFiles"])
         #expect(Set(try #require(requestPayload["model"] as? [String: Any]).keys) == [
             "modelIdentifier", "checkpointRevision", "adapterRevision", "licenseIdentifier", "manifestSHA256",
         ])
@@ -997,9 +1022,10 @@ struct GemmaIPCTests {
             )
         }
 
-        let mismatchedBinding = GemmaIPCBindSessionRequest(
+        let mismatchedBinding = try GemmaIPCBindSessionRequest(
             model: pin,
-            expectedModelRootIdentity: try GemmaIPCModelRootIdentity(deviceID: 17, fileID: 24)
+            expectedModelRootIdentity: try GemmaIPCModelRootIdentity(deviceID: 17, fileID: 24),
+            expectedModelFiles: modelFiles
         )
         let mismatchedResponse = GemmaXPCControlResponseEnvelope(
             requestID: requestID,
@@ -1025,16 +1051,17 @@ struct GemmaIPCTests {
         }
     }
 
-    @Test("control protocol v4 rejects request and response version skew")
+    @Test("control protocol v5 rejects request and response version skew")
     func controlFramesRejectVersionSkew() throws {
-        #expect(GemmaIPCProtocol.currentVersion == 4)
+        #expect(GemmaIPCProtocol.currentVersion == 5)
 
-        let binding = GemmaIPCBindSessionRequest(
+        let binding = try GemmaIPCBindSessionRequest(
             model: pin,
             expectedModelRootIdentity: try GemmaIPCModelRootIdentity(
                 deviceID: 17,
                 fileID: 23
-            )
+            ),
+            expectedModelFiles: modelFiles
         )
 
         let incompatible = GemmaXPCControlRequestEnvelope(

@@ -4,7 +4,9 @@ Status: implemented and covered by gate-only and signed XPC integration tests.
 
 The global crash-releasing gate is the implemented exclusion boundary.
 The signed XPC binding, session-scoped client lifecycle, and helper self-exit path are implemented.
-The native provider remains inactive until one exact reviewed production checkpoint, user-facing consent and selection, recovery behavior, and a bounded real-model run are accepted.
+The Xcode 27 app now pins one exact Gemma 4 E2B checkpoint and exposes consented local import and provider selection.
+The provider remains unavailable until that exact checkpoint is verified in the local store.
+The bounded real-model run documented in [Native Gemma checkpoint](NATIVE-GEMMA-CHECKPOINT.md) completed successfully, while final license review and remaining Release validations remain open.
 
 This contract defines the macOS 27 exclusion boundary between audio capture and native Gemma work.
 It is intentionally independent of the model checkpoint, MLX, the meeting library, and the configured model directory.
@@ -183,20 +185,20 @@ Caller cancellation never removes the last tracked operation without triggering 
 The model-session and recording descriptors use different lease types so the client cannot bind a recording description to the helper by mistake.
 
 Automatic retirement after the final high-level model session prevents an idle helper from blocking another process indefinitely.
-The future native provider must wrap handshake, token counting, and generation in one explicit session so this policy does not reload the model between low-level frames.
+The native provider wraps handshake, token counting, and generation in one explicit session so this policy does not reload the model between low-level frames.
 
-## XPC protocol version 4
+## XPC protocol version 5
 
-Version 4 atomically binds the execution-gate descriptor and verified model-directory descriptor in one strict `bindSession` control frame.
-The frame carries both descriptors out of band as `executionGateFD` and `modelDirectoryFD`; descriptor numbers are never serialized.
-The helper adopts both descriptors, verifies the model root from the retained descriptor against the expected device, inode, and pinned manifest, checks recording intent, and acknowledges only the exact bound model pin and root identity together with its helper identity.
+Version 5 atomically binds the execution-gate descriptor, verified model-directory descriptor, exact ordered file manifest, and one descriptor for every approved model file in one strict `bindSession` control frame.
+The raw frame carries the gate and directory descriptors as `executionGateFD` and `modelDirectoryFD`, plus the file-descriptor array as `modelFileFDs`; descriptor numbers are never serialized.
+The JSON payload carries only canonical relative names, sizes, and SHA-256 values in `expectedModelFiles`.
+The helper adopts every descriptor, verifies the root and exact file set, constructs the path-free activation assets, materializes the approved model through MLX, checks recording intent, and then acknowledges only the exact bound model pin and root identity together with its helper identity.
 Every subsequent handshake, token-counting, or generation request must carry the same model pin as the bound session.
-Only the bind request may carry the two descriptor keys.
+Only the bind request may carry the three descriptor keys.
 All other requests and every reply retain their exact existing key set.
 Missing, duplicated, late, malformed, or second binding frames are rejected and terminate the helper.
 The helper starts its byte 0 monitor before acknowledging the binding, and the monitor poll interval is a documented bound on preemption latency.
-The acknowledgement proves the descriptor-rooted scan at bind time, but a root directory descriptor alone does not make its child files immutable for the rest of the session.
-The helper therefore remains model-free until activation can open and retain the exact manifest-listed child files, materialize MLX from those capabilities, and verify them again before publishing the in-memory model.
+The acknowledgement proves that the helper activated the model from the exact retained file capabilities without reopening payload files by path.
 
 Before binding succeeds, the helper rejects model work, cancellation, shutdown, prepare, and arm operations.
 The MLX actor and runtime cannot be created before binding succeeds.

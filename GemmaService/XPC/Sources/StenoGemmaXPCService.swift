@@ -26,7 +26,6 @@ final class StenoGemmaXPCService: @unchecked Sendable {
     }
 
     private let connection: xpc_connection_t
-    private let expectedAppURL: URL
     private let expectedAppRequirement: String
     private let lifetimeID = UUID()
     private let lock = NSLock()
@@ -40,7 +39,6 @@ final class StenoGemmaXPCService: @unchecked Sendable {
     init?(connection: xpc_connection_t) {
         guard let configuration = StenoGemmaXPCProcessConfiguration.current else { return nil }
         self.connection = connection
-        expectedAppURL = configuration.expectedAppURL
         expectedAppRequirement = configuration.expectedAppRequirement
     }
 
@@ -80,7 +78,7 @@ final class StenoGemmaXPCService: @unchecked Sendable {
         guard xpc_get_type(event) == XPC_TYPE_DICTIONARY else {
             terminateInvalidPeer()
         }
-        guard authenticatePeerIfNeeded(message: event) else {
+        guard authenticatePeerIfNeeded() else {
             terminateInvalidPeer()
         }
         guard let outer = GemmaXPCOuterFrame.decode(event) else {
@@ -102,7 +100,8 @@ final class StenoGemmaXPCService: @unchecked Sendable {
             terminateInvalidPeer()
         case .bound:
             guard outer.executionGateDescriptor == nil,
-                  outer.modelDirectoryDescriptor == nil else {
+                  outer.modelDirectoryDescriptor == nil,
+                  outer.modelFileDescriptors == nil else {
                 terminateInvalidPeer()
             }
             handleBoundFrame(outer, replyTo: event)
@@ -141,6 +140,7 @@ final class StenoGemmaXPCService: @unchecked Sendable {
         guard outer.channel == .control,
               let executionGateDescriptor = outer.executionGateDescriptor,
               let modelDirectoryDescriptor = outer.modelDirectoryDescriptor,
+              let modelFileDescriptors = outer.modelFileDescriptors,
               let control = try? GemmaXPCControlCodec.decodeRequest(outer.frame),
               control.requestID == outer.requestID,
               case .bindSession(let binding) = control.body
@@ -174,44 +174,60 @@ final class StenoGemmaXPCService: @unchecked Sendable {
             _ = Darwin.close(executionGateFD)
             terminateInvalidPeer()
         }
-
+        guard let modelFileDescriptorsByRelativePath = Self.duplicateModelFileDescriptors(
+            modelFileDescriptors,
+            expectedFiles: binding.expectedModelFiles
+        ) else {
+            _ = Darwin.close(executionGateFD)
+            _ = Darwin.close(modelDirectoryFD)
+            terminateInvalidPeer()
+        }
         let lease: GemmaModelExecutionLease
         do {
             lease = try GemmaProcessGate.adoptHelperExecutionDescriptor(executionGateFD)
         } catch {
             _ = Darwin.close(modelDirectoryFD)
-            terminateInvalidPeer()
-        }
-        do {
-            if try GemmaProcessGate.helperObservesRecordingIntent(for: lease) {
-                terminateForRecordingIntent()
-            }
-        } catch {
-            terminateInvalidPeer()
-        }
-
-        let monitor = GemmaHelperExecutionGateMonitor(lease: lease)
-        guard monitor.start() else {
-            _ = Darwin.close(modelDirectoryFD)
+            Self.closeDescriptors(modelFileDescriptorsByRelativePath.values)
             terminateInvalidPeer()
         }
         do {
             if try GemmaProcessGate.helperObservesRecordingIntent(for: lease) {
                 _ = Darwin.close(modelDirectoryFD)
+                Self.closeDescriptors(modelFileDescriptorsByRelativePath.values)
                 terminateForRecordingIntent()
             }
         } catch {
             _ = Darwin.close(modelDirectoryFD)
+            Self.closeDescriptors(modelFileDescriptorsByRelativePath.values)
+            terminateInvalidPeer()
+        }
+        let monitor = GemmaHelperExecutionGateMonitor(lease: lease)
+        guard monitor.start() else {
+            _ = Darwin.close(modelDirectoryFD)
+            Self.closeDescriptors(modelFileDescriptorsByRelativePath.values)
+            terminateInvalidPeer()
+        }
+        do {
+            if try GemmaProcessGate.helperObservesRecordingIntent(for: lease) {
+                _ = Darwin.close(modelDirectoryFD)
+                Self.closeDescriptors(modelFileDescriptorsByRelativePath.values)
+                terminateForRecordingIntent()
+            }
+        } catch {
+            _ = Darwin.close(modelDirectoryFD)
+            Self.closeDescriptors(modelFileDescriptorsByRelativePath.values)
             terminateInvalidPeer()
         }
 
+        let requestID = outer.requestID
         DispatchQueue.global(qos: .utility).async { [self, lease, monitor, replyHandle] in
             verifyAndBindSession(
                 binding: binding,
                 executionGate: lease,
                 modelDirectoryFD: modelDirectoryFD,
+                modelFileDescriptorsByRelativePath: modelFileDescriptorsByRelativePath,
                 monitor: monitor,
-                requestID: outer.requestID,
+                requestID: requestID,
                 reply: replyHandle
             )
         }
@@ -221,14 +237,19 @@ final class StenoGemmaXPCService: @unchecked Sendable {
         binding: GemmaIPCBindSessionRequest,
         executionGate lease: GemmaModelExecutionLease,
         modelDirectoryFD: Int32,
+        modelFileDescriptorsByRelativePath: [String: Int32],
         monitor: GemmaHelperExecutionGateMonitor,
         requestID: UUID,
         reply: GemmaXPCReplyHandle
     ) {
-        let activationProfile = NativeGemmaActivationCatalog.production.profile(
+        guard let activationProfile = NativeGemmaActivationCatalog.production.profile(
             for: binding.model
-        )
-        let authoritativePin = activationProfile?.pin ?? binding.model
+        ) else {
+            _ = Darwin.close(modelDirectoryFD)
+            Self.closeDescriptors(modelFileDescriptorsByRelativePath.values)
+            terminateInvalidPeer()
+        }
+        let authoritativePin = activationProfile.pin
         let requirements: GemmaModelRequirements
         do {
             requirements = try GemmaModelRequirements(
@@ -240,47 +261,35 @@ final class StenoGemmaXPCService: @unchecked Sendable {
             )
         } catch {
             _ = Darwin.close(modelDirectoryFD)
+            Self.closeDescriptors(modelFileDescriptorsByRelativePath.values)
             terminateInvalidPeer()
         }
-
-        let verified: VerifiedGemmaModelDirectory
+        let activationAssets: VerifiedGemmaModelActivationAssets
         do {
-            verified = try GemmaModelVerifier(requirements: requirements).verify(
-                adoptingDirectoryDescriptor: modelDirectoryFD,
+            activationAssets = try GemmaModelVerifier(requirements: requirements).makeActivationAssets(
+                adoptingDescriptorHandoffRootDescriptor: modelDirectoryFD,
+                fileDescriptorsByRelativePath: modelFileDescriptorsByRelativePath,
                 expectedRootIdentity: GemmaModelRootIdentity(
                     deviceID: binding.expectedModelRootIdentity.deviceID,
                     fileID: binding.expectedModelRootIdentity.fileID
-                )
+                ),
+                limits: activationProfile.activationLimits
             )
         } catch {
             terminateInvalidPeer()
         }
 
-        if let activationProfile {
-            let activationAssets: VerifiedGemmaModelActivationAssets
-            do {
-                activationAssets = try verified.consumeActivationAssets(
-                    limits: activationProfile.activationLimits
-                )
-            } catch {
-                terminateInvalidPeer()
-            }
-            let executor: GemmaBoundModelExecutor
-            do {
-                executor = try NativeGemmaExecutorFactory.makeBoundExecutor(
-                    consuming: activationAssets,
-                    profile: activationProfile
-                )
-            } catch {
-                terminateInvalidPeer()
-            }
-            guard StenoGemmaXPCProcessRuntime.bindModelExecutor(executor) else {
-                terminateInvalidPeer()
-            }
-        } else {
-            // An installed but not helper-approved pin remains model-free and does not retain a
-            // filesystem capability after its exact descriptor-rooted verification completes.
-            verified.close()
+        let executor: GemmaBoundModelExecutor
+        do {
+            executor = try NativeGemmaExecutorFactory.makeBoundExecutor(
+                consuming: activationAssets,
+                profile: activationProfile
+            )
+        } catch {
+            terminateInvalidPeer()
+        }
+        guard StenoGemmaXPCProcessRuntime.bindModelExecutor(executor) else {
+            terminateInvalidPeer()
         }
 
         do {
@@ -318,7 +327,44 @@ final class StenoGemmaXPCService: @unchecked Sendable {
         reply.send(data, requestID: requestID)
     }
 
-    private func authenticatePeerIfNeeded(message: xpc_object_t) -> Bool {
+    private static func duplicateModelFileDescriptors(
+        _ descriptors: [xpc_object_t],
+        expectedFiles: [GemmaIPCModelFileMetadata]
+    ) -> [String: Int32]? {
+        guard descriptors.count == expectedFiles.count else { return nil }
+
+        var duplicated: [Int32] = []
+        duplicated.reserveCapacity(descriptors.count)
+        for descriptor in descriptors {
+            guard xpc_get_type(descriptor) == XPC_TYPE_FD else {
+                closeDescriptors(duplicated)
+                return nil
+            }
+            let duplicatedDescriptor = xpc_fd_dup(descriptor)
+            guard duplicatedDescriptor >= 0 else {
+                closeDescriptors(duplicated)
+                return nil
+            }
+            duplicated.append(duplicatedDescriptor)
+        }
+
+        let descriptorsByRelativePath = Dictionary(
+            uniqueKeysWithValues: zip(expectedFiles.map(\.relativePath), duplicated)
+        )
+        guard descriptorsByRelativePath.count == expectedFiles.count else {
+            closeDescriptors(duplicated)
+            return nil
+        }
+        return descriptorsByRelativePath
+    }
+
+    private static func closeDescriptors<S: Sequence>(_ descriptors: S) where S.Element == Int32 {
+        for descriptor in Set(descriptors) where descriptor >= 0 {
+            _ = Darwin.close(descriptor)
+        }
+    }
+
+    private func authenticatePeerIfNeeded() -> Bool {
         let shouldAuthenticate: Bool = lock.withLock {
             switch authenticationState {
             case .bound:
@@ -336,13 +382,6 @@ final class StenoGemmaXPCService: @unchecked Sendable {
             return lock.withLock { authenticationState == .bound }
         }
 
-        guard GemmaXPCCodeIdentity.matchesCodeInXPCMessage(
-            message,
-            expectedBundleURL: expectedAppURL
-        ) else {
-            lock.withLock { authenticationState = .terminal }
-            return false
-        }
         guard StenoGemmaXPCProcessLifecycle.claimPeer(lifetimeID) else {
             lock.withLock { authenticationState = .terminal }
             return false
@@ -810,23 +849,34 @@ private enum StenoGemmaXPCProcessRuntime {
 
 /// Expensive static-code validation is performed at most once per helper process.
 private struct StenoGemmaXPCProcessConfiguration {
-    let expectedAppURL: URL
+    private static let helperSigningIdentifierSuffix = ".GemmaXPC"
+
     let expectedAppRequirement: String
 
     static let current: StenoGemmaXPCProcessConfiguration? = {
         let helper = Bundle.main.bundleURL.standardizedFileURL.resolvingSymlinksInPath()
         let contents = helper.deletingLastPathComponent().deletingLastPathComponent()
         let app = contents.deletingLastPathComponent()
+        let suffix = helperSigningIdentifierSuffix
         guard app.pathExtension == "app",
               GemmaXPCCodeIdentity.helperSecurityProfileIsSafe(helperBundleURL: helper),
-              let requirement = try? GemmaXPCCodeIdentity.designatedRequirement(
-                  forBundleAt: app
-              )
+              let helperSigningIdentifier = Bundle.main.bundleIdentifier,
+              helperSigningIdentifier.hasSuffix(suffix),
+              helperSigningIdentifier.count > suffix.count
         else {
             return nil
         }
+        let expectedAppSigningIdentifier = String(
+            helperSigningIdentifier.dropLast(suffix.count)
+        )
+        guard let requirement = GemmaXPCCodeIdentity.siblingDesignatedRequirement(
+            helperBundleURL: helper,
+            helperSigningIdentifier: helperSigningIdentifier,
+            siblingSigningIdentifier: expectedAppSigningIdentifier
+        ) else {
+            return nil
+        }
         return StenoGemmaXPCProcessConfiguration(
-            expectedAppURL: app,
             expectedAppRequirement: requirement
         )
     }()
@@ -861,12 +911,14 @@ private struct GemmaXPCOuterFrame {
     let requestID: UUID
     let executionGateDescriptor: xpc_object_t?
     let modelDirectoryDescriptor: xpc_object_t?
+    let modelFileDescriptors: [xpc_object_t]?
 
     private static let channelKey = "channel"
     private static let frameKey = "frame"
     private static let requestIDKey = "requestID"
     private static let executionGateFDKey = "executionGateFD"
     private static let modelDirectoryFDKey = "modelDirectoryFD"
+    private static let modelFileFDsKey = "modelFileFDs"
 
     static func decode(_ message: xpc_object_t) -> GemmaXPCOuterFrame? {
         guard xpc_get_type(message) == XPC_TYPE_DICTIONARY,
@@ -891,7 +943,8 @@ private struct GemmaXPCOuterFrame {
             frame: Data(bytes: dataBytes, count: length),
             requestID: UUID(uuid: uuid),
             executionGateDescriptor: descriptors.executionGate,
-            modelDirectoryDescriptor: descriptors.modelDirectory
+            modelDirectoryDescriptor: descriptors.modelDirectory,
+            modelFileDescriptors: descriptors.modelFiles
         )
     }
 
@@ -914,6 +967,7 @@ private struct GemmaXPCOuterFrame {
     private struct OptionalDescriptor {
         let executionGate: xpc_object_t?
         let modelDirectory: xpc_object_t?
+        let modelFiles: [xpc_object_t]?
     }
 
     private static func validatedDescriptors(
@@ -927,20 +981,45 @@ private struct GemmaXPCOuterFrame {
         guard accepted else { return nil }
         let ordinaryKeys = Set([channelKey, frameKey, requestIDKey])
         if keys == ordinaryKeys {
-            return OptionalDescriptor(executionGate: nil, modelDirectory: nil)
+            return OptionalDescriptor(
+                executionGate: nil,
+                modelDirectory: nil,
+                modelFiles: nil
+            )
         }
-        guard keys == ordinaryKeys.union([executionGateFDKey, modelDirectoryFDKey]),
+        guard keys == ordinaryKeys.union([
+            executionGateFDKey,
+            modelDirectoryFDKey,
+            modelFileFDsKey,
+        ]),
               let executionGate = xpc_dictionary_get_value(dictionary, executionGateFDKey),
               let modelDirectory = xpc_dictionary_get_value(dictionary, modelDirectoryFDKey),
+              let modelFileObjects = xpc_dictionary_get_value(dictionary, modelFileFDsKey),
               xpc_get_type(executionGate) == XPC_TYPE_FD,
-              xpc_get_type(modelDirectory) == XPC_TYPE_FD
+              xpc_get_type(modelDirectory) == XPC_TYPE_FD,
+              xpc_get_type(modelFileObjects) == XPC_TYPE_ARRAY,
+              let modelFiles = validatedFileDescriptorArray(modelFileObjects)
         else {
             return nil
         }
         return OptionalDescriptor(
             executionGate: executionGate,
-            modelDirectory: modelDirectory
+            modelDirectory: modelDirectory,
+            modelFiles: modelFiles
         )
+    }
+
+    private static func validatedFileDescriptorArray(_ array: xpc_object_t) -> [xpc_object_t]? {
+        let count = xpc_array_get_count(array)
+        guard count > 0 else { return nil }
+        var descriptors: [xpc_object_t] = []
+        descriptors.reserveCapacity(count)
+        for index in 0 ..< count {
+            let descriptor = xpc_array_get_value(array, index)
+            guard xpc_get_type(descriptor) == XPC_TYPE_FD else { return nil }
+            descriptors.append(descriptor)
+        }
+        return descriptors
     }
 }
 
@@ -1022,63 +1101,51 @@ private enum GemmaXPCCodeIdentity {
 #else
     private static let buildAllowsDebugging = false
 #endif
-    private static let strictAppValidationFlags = SecCSFlags(
-        rawValue: kSecCSStrictValidate | kSecCSCheckAllArchitectures | kSecCSCheckNestedCode
-    )
     private static let strictHelperValidationFlags = SecCSFlags(
         rawValue: kSecCSStrictValidate | kSecCSCheckAllArchitectures
     )
 
-    static func designatedRequirement(forBundleAt bundleURL: URL) throws -> String {
-        let expectedURL = canonical(bundleURL)
+    static func siblingDesignatedRequirement(
+        helperBundleURL: URL,
+        helperSigningIdentifier: String,
+        siblingSigningIdentifier: String
+    ) -> String? {
         var code: SecStaticCode?
-        guard SecStaticCodeCreateWithPath(expectedURL as CFURL, SecCSFlags(), &code) == errSecSuccess,
-              let code,
-              SecStaticCodeCheckValidity(code, strictAppValidationFlags, nil) == errSecSuccess,
-              appSecurityProfileIsSafe(staticCode: code)
+        guard SecStaticCodeCreateWithPath(
+            canonical(helperBundleURL) as CFURL,
+            SecCSFlags(),
+            &code
+        ) == errSecSuccess,
+        let code,
+        SecStaticCodeCheckValidity(code, strictHelperValidationFlags, nil) == errSecSuccess
         else {
-            throw GemmaXPCSecurityError.untrustedCode
+            return nil
         }
         var requirement: SecRequirement?
-        guard SecCodeCopyDesignatedRequirement(code, SecCSFlags(), &requirement) == errSecSuccess,
-              let requirement
-        else {
-            throw GemmaXPCSecurityError.untrustedCode
-        }
         var requirementString: CFString?
-        guard SecRequirementCopyString(requirement, SecCSFlags(), &requirementString) == errSecSuccess,
-              let requirementString
+        guard SecCodeCopyDesignatedRequirement(
+            code,
+            SecCSFlags(),
+            &requirement
+        ) == errSecSuccess,
+        let requirement,
+        SecRequirementCopyString(
+            requirement,
+            SecCSFlags(),
+            &requirementString
+        ) == errSecSuccess,
+        let requirementString
         else {
-            throw GemmaXPCSecurityError.untrustedCode
+            return nil
         }
-        return requirementString as String
-    }
 
-    static func matchesCodeInXPCMessage(
-        _ message: xpc_object_t,
-        expectedBundleURL: URL
-    ) -> Bool {
-        var dynamicCode: SecCode?
-        guard SecCodeCreateWithXPCMessage(message, SecCSFlags(), &dynamicCode) == errSecSuccess,
-              let dynamicCode,
-              SecCodeCheckValidity(dynamicCode, SecCSFlags(), nil) == errSecSuccess
-        else {
-            return false
+        let helperPrefix = "identifier \"\(helperSigningIdentifier)\""
+        let siblingPrefix = "identifier \"\(siblingSigningIdentifier)\""
+        let helperRequirement = requirementString as String
+        guard helperRequirement.hasPrefix(helperPrefix) else {
+            return nil
         }
-        var staticCode: SecStaticCode?
-        guard SecCodeCopyStaticCode(dynamicCode, SecCSFlags(), &staticCode) == errSecSuccess,
-              let staticCode,
-              appSecurityProfileIsSafe(staticCode: staticCode)
-        else {
-            return false
-        }
-        var peerURL: CFURL?
-        guard SecCodeCopyPath(staticCode, SecCSFlags(), &peerURL) == errSecSuccess,
-              let peerURL
-        else {
-            return false
-        }
-        return canonical(peerURL as URL) == canonical(expectedBundleURL)
+        return siblingPrefix + helperRequirement.dropFirst(helperPrefix.count)
     }
 
     static func helperSecurityProfileIsSafe(helperBundleURL: URL) -> Bool {
@@ -1112,31 +1179,7 @@ private enum GemmaXPCCodeIdentity {
         )
     }
 
-    private static func appSecurityProfileIsSafe(staticCode: SecStaticCode) -> Bool {
-        var information: CFDictionary?
-        guard SecCodeCopySigningInformation(
-            staticCode,
-            SecCSFlags(rawValue: kSecCSSigningInformation),
-            &information
-        ) == errSecSuccess,
-        let dictionary = information as? [CFString: Any],
-        let codeDirectoryFlags = dictionary[kSecCodeInfoFlags] as? NSNumber
-        else {
-            return false
-        }
-        return GemmaCodeSecurityProfile.isSafe(
-            entitlements: dictionary[kSecCodeInfoEntitlementsDict] as? [String: Any],
-            codeDirectoryFlags: codeDirectoryFlags.uint32Value,
-            role: .application,
-            allowsDebugging: buildAllowsDebugging
-        )
-    }
-
     private static func canonical(_ url: URL) -> URL {
         url.standardizedFileURL.resolvingSymlinksInPath()
     }
-}
-
-private enum GemmaXPCSecurityError: Error {
-    case untrustedCode
 }

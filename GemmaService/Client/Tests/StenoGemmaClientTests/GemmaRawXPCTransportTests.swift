@@ -46,27 +46,30 @@ struct GemmaRawXPCTransportTests {
         #expect(decoded.frame == Data("frame".utf8))
     }
 
-    @Test("the bind outer frame adds exactly two typed descriptor keys")
+    @Test("the bind outer frame adds typed root, gate, and model file descriptors")
     func bindOuterFrameDescriptor() throws {
         var gateDescriptors: [Int32] = [-1, -1]
         var modelDescriptors: [Int32] = [-1, -1]
+        var modelFileDescriptors: [Int32] = [-1, -1]
         try #require(Darwin.pipe(&gateDescriptors) == 0)
         try #require(Darwin.pipe(&modelDescriptors) == 0)
+        try #require(Darwin.pipe(&modelFileDescriptors) == 0)
         defer {
-            for descriptor in gateDescriptors + modelDescriptors {
+            for descriptor in gateDescriptors + modelDescriptors + modelFileDescriptors {
                 _ = Darwin.close(descriptor)
             }
         }
 
         let message = try #require(GemmaRawXPCOuterFrame.makeBindSession(
-            frame: Data("bind-json".utf8),
+            frame: try bindControlFrame(fileCount: 2),
             requestID: UUID(),
             channel: .control,
             executionGateDescriptor: gateDescriptors[0],
-            modelDirectoryDescriptor: modelDescriptors[0]
+            modelDirectoryDescriptor: modelDescriptors[0],
+            modelFileDescriptors: [modelFileDescriptors[0], modelFileDescriptors[1]]
         ))
         #expect(keys(of: message) == Set([
-            "channel", "executionGateFD", "frame", "modelDirectoryFD", "requestID",
+            "channel", "executionGateFD", "frame", "modelDirectoryFD", "modelFileFDs", "requestID",
         ]))
         let executionGateObject = try #require(
             xpc_dictionary_get_value(message, GemmaRawXPCOuterFrame.executionGateFDKey)
@@ -76,9 +79,22 @@ struct GemmaRawXPCTransportTests {
         )
         #expect(xpc_get_type(executionGateObject) == XPC_TYPE_FD)
         #expect(xpc_get_type(modelDirectoryObject) == XPC_TYPE_FD)
+        let modelFileObjects = try #require(
+            xpc_dictionary_get_value(message, GemmaRawXPCOuterFrame.modelFileFDsKey)
+        )
+        #expect(xpc_get_type(modelFileObjects) == XPC_TYPE_ARRAY)
+        #expect(xpc_array_get_count(modelFileObjects) == 2)
         #expect(GemmaRawXPCOuterFrame.isValidBindSession(message))
 
         for descriptorObject in [executionGateObject, modelDirectoryObject] {
+            let duplicated = xpc_fd_dup(descriptorObject)
+            #expect(duplicated >= 0)
+            if duplicated >= 0 {
+                _ = Darwin.close(duplicated)
+            }
+        }
+        for index in 0 ..< xpc_array_get_count(modelFileObjects) {
+            let descriptorObject = xpc_array_get_value(modelFileObjects, index)
             let duplicated = xpc_fd_dup(descriptorObject)
             #expect(duplicated >= 0)
             if duplicated >= 0 {
@@ -100,7 +116,7 @@ struct GemmaRawXPCTransportTests {
         }
 
         let missingModelDescriptor = try #require(GemmaRawXPCOuterFrame.make(
-            frame: Data("bind-json".utf8),
+            frame: try bindControlFrame(fileCount: 1),
             requestID: UUID(),
             channel: .control
         ))
@@ -113,7 +129,7 @@ struct GemmaRawXPCTransportTests {
         #expect(!GemmaRawXPCOuterFrame.isValidBindSession(missingModelDescriptor))
 
         let missingExecutionGate = try #require(GemmaRawXPCOuterFrame.make(
-            frame: Data("bind-json".utf8),
+            frame: try bindControlFrame(fileCount: 1),
             requestID: UUID(),
             channel: .control
         ))
@@ -126,7 +142,7 @@ struct GemmaRawXPCTransportTests {
         #expect(!GemmaRawXPCOuterFrame.isValidBindSession(missingExecutionGate))
 
         let numericDescriptors = try #require(GemmaRawXPCOuterFrame.make(
-            frame: Data("bind-json".utf8),
+            frame: try bindControlFrame(fileCount: 1),
             requestID: UUID(),
             channel: .control
         ))
@@ -143,11 +159,12 @@ struct GemmaRawXPCTransportTests {
         #expect(!GemmaRawXPCOuterFrame.isValidBindSession(numericDescriptors))
 
         let extraKey = try #require(GemmaRawXPCOuterFrame.makeBindSession(
-            frame: Data("bind-json".utf8),
+            frame: try bindControlFrame(fileCount: 1),
             requestID: UUID(),
             channel: .control,
             executionGateDescriptor: descriptors[0],
-            modelDirectoryDescriptor: descriptors[1]
+            modelDirectoryDescriptor: descriptors[1],
+            modelFileDescriptors: [descriptors[0]]
         ))
         xpc_dictionary_set_bool(extraKey, "unexpected", true)
         #expect(!GemmaRawXPCOuterFrame.isValidBindSession(extraKey))
@@ -193,9 +210,10 @@ struct GemmaRawXPCTransportTests {
     @Test("bind acknowledgement must echo the exact pin and root identity")
     func bindAcknowledgementExactEcho() throws {
         let fixture = try RawModelFixture.make()
-        let binding = GemmaIPCBindSessionRequest(
+        let binding = try GemmaIPCBindSessionRequest(
             model: try fixture.pin(),
-            expectedModelRootIdentity: try GemmaIPCModelRootIdentity(deviceID: 4, fileID: 8)
+            expectedModelRootIdentity: try GemmaIPCModelRootIdentity(deviceID: 4, fileID: 8),
+            expectedModelFiles: try modelFiles(for: fixture.pin())
         )
         let helperIdentity = GemmaIPCBoundHelperIdentity(
             helperInstanceID: UUID(),
@@ -212,9 +230,12 @@ struct GemmaRawXPCTransportTests {
             expectedBinding: binding
         ).helperIdentity == helperIdentity)
 
-        let wrongPin = GemmaIPCBindSessionRequest(
+        let wrongPin = try GemmaIPCBindSessionRequest(
             model: try fixture.pin(adapterRevision: String(repeating: "b", count: 40)),
-            expectedModelRootIdentity: binding.expectedModelRootIdentity
+            expectedModelRootIdentity: binding.expectedModelRootIdentity,
+            expectedModelFiles: try modelFiles(for: fixture.pin(
+                adapterRevision: String(repeating: "b", count: 40)
+            ))
         )
         let wrongPinResponse = try GemmaXPCControlCodec.encode(
             GemmaXPCControlResponseEnvelope(
@@ -230,9 +251,10 @@ struct GemmaRawXPCTransportTests {
             )
         }
 
-        let wrongRoot = GemmaIPCBindSessionRequest(
+        let wrongRoot = try GemmaIPCBindSessionRequest(
             model: binding.model,
-            expectedModelRootIdentity: try GemmaIPCModelRootIdentity(deviceID: 4, fileID: 9)
+            expectedModelRootIdentity: try GemmaIPCModelRootIdentity(deviceID: 4, fileID: 9),
+            expectedModelFiles: binding.expectedModelFiles
         )
         let wrongRootResponse = try GemmaXPCControlCodec.encode(
             GemmaXPCControlResponseEnvelope(
@@ -267,6 +289,51 @@ struct GemmaRawXPCTransportTests {
             return true
         }
         return result
+    }
+
+    private func bindControlFrame(fileCount: Int) throws -> Data {
+        let model = try GemmaModelSnapshotPin(
+            modelIdentifier: "mlx-community/gemma-4-e2b-it-4bit",
+            checkpointRevision: String(repeating: "1", count: 40),
+            adapterRevision: GemmaIPCBuildInfo.adapterRevision,
+            licenseIdentifier: "gemma",
+            manifestSHA256: String(repeating: "a", count: 64)
+        )
+        let allFiles = try [
+            GemmaIPCModelFileMetadata(
+                relativePath: "gemma-model-manifest.json",
+                size: 1,
+                sha256: model.manifestSHA256
+            ),
+            GemmaIPCModelFileMetadata(
+                relativePath: "model.safetensors",
+                size: 2,
+                sha256: String(repeating: "b", count: 64)
+            ),
+        ]
+        let binding = try GemmaIPCBindSessionRequest(
+            model: model,
+            expectedModelRootIdentity: try GemmaIPCModelRootIdentity(deviceID: 1, fileID: 2),
+            expectedModelFiles: Array(allFiles.prefix(fileCount))
+        )
+        return try GemmaXPCControlCodec.encode(.init(body: .bindSession(binding)))
+    }
+
+    private func modelFiles(
+        for model: GemmaModelSnapshotPin
+    ) throws -> [GemmaIPCModelFileMetadata] {
+        try [
+            .init(
+                relativePath: "gemma-model-manifest.json",
+                size: 1,
+                sha256: model.manifestSHA256
+            ),
+            .init(
+                relativePath: "weights.bin",
+                size: 2,
+                sha256: String(repeating: "b", count: 64)
+            ),
+        ]
     }
 }
 

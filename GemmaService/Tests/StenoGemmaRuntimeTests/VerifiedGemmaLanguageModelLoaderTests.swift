@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import StenoGemmaRuntime
+@_spi(StenoGemmaRuntime) @testable import StenoGemmaRuntime
 
 @Suite("Verified Gemma byte loader policy")
 struct VerifiedGemmaLanguageModelLoaderTests {
@@ -34,6 +34,63 @@ struct VerifiedGemmaLanguageModelLoaderTests {
         )) {
             try GemmaLanguageModelFactory.validateVerifiedConfigurationForTesting(
                 json(#"{"model_type":"gemma4","vision_config":{}}"#)
+            )
+        }
+    }
+
+    @Test("the pinned Gemma 4 E2B conditional layout is accepted only as text")
+    func pinnedE2BConditionalLayoutIsAcceptedOnlyAsText() throws {
+        let configuration = json(
+            #"{"architectures":["Gemma4ForConditionalGeneration"],"model_type":"gemma4","audio_config":{},"vision_config":{},"text_config":{"model_type":"gemma4_text"}}"#
+        )
+
+        #expect(throws: GemmaLanguageModelFactoryError.unsupportedMediaConfiguration(
+            "audio_config"
+        )) {
+            try GemmaLanguageModelFactory.validateVerifiedConfigurationForTesting(
+                configuration
+            )
+        }
+        try GemmaLanguageModelFactory.validateVerifiedConfigurationForTesting(
+            configuration,
+            modelLayout: .gemma4E2BConditionalTextProjection
+        )
+    }
+
+    @Test("the Gemma 4 E2B projection requires its exact conditional text envelope")
+    func e2bProjectionRequiresExactConditionalTextEnvelope() {
+        for configuration in [
+            #"{"architectures":["Gemma4ForCausalLM"],"model_type":"gemma4","text_config":{"model_type":"gemma4_text"}}"#,
+            #"{"architectures":["Gemma4ForConditionalGeneration","Other"],"model_type":"gemma4","text_config":{"model_type":"gemma4_text"}}"#,
+        ] {
+            #expect(throws: GemmaLanguageModelFactoryError.unsupportedMediaConfiguration(
+                "architectures"
+            )) {
+                try GemmaLanguageModelFactory.validateVerifiedConfigurationForTesting(
+                    json(configuration),
+                    modelLayout: .gemma4E2BConditionalTextProjection
+                )
+            }
+        }
+
+        #expect(throws: GemmaLanguageModelFactoryError.unsafeModelConfiguration(
+            "the Gemma 4 E2B text projection requires text_config"
+        )) {
+            try GemmaLanguageModelFactory.validateVerifiedConfigurationForTesting(
+                json(
+                    #"{"architectures":["Gemma4ForConditionalGeneration"],"model_type":"gemma4"}"#
+                ),
+                modelLayout: .gemma4E2BConditionalTextProjection
+            )
+        }
+        #expect(throws: GemmaLanguageModelFactoryError.unsupportedModelType(
+            "gemma4_unified"
+        )) {
+            try GemmaLanguageModelFactory.validateVerifiedConfigurationForTesting(
+                json(
+                    #"{"architectures":["Gemma4ForConditionalGeneration"],"model_type":"gemma4","text_config":{"model_type":"gemma4_unified"}}"#
+                ),
+                modelLayout: .gemma4E2BConditionalTextProjection
             )
         }
     }
@@ -159,6 +216,37 @@ struct VerifiedGemmaLanguageModelLoaderTests {
         }
     }
 
+    @Test("the Gemma 4 E2B index remains exact across text and discarded media")
+    func e2bIndexIncludesDiscardedMedia() throws {
+        let shard = "model.safetensors"
+        let tensors: Set<String> = [
+            "language_model.model.embed_tokens.weight",
+            "audio_tower.layers.0.self_attn.q_proj.weight",
+            "vision_tower.encoder.layers.0.self_attn.q_proj.weight",
+            "embed_audio.embedding_projection.weight",
+            "embed_vision.embedding_projection.weight",
+        ]
+        let exactIndex = json(
+            #"{"weight_map":{"language_model.model.embed_tokens.weight":"model.safetensors","audio_tower.layers.0.self_attn.q_proj.weight":"model.safetensors","vision_tower.encoder.layers.0.self_attn.q_proj.weight":"model.safetensors","embed_audio.embedding_projection.weight":"model.safetensors","embed_vision.embedding_projection.weight":"model.safetensors"}}"#
+        )
+        try GemmaLanguageModelFactory.validateSafetensorsIndexForTesting(
+            data: exactIndex,
+            shardPaths: [shard],
+            tensorsByShard: [shard: tensors]
+        )
+
+        let textOnlyIndex = json(
+            #"{"weight_map":{"language_model.model.embed_tokens.weight":"model.safetensors"}}"#
+        )
+        #expect(throws: GemmaLanguageModelFactoryError.safetensorsIndexMismatch) {
+            try GemmaLanguageModelFactory.validateSafetensorsIndexForTesting(
+                data: textOnlyIndex,
+                shardPaths: [shard],
+                tensorsByShard: [shard: tensors]
+            )
+        }
+    }
+
     @Test("media weights and sanitizer collisions are rejected")
     func unsafeWeightNamesAreRejected() {
         #expect(throws: GemmaLanguageModelFactoryError.mediaWeightRejected(
@@ -181,6 +269,41 @@ struct VerifiedGemmaLanguageModelLoaderTests {
                 "block.experts.gate_up_proj",
                 "block.experts.switch_glu.gate_proj.weight",
             ])
+        }
+    }
+
+    @Test("the Gemma 4 E2B projection evaluates only language model weights")
+    func e2bProjectionEvaluatesOnlyLanguageModelWeights() throws {
+        let text = "language_model.model.layers.0.self_attn.q_proj.weight"
+        let names = [
+            text,
+            "audio_tower.layers.0.self_attn.q_proj.weight",
+            "vision_tower.encoder.layers.0.self_attn.q_proj.weight",
+            "embed_audio.embedding_projection.weight",
+            "embed_vision.embedding_projection.weight",
+        ]
+        let selected = try GemmaLanguageModelFactory
+            .weightNamesSelectedForEvaluationForTesting(
+                names,
+                modelLayout: .gemma4E2BConditionalTextProjection
+            )
+        #expect(selected == [text])
+
+        #expect(throws: GemmaLanguageModelFactoryError.mediaWeightRejected(
+            "multi_modal_projector.weight"
+        )) {
+            try GemmaLanguageModelFactory.validateWeightNamesForTesting(
+                names + ["multi_modal_projector.weight"],
+                modelLayout: .gemma4E2BConditionalTextProjection
+            )
+        }
+        #expect(throws: GemmaLanguageModelFactoryError.mediaWeightRejected(
+            "model.language_model.model.embed_tokens.weight"
+        )) {
+            try GemmaLanguageModelFactory.validateWeightNamesForTesting(
+                ["model.language_model.model.embed_tokens.weight"],
+                modelLayout: .gemma4E2BConditionalTextProjection
+            )
         }
     }
 

@@ -8,8 +8,27 @@ import Testing
 
 @Suite("Native Gemma activation policy")
 struct NativeGemmaActivationPolicyTests {
-    @Test("the production helper catalog remains empty")
-    func productionCatalogIsEmpty() throws {
+    @Test("the production helper catalog contains only the exact Gemma 4 E2B profile")
+    func productionCatalogContainsOnlyExactE2BProfile() throws {
+        let exactPin = try GemmaModelSnapshotPin(
+            modelIdentifier: "mlx-community/gemma-4-e2b-it-4bit",
+            checkpointRevision: "238767527555cb75a05732a84dff5d6ba0dd6809",
+            adapterRevision: "37688d2cf7d3906e08c74479c9d9949ce6b81136",
+            licenseIdentifier: "gemma",
+            manifestSHA256: "dab4d380ff03b1e6ac34fa47a0db672e540ee399b9d04dc765ba832a6f59cca5"
+        )
+        let profile = try #require(
+            NativeGemmaActivationCatalog.production.profile(for: exactPin)
+        )
+        #expect(profile.pin == exactPin)
+        #expect(profile.modelLayout == .gemma4E2BConditionalTextProjection)
+        #expect(profile.maximumPromptTokens == 4_096)
+        #expect(profile.activationLimits.maximumSmallFileByteCount == 32_169_626)
+        #expect(profile.activationLimits.maximumTotalSmallFileByteCount == 32_416_031)
+        #expect(profile.activationLimits.maximumSafetensorsFileCount == 1)
+        #expect(profile.activationLimits.maximumSafetensorsFileByteCount == 3_550_670_554)
+        #expect(profile.activationLimits.maximumTotalSafetensorsByteCount == 3_550_670_554)
+
         #expect(NativeGemmaActivationCatalog.production.profile(for: try pin()) == nil)
     }
 

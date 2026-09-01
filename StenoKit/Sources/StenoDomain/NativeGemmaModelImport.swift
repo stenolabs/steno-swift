@@ -66,8 +66,8 @@ public struct NativeGemmaSourceIdentity: Equatable, Hashable, Sendable {
 
 /// The allowlist for native Gemma imports.
 ///
-/// Production starts empty. Adding a checkpoint is a deliberate release and
-/// legal decision, not a runtime discovery mechanism.
+/// Production contains only the reviewed Gemma 4 E2B checkpoint. Adding a
+/// checkpoint is a deliberate release and legal decision, not runtime discovery.
 public struct ApprovedNativeGemmaModelCatalog: Sendable {
     private let pins: Set<ApprovedNativeGemmaModelPin>
 
@@ -79,7 +79,15 @@ public struct ApprovedNativeGemmaModelCatalog: Sendable {
         pins.contains(pin)
     }
 
-    public static let production = Self(pins: [])
+    public static let productionPin: ApprovedNativeGemmaModelPin? = try? ApprovedNativeGemmaModelPin(
+        modelIdentifier: "mlx-community/gemma-4-e2b-it-4bit",
+        checkpointRevision: "238767527555cb75a05732a84dff5d6ba0dd6809",
+        adapterRevision: "37688d2cf7d3906e08c74479c9d9949ce6b81136",
+        licenseIdentifier: "gemma",
+        manifestSHA256: "dab4d380ff03b1e6ac34fa47a0db672e540ee399b9d04dc765ba832a6f59cca5"
+    )
+
+    public static let production = Self(pins: Set([productionPin].compactMap { $0 }))
 }
 
 /// A store that can copy an already-approved local source into Steno's

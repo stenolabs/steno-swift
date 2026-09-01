@@ -4,12 +4,23 @@ import StenoIntelligence
 import StenoPipeline
 import SwiftUI
 
+private enum ReportTextModelChoice: Hashable {
+    case appleIntelligence
+    case endpoint(UUID)
+    #if STENO_NATIVE_GEMMA_MODEL_STORE && canImport(StenoGemmaClient)
+    case nativeGemma
+    #endif
+}
+
 /// Protokoll-Bereich im Meeting-Detail: Vorlage rendern lassen, Ergebnis
 /// lesen und kopieren, ältere Ergebnisse abrufen. Läuft nur auf explizite
 /// Anforderung; ohne verfügbares Modell erklärt der Bereich den Zustand.
 struct ReportsSection: View {
     @Environment(AppModel.self) private var model
     @Environment(TextModelSettings.self) private var textModelSettings
+    #if STENO_NATIVE_GEMMA_MODEL_STORE && canImport(StenoGemmaClient)
+    @Environment(NativeGemmaModelSettings.self) private var nativeGemmaSettings
+    #endif
     let meetingID: MeetingID
     /// Fuer den Hinweis, wie viele Sprecher noch unbestaetigt sind.
     let review: MeetingReviewData?
@@ -36,6 +47,16 @@ struct ReportsSection: View {
     /// Nur der On-Device-Standard hat eine Vorab-Verfügbarkeitsauskunft;
     /// externe Endpunkte werden erst beim Rendern kontaktiert (nie vorab).
     private var availabilityHint: String? {
+        #if STENO_NATIVE_GEMMA_MODEL_STORE && canImport(StenoGemmaClient)
+        if nativeGemmaSettings.selectedSnapshot != nil {
+            if nativeGemmaSettings.isCheckingInstallation {
+                return String(localized: "Steno is checking the selected native Gemma checkpoint.")
+            }
+            return nativeGemmaSettings.isInstalled
+                ? nil
+                : String(localized: "The selected native Gemma checkpoint is not installed.")
+        }
+        #endif
         guard !endpointDisplay.usesExternalEndpoint else { return nil }
         switch FoundationModelsProvider().availability {
         case .available:
@@ -163,11 +184,17 @@ struct ReportsSection: View {
     /// Modellwahl je Erstellung; extern nur nach ausdrücklicher Wahl,
     /// die Auswahl wird gemerkt, aber nie automatisch auf extern gestellt.
     private var modelPicker: some View {
-        Picker("Model", selection: selectedEndpointID) {
-            Text("Apple Intelligence (on device)").tag(UUID?.none)
+        Picker("Model", selection: selectedModelChoice) {
+            Text("Apple Intelligence (on device)")
+                .tag(ReportTextModelChoice.appleIntelligence)
+            #if STENO_NATIVE_GEMMA_MODEL_STORE && canImport(StenoGemmaClient)
+            Text("Gemma 4 E2B (local MLX)")
+                .tag(ReportTextModelChoice.nativeGemma)
+                .disabled(!nativeGemmaSettings.isInstalled)
+            #endif
             ForEach(textModelSettings.endpoints, id: \.id) { endpoint in
                 Text("\(endpoint.name) (\(endpoint.hosting.displayName))")
-                    .tag(UUID?.some(endpoint.id))
+                    .tag(ReportTextModelChoice.endpoint(endpoint.id))
             }
         }
         .labelsHidden()
@@ -237,16 +264,50 @@ struct ReportsSection: View {
         }
     }
 
-    private var selectedEndpointID: Binding<UUID?> {
+    private var selectedModelChoice: Binding<ReportTextModelChoice> {
         Binding(
-            get: { selectedEndpointSnapshot?.id },
-            set: { endpointID in
-                selectedEndpointSnapshot = endpointID.flatMap { selectedID in
-                    textModelSettings.endpoints.first { $0.id == selectedID }?.snapshot
+            get: {
+                #if STENO_NATIVE_GEMMA_MODEL_STORE && canImport(StenoGemmaClient)
+                if nativeGemmaSettings.selectedSnapshot != nil { return .nativeGemma }
+                #endif
+                if let endpointID = selectedEndpointSnapshot?.id {
+                    return .endpoint(endpointID)
                 }
-                textModelSettings.selectedEndpointID = endpointID
+                return .appleIntelligence
+            },
+            set: { choice in
+                switch choice {
+                case .appleIntelligence:
+                    selectedEndpointSnapshot = nil
+                    textModelSettings.selectedEndpointID = nil
+                    #if STENO_NATIVE_GEMMA_MODEL_STORE && canImport(StenoGemmaClient)
+                    nativeGemmaSettings.deselect()
+                    #endif
+                case .endpoint(let endpointID):
+                    selectedEndpointSnapshot = textModelSettings.endpoints.first {
+                        $0.id == endpointID
+                    }?.snapshot
+                    textModelSettings.selectedEndpointID = endpointID
+                    #if STENO_NATIVE_GEMMA_MODEL_STORE && canImport(StenoGemmaClient)
+                    nativeGemmaSettings.deselect()
+                    #endif
+                #if STENO_NATIVE_GEMMA_MODEL_STORE && canImport(StenoGemmaClient)
+                case .nativeGemma:
+                    nativeGemmaSettings.selectInstalled()
+                    selectedEndpointSnapshot = nil
+                    textModelSettings.selectedEndpointID = nil
+                #endif
+                }
             }
         )
+    }
+
+    private var selectedNativeGemmaSnapshot: NativeGemmaModelSnapshot? {
+        #if STENO_NATIVE_GEMMA_MODEL_STORE && canImport(StenoGemmaClient)
+        nativeGemmaSettings.selectedSnapshot
+        #else
+        nil
+        #endif
     }
 
     private var externalModelNotice: LocalizedExternalModelNotice? {
@@ -284,6 +345,7 @@ struct ReportsSection: View {
             pendingEndpointSnapshot: pendingEndpointSnapshot,
             pendingNativeGemmaModelSnapshot: pendingNativeGemmaModelSnapshot,
             selectedEndpointSnapshot: selectedEndpointSnapshot,
+            selectedNativeGemmaModelSnapshot: selectedNativeGemmaSnapshot,
             configuredEndpoints: textModelSettings.endpoints
         )
     }
@@ -372,12 +434,14 @@ struct ReportsSection: View {
         guard let preflight else { return }
         renderError = nil
         do {
-            let endpoint = selectedEndpointSnapshot
+            let nativeSnapshot = selectedNativeGemmaSnapshot
+            let endpoint = nativeSnapshot == nil ? selectedEndpointSnapshot : nil
             let job = try await model.requestMeetingMinutes(
                 meetingID: meetingID,
                 templateID: selectedTemplateID,
                 textModelEndpointID: endpoint?.id.uuidString,
                 textModelEndpointSnapshot: endpoint,
+                nativeGemmaModelSnapshot: nativeSnapshot,
                 preflight: preflight
             )
             pendingJobID = job.id

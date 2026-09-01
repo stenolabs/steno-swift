@@ -32,30 +32,31 @@ This first slice provides:
 - an exact-process exit protocol in which the authenticated helper arms itself, the client closes that exact connection without another message, and recording proceeds only after the observed helper PID exits; and
 - a global crash-releasing recording and model gate, with the execution-gate and verified model-root descriptors atomically bound in the first XPC control frame;
 - a session-scoped client with automatic terminal retirement; and
-- a consent chokepoint with one-shot, pin-bound, source-inode-bound confirmations and an empty production checkpoint catalog;
+- a consent chokepoint with one-shot confirmations bound to the exact production Gemma 4 E2B pin and source inode;
 - an MLX-free importer that copies only a fully pinned local manifest into a content-addressed Steno-controlled store, publishes without replacement, and returns path-free provenance;
 - descriptor-bound source and installed-tree verification with exact ownership, mode, hard-link, entry, size, checksum, and root-inode checks; and
 - an app-side resolver that opens only one exact app-approved installed digest as a verified descriptor-owned capability, without discovery, hierarchy creation, repair, or path return;
 - helper-side exact-profile activation with fixed memory and prompt limits, byte-backed MLX materialization, one shared tokenizer and input processor for counting and generation, and a fresh `LanguageModelSession` for every generation request; and
-- an inactive app-side native `TextModelProvider` that keeps one exact helper session across a complete template render and uses one strict JSON prompt contract for both counting and generation; and
+- an app-side native `TextModelProvider` for that exact checkpoint that keeps one helper session across a complete template render and uses one strict JSON prompt contract for both counting and generation; and
+- a bounded real-model Steno run that imported and selected the exact checkpoint and generated a real Standup report with 1,971,600 KiB peak helper RSS; and
 - signed positive XPC integration and app tests that verify fail-closed inference, exact helper absence within the owning app process before a recording lease, failure before permission UI, permission-denial release, and concurrent first-use initialization; and
 - an arm64 Release policy that enables Hardened Runtime for the app and helper, grants the app only microphone and calendar resource entitlements, suppresses injected debug entitlements, rejects unsafe code-signing profiles, and passes strict nested-signature and helper-entitlement inspection.
 
 It does not yet provide:
 
-- an app setting, an approved production checkpoint catalog, or a user-facing import flow;
 - automatic checkpoint downloads;
-- user-selectable or production-approved native Gemma report generation from the Steno app;
 - end-to-end Release recording, system-audio, and calendar validation under Hardened Runtime;
 - negative signed abuse and multiprocess XPC integration coverage;
-- an approved production activation profile and app-facing provider selection;
-- a real model run; or
 - a production support commitment for any specific converted checkpoint.
 
 The standalone SwiftPM package contains the verified local model-loading path, and the Xcode 27 variant links that runtime only into the XPC helper.
 The helper has no incoming or outgoing network entitlement in that project variant, while the application process remains MLX-free.
 The pinned tokenizer and MLX dependency graph still contributes dormant Hub and URL-session code to the helper binary, but Steno's activation path never calls it and App Sandbox denies network access because the helper has no network entitlement.
-The independent production checkpoint, app-provider, and helper-activation catalogs are deliberately empty, so no checkpoint can currently create an executor and native Gemma remains unavailable for user selection.
+The independent production checkpoint, app-provider, and helper-activation catalogs pin the same immutable Gemma 4 E2B snapshot.
+The Xcode 27 app can import that exact local checkpoint and select it for report generation, while activation remains impossible until installed-store verification succeeds.
+On 31 August 2026, the exact local-folder import, sandboxed activation, provider selection, and a real Standup report completed in the Steno app on macOS 27.0.
+The successful run measured 1,971,600 KiB peak helper RSS and did not reach critical memory pressure.
+This is a bounded development result, not a production support or redistribution commitment.
 A standalone SwiftPM executable has no operating-system network sandbox, so source-level absence of a download path must not be described as a hard network guarantee.
 
 The standalone command-line factory is isolated in a package-only prototype target that is not linked into the XPC helper.
@@ -113,14 +114,14 @@ Google's official Gemma 4 model card labeled Gemma 4 as Apache-2.0 when checked 
 Do not add a checkpoint to a Steno installation catalog until its exact source, conversion, revision, notices, and redistribution terms have been reviewed.
 
 - [Official Gemma 4 model card](https://ai.google.dev/gemma/docs/core/model_card_4)
-- [Current MLX community E4B instruction checkpoint](https://huggingface.co/mlx-community/gemma-4-e4b-it-4bit)
+- [Pinned MLX community E2B instruction checkpoint](https://huggingface.co/mlx-community/gemma-4-e2b-it-4bit/tree/238767527555cb75a05732a84dff5d6ba0dd6809)
 
 ## Build
 
 Use Xcode 27 or later and install its Metal Toolchain component.
 
 The exact MLX dependency snapshot builds with Xcode 27 Beta 6 after its matching Metal Toolchain component is installed.
-The full package passes 37 tests with one intentional Metal opt-in sentinel skipped, without downloading or loading a checkpoint.
+The full package passes 43 tests with one intentional Metal opt-in sentinel skipped, without downloading or loading a checkpoint.
 Keep the dependency revisions exact and do not replace them with floating versions.
 
 ```bash
@@ -174,8 +175,8 @@ It must not be read from the same untrusted checkpoint directory it is meant to 
 
 ## Remaining production work
 
-The remaining production work is to review and add one exact checkpoint and matching resource profile to all three currently empty production catalogs, expose the consented import and provider-selection flows, add an explicit user-authorized repair flow for retained corrupt targets, complete end-to-end Release recording and calendar validation under Hardened Runtime, and complete a resource-measured real offline model run.
+The remaining production work is to complete final license review for the pinned checkpoint, add an explicit user-authorized repair flow for retained corrupt targets, validate longer templates, and complete end-to-end Release recording and calendar validation under Hardened Runtime.
 Negative signed abuse and multiprocess XPC coverage must be complete before native Gemma is activated.
 The normative design for that boundary is [Native Gemma cross-process gate](../docs/NATIVE-GEMMA-GATE.md).
 Approved manifests and expected digests must live in Steno-controlled metadata, and installation must route through `ModelInstallationCoordinator` with explicit consent.
-The provider must remain unavailable in the app until those conditions, the exact checkpoint licensing, and the associated recovery behavior are accepted.
+The provider remains unavailable until the exact checkpoint has passed installed-store verification, and production acceptance still depends on the license review and remaining Release validations.

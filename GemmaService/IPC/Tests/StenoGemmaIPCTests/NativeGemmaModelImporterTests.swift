@@ -429,6 +429,29 @@ struct NativeGemmaModelImporterTests {
         #expect(try fixture.stagingNames().isEmpty)
     }
 
+    @Test("source directory ctime-only mutation does not reject an unchanged tree")
+    func sourceDirectoryCTimeOnlyMutationIsAccepted() async throws {
+        let fixture = try ImportFixture.make()
+        let mutated = LockedValue(false)
+        let importer = try fixture.importer { checkpoint in
+            guard checkpoint == .sourceReady else { return }
+            let shouldMutate = mutated.withLock { value -> Bool in
+                if value { return false }
+                value = true
+                return true
+            }
+            if shouldMutate {
+                try fixture.mutateSourceDirectoryCTimeOnly()
+            }
+        }
+
+        _ = try await fixture.run(importer)
+
+        #expect(mutated.withLock { $0 })
+        #expect(FileManager.default.fileExists(atPath: fixture.targetURL.path))
+        #expect(try fixture.stagingNames().isEmpty)
+    }
+
     @Test("replacing a source file after binding fails even when bytes still match")
     func sourceReplacementAfterBindingIsRejected() async throws {
         let fixture = try ImportFixture.make()
@@ -777,6 +800,42 @@ private final class ImportFixture: @unchecked Sendable {
         try Self.chmod(url, currentMode ^ 0o100)
     }
 
+    func mutateSourceDirectoryCTimeOnly() throws {
+        var before = stat()
+        guard Darwin.lstat(sourceURL.path, &before) == 0 else {
+            throw ImportFixtureError.posix(errno)
+        }
+
+        var value: UInt8 = 1
+        let attributeName = "com.steno.tests.source-ctime"
+        let result = sourceURL.path.withCString { path in
+            attributeName.withCString { name in
+                withUnsafePointer(to: &value) { pointer in
+                    Darwin.setxattr(path, name, pointer, 1, 0, XATTR_NOFOLLOW)
+                }
+            }
+        }
+        guard result == 0 else { throw ImportFixtureError.posix(errno) }
+
+        var after = stat()
+        guard Darwin.lstat(sourceURL.path, &after) == 0 else {
+            throw ImportFixtureError.posix(errno)
+        }
+        guard before.st_dev == after.st_dev,
+              before.st_ino == after.st_ino,
+              before.st_mode == after.st_mode,
+              before.st_uid == after.st_uid,
+              before.st_nlink == after.st_nlink,
+              before.st_size == after.st_size,
+              before.st_mtimespec.tv_sec == after.st_mtimespec.tv_sec,
+              before.st_mtimespec.tv_nsec == after.st_mtimespec.tv_nsec,
+              before.st_ctimespec.tv_sec != after.st_ctimespec.tv_sec
+                || before.st_ctimespec.tv_nsec != after.st_ctimespec.tv_nsec
+        else {
+            throw ImportFixtureError.unexpectedMetadataMutation
+        }
+    }
+
     func replaceSourceWeightsWithSameContents() throws {
         let replacement = sourceWeightsURL
             .deletingLastPathComponent()
@@ -899,4 +958,5 @@ private enum ImportFixtureError: Error {
     case injected
     case missingStaging
     case posix(Int32)
+    case unexpectedMetadataMutation
 }

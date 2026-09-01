@@ -169,6 +169,59 @@ struct ReportTextModelDisplayTests {
         #expect(display.modelLabel.contains("on device"))
     }
 
+    @Test("an idle native Gemma selection takes precedence over an external endpoint")
+    func idleNativeGemmaWinsOverExternalSelection() {
+        let native = NativeGemmaModelSnapshot(
+            modelIdentifier: "mlx-community/gemma-4-e2b-it-4bit",
+            checkpointRevision: String(repeating: "9", count: 40),
+            adapterRevision: String(repeating: "b", count: 40),
+            licenseIdentifier: "gemma",
+            manifestSHA256: String(repeating: "a", count: 64)
+        )
+        let display = ReportTextModelDisplay.resolve(
+            isPending: false,
+            pendingEndpointID: nil,
+            pendingEndpointSnapshot: nil,
+            selectedEndpointSnapshot: snapshot(name: "Ollama"),
+            selectedNativeGemmaModelSnapshot: native,
+            configuredEndpoints: []
+        )
+
+        #expect(display == .nativeGemma(native))
+        #expect(!display.usesExternalEndpoint)
+        #expect(display.endpointSnapshot == nil)
+    }
+
+    @Test("pending provenance still wins over an idle native selection")
+    func pendingProvenanceWinsOverIdleSelection() {
+        let pending = NativeGemmaModelSnapshot(
+            modelIdentifier: "mlx-community/gemma-4-e2b-it-4bit",
+            checkpointRevision: String(repeating: "1", count: 40),
+            adapterRevision: String(repeating: "2", count: 40),
+            licenseIdentifier: "gemma",
+            manifestSHA256: String(repeating: "3", count: 64)
+        )
+        let selected = NativeGemmaModelSnapshot(
+            modelIdentifier: "mlx-community/gemma-4-e2b-it-4bit",
+            checkpointRevision: String(repeating: "4", count: 40),
+            adapterRevision: String(repeating: "5", count: 40),
+            licenseIdentifier: "gemma",
+            manifestSHA256: String(repeating: "6", count: 64)
+        )
+
+        let display = ReportTextModelDisplay.resolve(
+            isPending: true,
+            pendingEndpointID: NativeGemmaModelSnapshot.reservedTextModelEndpointID,
+            pendingEndpointSnapshot: nil,
+            pendingNativeGemmaModelSnapshot: pending,
+            selectedEndpointSnapshot: snapshot(name: "Ollama"),
+            selectedNativeGemmaModelSnapshot: selected,
+            configuredEndpoints: []
+        )
+
+        #expect(display == .nativeGemma(pending))
+    }
+
     private func snapshot(
         id: UUID = UUID(),
         name: String,

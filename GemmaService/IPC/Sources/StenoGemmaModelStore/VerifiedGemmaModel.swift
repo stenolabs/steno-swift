@@ -1,6 +1,7 @@
 import CryptoKit
 import Darwin
 import Foundation
+import OSLog
 
 /// A path-free identity used to bind verification to a directory already held by an importer.
 public struct GemmaModelRootIdentity: Sendable, Equatable {
@@ -22,6 +23,11 @@ struct GemmaModelVerificationHooks: Sendable {
 
 /// Verifies installed Gemma trees without downloading, resolving, or loading a model.
 public struct GemmaModelVerifier: Sendable {
+    private static let temporaryDiagnosticLogger = Logger(
+        subsystem: "org.steno.Steno.GemmaXPC",
+        category: "ManifestStatDiagnostic"
+    )
+
     public let requirements: GemmaModelRequirements
 
     public init(requirements: GemmaModelRequirements) {
@@ -339,11 +345,302 @@ public struct GemmaModelVerifier: Sendable {
             smallFiles: smallFiles,
             bindings: bindings,
             shardDescriptors: shardDescriptors,
+            revalidationMode: .directoryAndDescriptors,
             ownedDescriptorCloser: ownedDescriptorCloser
         )
         ownsShardDescriptors = false
         ownsDescriptor = false
         return assets
+    }
+
+    /// Adopts the directory and exact leaf descriptors received from a verified one-shot handoff.
+    ///
+    /// Ownership of every descriptor transfers at entry. This path deliberately never opens a
+    /// child by name: a sandboxed receiver may possess the already-open descriptors without a
+    /// sandbox extension that permits another `openat` below the root directory.
+    @_spi(StenoGemmaRuntime)
+    public func makeActivationAssets(
+        adoptingDescriptorHandoffRootDescriptor rootDescriptor: Int32,
+        fileDescriptorsByRelativePath: [String: Int32],
+        expectedRootIdentity: GemmaModelRootIdentity,
+        limits: VerifiedGemmaModelActivationLimits,
+        cancellationCheck: @Sendable () throws -> Void = { try Task.checkCancellation() }
+    ) throws -> VerifiedGemmaModelActivationAssets {
+        var ownedDescriptors = Set(fileDescriptorsByRelativePath.values)
+        if rootDescriptor >= 0 {
+            ownedDescriptors.insert(rootDescriptor)
+        }
+        defer {
+            for descriptor in ownedDescriptors where descriptor >= 0 {
+                _ = Darwin.close(descriptor)
+            }
+        }
+
+        guard rootDescriptor >= 0,
+              !fileDescriptorsByRelativePath.values.contains(rootDescriptor),
+              fileDescriptorsByRelativePath.values.allSatisfy({ $0 >= 0 }),
+              fileDescriptorsByRelativePath.values.count == Set(fileDescriptorsByRelativePath.values).count
+        else {
+            throw GemmaModelVerificationError.invalidRootDescriptor
+        }
+        try Self.prepareAdoptedRootDescriptor(rootDescriptor)
+        let rootStatus = try Self.status(of: rootDescriptor, path: ".")
+        try Self.validateDirectory(rootStatus, path: ".")
+        guard Self.identity(of: rootStatus) == expectedRootIdentity else {
+            throw GemmaModelVerificationError.rootIdentityMismatch
+        }
+
+        guard let manifestDescriptor = fileDescriptorsByRelativePath[requirements.manifestFileName] else {
+            throw GemmaModelVerificationError.manifestFileMissing(requirements.manifestFileName)
+        }
+        let manifestStatus = try Self.prepareAdoptedFileDescriptor(
+            manifestDescriptor,
+            path: requirements.manifestFileName
+        )
+        guard manifestStatus.st_size <= Int64(GemmaModelManifest.maximumManifestByteCount) else {
+            throw GemmaModelVerificationError.manifestTooLarge(
+                limit: GemmaModelManifest.maximumManifestByteCount,
+                actualAtLeast: Int(manifestStatus.st_size)
+            )
+        }
+        let manifestData: Data
+        do {
+            manifestData = try Self.readVerifiedData(
+                descriptor: manifestDescriptor,
+                expectedStatus: manifestStatus,
+                path: requirements.manifestFileName,
+                expectedSHA256: requirements.expectedManifestSHA256,
+                maximumBytes: GemmaModelManifest.maximumManifestByteCount,
+                cancellationCheck: cancellationCheck
+            )
+        } catch GemmaModelVerificationError.fileHashMismatch(_, _, let actual) {
+            throw GemmaModelVerificationError.manifestDigestMismatch(
+                expected: requirements.expectedManifestSHA256,
+                actual: actual
+            )
+        }
+        let manifest = try GemmaModelManifest.decode(from: manifestData)
+        try manifest.validate(against: requirements)
+
+        let expectedPaths = Set(manifest.files.map(\.relativePath)).union([requirements.manifestFileName])
+        guard Set(fileDescriptorsByRelativePath.keys) == expectedPaths else {
+            throw GemmaModelVerificationError.entryChanged("descriptor-handoff")
+        }
+
+        var identities = Set<GemmaDescriptorFileIdentity>()
+        guard identities.insert(GemmaDescriptorFileIdentity(manifestStatus)).inserted else {
+            throw GemmaModelVerificationError.entryChanged(requirements.manifestFileName)
+        }
+
+        var smallFiles: [String: Data] = [requirements.manifestFileName: manifestData]
+        var smallTotal = 0
+        try limits.recordSmallFile(
+            path: requirements.manifestFileName,
+            size: manifestData.count,
+            total: &smallTotal
+        )
+        var bindings: [GemmaActivationFileBinding] = [
+            .init(
+                relativePath: requirements.manifestFileName,
+                expectedStatus: manifestStatus,
+                descriptor: nil,
+                expectedSHA256: requirements.expectedManifestSHA256
+            ),
+        ]
+        var shardDescriptors: [String: Int32] = [:]
+        var shardTotal: Int64 = 0
+        var indexData: Data?
+
+        for file in manifest.files.sorted(by: { $0.relativePath < $1.relativePath }) {
+            try cancellationCheck()
+            guard let descriptor = fileDescriptorsByRelativePath[file.relativePath] else {
+                throw GemmaModelVerificationError.missingFile(file.relativePath)
+            }
+            let status = try Self.prepareAdoptedFileDescriptor(descriptor, path: file.relativePath)
+            guard identities.insert(GemmaDescriptorFileIdentity(status)).inserted else {
+                throw GemmaModelVerificationError.entryChanged(file.relativePath)
+            }
+            guard status.st_size == file.size else {
+                throw GemmaModelVerificationError.fileSizeMismatch(
+                    path: file.relativePath,
+                    expected: file.size,
+                    actual: status.st_size
+                )
+            }
+
+            if GemmaModelManifest.isSafetensorsFile(file.relativePath) {
+                try limits.recordSafetensorsFile(
+                    path: file.relativePath,
+                    size: file.size,
+                    total: &shardTotal,
+                    count: shardDescriptors.count
+                )
+                _ = try Self.readVerifiedData(
+                    descriptor: descriptor,
+                    expectedStatus: status,
+                    path: file.relativePath,
+                    expectedSHA256: file.sha256,
+                    maximumBytes: 0,
+                    cancellationCheck: cancellationCheck,
+                    retainData: false
+                )
+                shardDescriptors[file.relativePath] = descriptor
+                bindings.append(.init(
+                    relativePath: file.relativePath,
+                    expectedStatus: status,
+                    descriptor: descriptor,
+                    expectedSHA256: file.sha256
+                ))
+            } else {
+                let size = try Self.checkedInt(file.size, path: file.relativePath)
+                try limits.recordSmallFile(path: file.relativePath, size: size, total: &smallTotal)
+                let data = try Self.readVerifiedData(
+                    descriptor: descriptor,
+                    expectedStatus: status,
+                    path: file.relativePath,
+                    expectedSHA256: file.sha256,
+                    maximumBytes: size,
+                    cancellationCheck: cancellationCheck
+                )
+                smallFiles[file.relativePath] = data
+                if file.relativePath == "model.safetensors.index.json" {
+                    indexData = data
+                }
+                bindings.append(.init(
+                    relativePath: file.relativePath,
+                    expectedStatus: status,
+                    descriptor: nil,
+                    expectedSHA256: file.sha256
+                ))
+            }
+        }
+        try Self.validateSafetensorsIndex(
+            indexData,
+            expectedFiles: Dictionary(uniqueKeysWithValues: manifest.files.map { ($0.relativePath, $0) })
+        )
+
+        let finalRootStatus = try Self.status(of: rootDescriptor, path: ".")
+        guard Self.sameStableState(rootStatus, finalRootStatus) else {
+            throw GemmaModelVerificationError.entryChanged(".")
+        }
+        ownedDescriptors.remove(rootDescriptor)
+        for descriptor in shardDescriptors.values {
+            ownedDescriptors.remove(descriptor)
+        }
+        return VerifiedGemmaModelActivationAssets(
+            rootDescriptor: rootDescriptor,
+            rootStatus: rootStatus,
+            rootIdentity: expectedRootIdentity,
+            requirements: requirements,
+            smallFiles: smallFiles,
+            bindings: bindings,
+            shardDescriptors: shardDescriptors,
+            revalidationMode: .descriptorsOnly,
+            ownedDescriptorCloser: { _ = Darwin.close($0) }
+        )
+    }
+
+    fileprivate func makeDescriptorHandoff(
+        adoptingDirectoryDescriptor descriptor: Int32,
+        expectedRootIdentity: GemmaModelRootIdentity,
+        cancellationCheck: @Sendable () throws -> Void
+    ) throws -> VerifiedGemmaModelDescriptorHandoff {
+        var ownedDescriptors: [String: Int32] = [:]
+        var ownsRoot = descriptor >= 0
+        defer {
+            if ownsRoot { _ = Darwin.close(descriptor) }
+            for fileDescriptor in ownedDescriptors.values { _ = Darwin.close(fileDescriptor) }
+        }
+
+        let initialRoot = try verifiedRoot(
+            descriptor: descriptor,
+            expectedRootIdentity: expectedRootIdentity,
+            cancellationCheck: cancellationCheck
+        )
+        let manifestOpened = try Self.openVerifiedRegularFile(
+            from: descriptor,
+            relativePath: requirements.manifestFileName,
+            missingFileError: .manifestFileMissing(requirements.manifestFileName)
+        )
+        ownedDescriptors[requirements.manifestFileName] = manifestOpened.descriptor
+        guard manifestOpened.status.st_size <= Int64(GemmaModelManifest.maximumManifestByteCount) else {
+            throw GemmaModelVerificationError.manifestTooLarge(
+                limit: GemmaModelManifest.maximumManifestByteCount,
+                actualAtLeast: Int(manifestOpened.status.st_size)
+            )
+        }
+        let manifestData = try Self.readVerifiedData(
+            descriptor: manifestOpened.descriptor,
+            expectedStatus: manifestOpened.status,
+            path: requirements.manifestFileName,
+            expectedSHA256: requirements.expectedManifestSHA256,
+            maximumBytes: GemmaModelManifest.maximumManifestByteCount,
+            cancellationCheck: cancellationCheck
+        )
+        let manifest = try GemmaModelManifest.decode(from: manifestData)
+        try manifest.validate(against: requirements)
+
+        var identities = Set<GemmaDescriptorFileIdentity>()
+        _ = identities.insert(GemmaDescriptorFileIdentity(manifestOpened.status))
+        var descriptorFileMetadata: [VerifiedGemmaModelDescriptorFileMetadata] = [
+            .init(
+                relativePath: requirements.manifestFileName,
+                size: manifestOpened.status.st_size,
+                sha256: requirements.expectedManifestSHA256
+            ),
+        ]
+        for file in manifest.files.sorted(by: { $0.relativePath < $1.relativePath }) {
+            try cancellationCheck()
+            let opened = try Self.openVerifiedRegularFile(from: descriptor, relativePath: file.relativePath)
+            do {
+                guard opened.status.st_size == file.size else {
+                    throw GemmaModelVerificationError.fileSizeMismatch(
+                        path: file.relativePath,
+                        expected: file.size,
+                        actual: opened.status.st_size
+                    )
+                }
+                guard identities.insert(GemmaDescriptorFileIdentity(opened.status)).inserted else {
+                    throw GemmaModelVerificationError.entryChanged(file.relativePath)
+                }
+                _ = try Self.readVerifiedData(
+                    descriptor: opened.descriptor,
+                    expectedStatus: opened.status,
+                    path: file.relativePath,
+                    expectedSHA256: file.sha256,
+                    maximumBytes: 0,
+                    cancellationCheck: cancellationCheck,
+                    retainData: false
+                )
+                ownedDescriptors[file.relativePath] = opened.descriptor
+                descriptorFileMetadata.append(.init(
+                    relativePath: file.relativePath,
+                    size: opened.status.st_size,
+                    sha256: file.sha256
+                ))
+            } catch {
+                _ = Darwin.close(opened.descriptor)
+                throw error
+            }
+        }
+        let finalRoot = try verifiedRoot(
+            descriptor: descriptor,
+            expectedRootIdentity: expectedRootIdentity,
+            cancellationCheck: cancellationCheck
+        )
+        guard Self.sameStableState(initialRoot.status, finalRoot.status) else {
+            throw GemmaModelVerificationError.entryChanged(".")
+        }
+        let handoff = VerifiedGemmaModelDescriptorHandoff(
+            rootDescriptor: descriptor,
+            fileDescriptorsByRelativePath: ownedDescriptors,
+            rootIdentity: expectedRootIdentity,
+            requirements: requirements,
+            files: descriptorFileMetadata.sorted { $0.relativePath < $1.relativePath }
+        )
+        ownsRoot = false
+        ownedDescriptors = [:]
+        return handoff
     }
 
     fileprivate static func revalidateActivationBindings(
@@ -352,8 +649,36 @@ public struct GemmaModelVerifier: Sendable {
         rootIdentity: GemmaModelRootIdentity,
         requirements: GemmaModelRequirements,
         bindings: [GemmaActivationFileBinding],
+        mode: GemmaActivationRevalidationMode,
         cancellationCheck: @Sendable () throws -> Void
     ) throws {
+        if mode == .descriptorsOnly {
+            let verifiedRoot = try status(of: rootDescriptor, path: ".")
+            try validateDirectory(verifiedRoot, path: ".")
+            guard identity(of: verifiedRoot) == rootIdentity,
+                  sameStableState(rootStatus, verifiedRoot)
+            else {
+                throw GemmaModelVerificationError.entryChanged(".")
+            }
+            for binding in bindings {
+                try cancellationCheck()
+                guard let descriptor = binding.descriptor else { continue }
+                let descriptorStatus = try status(of: descriptor, path: binding.relativePath)
+                guard sameStableState(binding.expectedStatus, descriptorStatus) else {
+                    throw GemmaModelVerificationError.entryChanged(binding.relativePath)
+                }
+                _ = try readVerifiedData(
+                    descriptor: descriptor,
+                    expectedStatus: binding.expectedStatus,
+                    path: binding.relativePath,
+                    expectedSHA256: binding.expectedSHA256,
+                    maximumBytes: 0,
+                    cancellationCheck: cancellationCheck,
+                    retainData: false
+                )
+            }
+            return
+        }
         let verifiedRoot = try GemmaModelVerifier(requirements: requirements).verifiedRoot(
             descriptor: rootDescriptor,
             expectedRootIdentity: rootIdentity,
@@ -451,6 +776,9 @@ public struct GemmaModelVerifier: Sendable {
                 if namedErrno == ENOENT, let missingFileError {
                     throw missingFileError
                 }
+                temporaryDiagnosticLogger.error(
+                    "Named status failed path=\(relativePath, privacy: .public) errno=\(namedErrno)"
+                )
                 throw GemmaModelVerificationError.entryChanged(relativePath)
             }
             if namedBefore.st_mode & S_IFMT == S_IFLNK {
@@ -464,6 +792,10 @@ public struct GemmaModelVerifier: Sendable {
                 )
             }
             guard fileDescriptor >= 0 else {
+                let openErrno = errno
+                temporaryDiagnosticLogger.error(
+                    "Open failed path=\(relativePath, privacy: .public) errno=\(openErrno)"
+                )
                 throw GemmaModelVerificationError.entryChanged(relativePath)
             }
             var ownsFileDescriptor = true
@@ -474,6 +806,11 @@ public struct GemmaModelVerifier: Sendable {
             }
             let opened = try status(of: fileDescriptor, path: relativePath)
             guard sameStableState(namedBefore, opened) else {
+                let named = stableStateDiagnostic(namedBefore)
+                let descriptor = stableStateDiagnostic(opened)
+                temporaryDiagnosticLogger.error(
+                    "Open status mismatch path=\(relativePath, privacy: .public) named=\(named, privacy: .public) descriptor=\(descriptor, privacy: .public)"
+                )
                 throw GemmaModelVerificationError.entryChanged(relativePath)
             }
             try validateFile(opened, path: relativePath)
@@ -509,6 +846,9 @@ public struct GemmaModelVerifier: Sendable {
         retainData: Bool = true
     ) throws -> Data {
         guard expectedStatus.st_size >= 0 else {
+            temporaryDiagnosticLogger.error(
+                "Negative expected size path=\(path, privacy: .public) size=\(expectedStatus.st_size)"
+            )
             throw GemmaModelVerificationError.entryChanged(path)
         }
         let expectedSize = try checkedInt(expectedStatus.st_size, path: path)
@@ -541,6 +881,9 @@ public struct GemmaModelVerifier: Sendable {
                 break
             }
             guard count > 0 else {
+                temporaryDiagnosticLogger.error(
+                    "Early EOF path=\(path, privacy: .public) expectedSize=\(expectedSize) remaining=\(remaining) offset=\(offset)"
+                )
                 throw GemmaModelVerificationError.entryChanged(path)
             }
             let chunk = Data(buffer[0 ..< count])
@@ -554,12 +897,21 @@ public struct GemmaModelVerifier: Sendable {
             let result = Darwin.pread(descriptor, &probe, 1, offset)
             if result < 0, errno == EINTR { continue }
             guard result == 0 else {
+                let probeErrno = errno
+                temporaryDiagnosticLogger.error(
+                    "EOF probe failed path=\(path, privacy: .public) result=\(result) errno=\(probeErrno) offset=\(offset)"
+                )
                 throw GemmaModelVerificationError.entryChanged(path)
             }
             break
         }
         let finalStatus = try status(of: descriptor, path: path)
         guard sameStableState(expectedStatus, finalStatus) else {
+            let expected = stableStateDiagnostic(expectedStatus)
+            let actual = stableStateDiagnostic(finalStatus)
+            temporaryDiagnosticLogger.error(
+                "Read status mismatch path=\(path, privacy: .public) expected=\(expected, privacy: .public) actual=\(actual, privacy: .public)"
+            )
             throw GemmaModelVerificationError.entryChanged(path)
         }
         let actualSHA256 = hasher.finalize().map { String(format: "%02x", $0) }.joined()
@@ -620,6 +972,28 @@ public struct GemmaModelVerifier: Sendable {
         guard status.st_mode & S_IFMT == S_IFDIR else {
             throw GemmaModelVerificationError.rootIsNotDirectory
         }
+    }
+
+    private static func prepareAdoptedFileDescriptor(
+        _ descriptor: Int32,
+        path: String
+    ) throws -> stat {
+        guard descriptor >= 0 else {
+            throw GemmaModelVerificationError.unreadableFile(path)
+        }
+        let descriptorFlags = Darwin.fcntl(descriptor, F_GETFD)
+        guard descriptorFlags >= 0,
+              Darwin.fcntl(descriptor, F_SETFD, descriptorFlags | FD_CLOEXEC) == 0
+        else {
+            throw GemmaModelVerificationError.unreadableFile(path)
+        }
+        let statusFlags = Darwin.fcntl(descriptor, F_GETFL)
+        guard statusFlags >= 0, statusFlags & O_ACCMODE == O_RDONLY else {
+            throw GemmaModelVerificationError.unreadableFile(path)
+        }
+        let status = try status(of: descriptor, path: path)
+        try validateFile(status, path: path)
+        return status
     }
 
     private static func readPinnedManifest(
@@ -888,7 +1262,14 @@ public struct GemmaModelVerifier: Sendable {
                     }
                 } else if path == expectedTree.manifestPath {
                     guard sameStableState(expectedTree.manifestStatus, before) else {
-                        throw GemmaModelVerificationError.entryChanged(path)
+                        let expected = stableStateDiagnostic(expectedTree.manifestStatus)
+                        let actual = stableStateDiagnostic(before)
+                        temporaryDiagnosticLogger.error(
+                            "Manifest status mismatch expected=\(expected, privacy: .public) actual=\(actual, privacy: .public)"
+                        )
+                        throw GemmaModelVerificationError.entryChanged(
+                            "\(path) [TEMP expected=\(expected) actual=\(actual)]"
+                        )
                     }
                 } else if let expected = expectedTree.files[path], before.st_size != expected.size {
                     throw GemmaModelVerificationError.fileSizeMismatch(
@@ -1050,6 +1431,10 @@ public struct GemmaModelVerifier: Sendable {
             && lhs.st_ctimespec.tv_nsec == rhs.st_ctimespec.tv_nsec
     }
 
+    private static func stableStateDiagnostic(_ value: stat) -> String {
+        "dev:\(value.st_dev),ino:\(value.st_ino),mode:\(value.st_mode),uid:\(value.st_uid),nlink:\(value.st_nlink),size:\(value.st_size),mtime:\(value.st_mtimespec.tv_sec).\(value.st_mtimespec.tv_nsec),ctime:\(value.st_ctimespec.tv_sec).\(value.st_ctimespec.tv_nsec)"
+    }
+
     private static func directoryEntryName(_ entry: UnsafeMutablePointer<dirent>) -> String? {
         withUnsafePointer(to: entry.pointee.d_name) { pointer in
             pointer.withMemoryRebound(to: CChar.self, capacity: Int(MAXNAMLEN) + 1) {
@@ -1185,6 +1570,24 @@ public final class VerifiedGemmaModelDirectory: @unchecked Sendable {
         )
     }
 
+    /// Transfers this directory capability into a one-shot, descriptor-only transport bundle.
+    ///
+    /// The returned bundle owns the root descriptor, the manifest descriptor, and one descriptor
+    /// for every manifest-listed file. The directory capability is invalid after this call.
+    @_spi(StenoGemmaRuntime)
+    public func consumeDescriptorHandoff(
+        cancellationCheck: @Sendable () throws -> Void = { try Task.checkCancellation() }
+    ) throws -> VerifiedGemmaModelDescriptorHandoff {
+        guard let descriptor = state.takeDescriptor() else {
+            throw GemmaModelVerificationError.activationAssetsUnavailable
+        }
+        return try GemmaModelVerifier(requirements: requirements).makeDescriptorHandoff(
+            adoptingDirectoryDescriptor: descriptor,
+            expectedRootIdentity: rootIdentity,
+            cancellationCheck: cancellationCheck
+        )
+    }
+
     func consumeActivationAssetsForTesting(
         limits: VerifiedGemmaModelActivationLimits,
         beforeOpeningModelFile: @escaping @Sendable (String) throws -> Void = { _ in },
@@ -1201,6 +1604,141 @@ public final class VerifiedGemmaModelDirectory: @unchecked Sendable {
             beforeOpeningModelFile: beforeOpeningModelFile,
             ownedDescriptorCloser: ownedDescriptorCloser
         )
+    }
+}
+
+/// An owned one-shot package of verified model descriptors for transfer to a constrained process.
+///
+/// The raw descriptor numbers are intentionally available only inside `consume`. The callback
+/// must transfer or duplicate them synchronously and must not close or retain the numeric values.
+@_spi(StenoGemmaRuntime)
+public final class VerifiedGemmaModelDescriptorHandoff: @unchecked Sendable {
+    public let modelIdentifier: String
+    public let checkpointRevision: String
+    public let adapterRevision: String
+    public let licenseIdentifier: String
+    public let manifestSHA256: String
+    public let rootIdentity: GemmaModelRootIdentity
+    public let files: [VerifiedGemmaModelDescriptorFileMetadata]
+
+    private let state: VerifiedGemmaModelDescriptorHandoffState
+
+    fileprivate init(
+        rootDescriptor: Int32,
+        fileDescriptorsByRelativePath: [String: Int32],
+        rootIdentity: GemmaModelRootIdentity,
+        requirements: GemmaModelRequirements,
+        files: [VerifiedGemmaModelDescriptorFileMetadata]
+    ) {
+        self.rootIdentity = rootIdentity
+        modelIdentifier = requirements.modelIdentifier
+        checkpointRevision = requirements.checkpointRevision
+        adapterRevision = requirements.adapterRevision
+        licenseIdentifier = requirements.licenseIdentifier
+        manifestSHA256 = requirements.expectedManifestSHA256
+        self.files = files
+        state = VerifiedGemmaModelDescriptorHandoffState(
+            rootDescriptor: rootDescriptor,
+            fileDescriptorsByRelativePath: fileDescriptorsByRelativePath
+        )
+    }
+
+    deinit {
+        close()
+    }
+
+    /// Permanently closes every owned descriptor. Repeated calls are harmless.
+    public func close() {
+        state.close()
+    }
+
+    /// Borrows the root descriptor and exactly the manifest plus manifest-listed file descriptors.
+    ///
+    /// This one-shot borrow never transfers ownership. The bundle retains every original
+    /// descriptor until the transport explicitly calls `close()`, normally after its bind ACK or
+    /// an invalidation. A receiver may only create synchronous IPC descriptor duplicates here.
+    public func withBorrowedFileDescriptors<Result>(
+        _ body: (Int32, [String: Int32]) throws -> Result
+    ) throws -> Result {
+        try state.withBorrowedResources { resources in
+            try body(resources.rootDescriptor, resources.fileDescriptorsByRelativePath)
+        }
+    }
+}
+
+/// Immutable manifest-bound file metadata accompanying a descriptor handoff.
+@_spi(StenoGemmaRuntime)
+public struct VerifiedGemmaModelDescriptorFileMetadata: Sendable, Equatable {
+    public let relativePath: String
+    public let size: Int64
+    public let sha256: String
+
+    fileprivate init(relativePath: String, size: Int64, sha256: String) {
+        self.relativePath = relativePath
+        self.size = size
+        self.sha256 = sha256
+    }
+}
+
+private final class VerifiedGemmaModelDescriptorHandoffState: @unchecked Sendable {
+    private enum State {
+        case ready(GemmaDescriptorHandoffResources)
+        case borrowed(GemmaDescriptorHandoffResources)
+        case finished
+    }
+
+    private let lock = NSLock()
+    private var state: State
+
+    init(rootDescriptor: Int32, fileDescriptorsByRelativePath: [String: Int32]) {
+        state = .ready(GemmaDescriptorHandoffResources(
+            rootDescriptor: rootDescriptor,
+            fileDescriptorsByRelativePath: fileDescriptorsByRelativePath
+        ))
+    }
+
+    func close() {
+        let resources: GemmaDescriptorHandoffResources? = lock.withLock {
+            let ownedResources: GemmaDescriptorHandoffResources
+            switch state {
+            case .ready(let resources), .borrowed(let resources):
+                ownedResources = resources
+            case .finished:
+                return nil
+            }
+            state = .finished
+            return ownedResources
+        }
+        resources?.close()
+    }
+
+    func withBorrowedResources<Result>(
+        _ body: (GemmaDescriptorHandoffResources) throws -> Result
+    ) throws -> Result {
+        try lock.withLock {
+            guard case .ready(let resources) = state else {
+                throw GemmaModelVerificationError.activationAssetsUnavailable
+            }
+            state = .borrowed(resources)
+            return try body(resources)
+        }
+    }
+}
+
+private final class GemmaDescriptorHandoffResources {
+    let rootDescriptor: Int32
+    let fileDescriptorsByRelativePath: [String: Int32]
+
+    init(rootDescriptor: Int32, fileDescriptorsByRelativePath: [String: Int32]) {
+        self.rootDescriptor = rootDescriptor
+        self.fileDescriptorsByRelativePath = fileDescriptorsByRelativePath
+    }
+
+    func close() {
+        _ = Darwin.close(rootDescriptor)
+        for descriptor in fileDescriptorsByRelativePath.values {
+            _ = Darwin.close(descriptor)
+        }
     }
 }
 
@@ -1341,6 +1879,7 @@ public final class VerifiedGemmaModelActivationAssets: @unchecked Sendable {
         smallFiles: [String: Data],
         bindings: [GemmaActivationFileBinding],
         shardDescriptors: [String: Int32],
+        revalidationMode: GemmaActivationRevalidationMode,
         ownedDescriptorCloser: @escaping @Sendable (Int32) -> Void
     ) {
         self.rootIdentity = rootIdentity
@@ -1357,6 +1896,7 @@ public final class VerifiedGemmaModelActivationAssets: @unchecked Sendable {
             smallFiles: smallFiles,
             bindings: bindings,
             shardDescriptors: shardDescriptors,
+            revalidationMode: revalidationMode,
             ownedDescriptorCloser: ownedDescriptorCloser
         )
     }
@@ -1612,6 +2152,21 @@ private struct OpenedActivationFile {
     let status: stat
 }
 
+private struct GemmaDescriptorFileIdentity: Hashable {
+    let device: dev_t
+    let inode: ino_t
+
+    init(_ status: stat) {
+        device = status.st_dev
+        inode = status.st_ino
+    }
+}
+
+private enum GemmaActivationRevalidationMode: Equatable {
+    case directoryAndDescriptors
+    case descriptorsOnly
+}
+
 private final class BorrowedGemmaSafetensorsFileState: @unchecked Sendable {
     private let lock = NSLock()
     private var valid = true
@@ -1729,6 +2284,7 @@ private final class GemmaActivationAssetsState: @unchecked Sendable {
         smallFiles: [String: Data],
         bindings: [GemmaActivationFileBinding],
         shardDescriptors: [String: Int32],
+        revalidationMode: GemmaActivationRevalidationMode,
         ownedDescriptorCloser: @escaping @Sendable (Int32) -> Void
     ) {
         state = .ready(GemmaActivationResources(
@@ -1739,6 +2295,7 @@ private final class GemmaActivationAssetsState: @unchecked Sendable {
             smallFiles: smallFiles,
             bindings: bindings,
             shardDescriptors: shardDescriptors,
+            revalidationMode: revalidationMode,
             ownedDescriptorCloser: ownedDescriptorCloser
         ))
     }
@@ -1826,6 +2383,7 @@ private final class GemmaActivationAssetsState: @unchecked Sendable {
             rootIdentity: resources.rootIdentity,
             requirements: resources.requirements,
             bindings: resources.bindings,
+            mode: resources.revalidationMode,
             cancellationCheck: {
                 try self.requireConsumptionOpen(
                     resourceIdentity: resourceIdentity,
@@ -1891,6 +2449,7 @@ private final class GemmaActivationResources {
     let smallFiles: [String: Data]
     let bindings: [GemmaActivationFileBinding]
     let shardDescriptors: [String: Int32]
+    let revalidationMode: GemmaActivationRevalidationMode
     private let ownedDescriptorCloser: @Sendable (Int32) -> Void
 
     init(
@@ -1901,6 +2460,7 @@ private final class GemmaActivationResources {
         smallFiles: [String: Data],
         bindings: [GemmaActivationFileBinding],
         shardDescriptors: [String: Int32],
+        revalidationMode: GemmaActivationRevalidationMode,
         ownedDescriptorCloser: @escaping @Sendable (Int32) -> Void
     ) {
         self.rootDescriptor = rootDescriptor
@@ -1910,6 +2470,7 @@ private final class GemmaActivationResources {
         self.smallFiles = smallFiles
         self.bindings = bindings
         self.shardDescriptors = shardDescriptors
+        self.revalidationMode = revalidationMode
         self.ownedDescriptorCloser = ownedDescriptorCloser
     }
 
