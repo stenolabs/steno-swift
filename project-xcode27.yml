@@ -35,6 +35,15 @@ targets:
       base:
         MACOSX_DEPLOYMENT_TARGET: "27.0"
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) STENO_NATIVE_GEMMA_MODEL_STORE"
+      configs:
+        Release:
+          ENABLE_HARDENED_RUNTIME: true
+          CODE_SIGN_INJECT_BASE_ENTITLEMENTS: false
+    entitlements:
+      path: .build/XcodeGen/Steno27/Steno.entitlements
+      properties:
+        com.apple.security.device.audio-input: true
+        com.apple.security.personal-information.calendars: true
 
   StenoTests:
     sources:
@@ -97,6 +106,9 @@ targets:
         REGISTER_APP_GROUPS: false
         APPLICATION_EXTENSION_API_ONLY: true
         CODE_SIGN_STYLE: Automatic
+      configs:
+        Release:
+          CODE_SIGN_INJECT_BASE_ENTITLEMENTS: false
 
 schemes:
   Steno27:

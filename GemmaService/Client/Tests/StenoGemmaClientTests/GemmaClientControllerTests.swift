@@ -572,23 +572,68 @@ struct GemmaClientControllerTests {
         }
     }
 
-    @Test("helper security profile requires sandbox and forbids network entitlements")
+    @Test("helper security profile requires Hardened Runtime and sandbox without network")
     func helperSecurityProfileValidation() {
-        #expect(GemmaRawXPCSecurityProfile.isSafe(entitlements: [
+        let hardenedRuntime: UInt32 = 0x0001_0000
+        let sandboxed: [String: Any] = [
             "com.apple.security.app-sandbox": true,
-        ]))
-        #expect(!GemmaRawXPCSecurityProfile.isSafe(entitlements: nil))
-        #expect(!GemmaRawXPCSecurityProfile.isSafe(entitlements: [
-            "com.apple.security.app-sandbox": false,
-        ]))
-        #expect(!GemmaRawXPCSecurityProfile.isSafe(entitlements: [
+        ]
+
+        #expect(GemmaRawXPCSecurityProfile.isSafe(
+            entitlements: sandboxed,
+            codeDirectoryFlags: hardenedRuntime,
+            allowsDebugging: false
+        ))
+        #expect(GemmaRawXPCSecurityProfile.isSafe(
+            entitlements: sandboxed,
+            codeDirectoryFlags: hardenedRuntime | 0x0000_0200,
+            allowsDebugging: false
+        ))
+        #expect(!GemmaRawXPCSecurityProfile.isSafe(
+            entitlements: sandboxed,
+            codeDirectoryFlags: 0,
+            allowsDebugging: false
+        ))
+        #expect(!GemmaRawXPCSecurityProfile.isSafe(
+            entitlements: nil,
+            codeDirectoryFlags: hardenedRuntime,
+            allowsDebugging: false
+        ))
+        #expect(!GemmaRawXPCSecurityProfile.isSafe(
+            entitlements: ["com.apple.security.app-sandbox": false],
+            codeDirectoryFlags: hardenedRuntime,
+            allowsDebugging: false
+        ))
+        #expect(!GemmaRawXPCSecurityProfile.isSafe(
+            entitlements: [
+                "com.apple.security.app-sandbox": true,
+                "com.apple.security.network.client": true,
+            ],
+            codeDirectoryFlags: hardenedRuntime,
+            allowsDebugging: false
+        ))
+        #expect(!GemmaRawXPCSecurityProfile.isSafe(
+            entitlements: [
+                "com.apple.security.app-sandbox": true,
+                "com.apple.security.network.server": true,
+            ],
+            codeDirectoryFlags: hardenedRuntime,
+            allowsDebugging: false
+        ))
+        let debuggable = [
             "com.apple.security.app-sandbox": true,
-            "com.apple.security.network.client": true,
-        ]))
-        #expect(!GemmaRawXPCSecurityProfile.isSafe(entitlements: [
-            "com.apple.security.app-sandbox": true,
-            "com.apple.security.network.server": true,
-        ]))
+            "com.apple.security.get-task-allow": true,
+        ]
+        #expect(!GemmaRawXPCSecurityProfile.isSafe(
+            entitlements: debuggable,
+            codeDirectoryFlags: hardenedRuntime,
+            allowsDebugging: false
+        ))
+        #expect(GemmaRawXPCSecurityProfile.isSafe(
+            entitlements: debuggable,
+            codeDirectoryFlags: hardenedRuntime,
+            allowsDebugging: true
+        ))
     }
 
     private func makeController(

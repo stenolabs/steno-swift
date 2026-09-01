@@ -207,6 +207,19 @@ The signed XPC integration suite additionally proves:
 Signed negative tests for pre-bind frames, malformed or repeated binding, descriptor retention after the client closes its copy, peer disconnect, recording-intent preemption, model-only fault recovery, and protocol version skew remain open.
 Multiprocess XPC coverage also remains open.
 
+## Release code-signing profile
+
+The Xcode 27 Release configuration enables Hardened Runtime for both the app and the XPC helper and disables Xcode's injected base entitlements.
+The app receives only the microphone and calendar resource entitlements required by its existing local features.
+One shared policy rejects every peer with a Hardened Runtime exception entitlement.
+The client additionally rejects an embedded helper unless its CodeDirectory has the runtime flag, App Sandbox is enabled, network client and server entitlements are absent, and `get-task-allow` is absent in Release.
+The helper applies the same role-specific policy to itself and requires the authenticated Release app peer to have the runtime flag without `get-task-allow`.
+Debug builds may retain `get-task-allow` so the test host remains usable, but the helper itself remains hardened, sandboxed, and networkless.
+An arm64 Release build produced by Xcode 27 Beta 6 passed strict nested-signature validation.
+The inspected Release helper carried only `com.apple.security.app-sandbox`; neither binary carried `get-task-allow`, and the helper carried no network entitlement.
+This validates the code-signing profile, not TCC or Core Audio behavior.
+Manual Release verification of microphone recording, system-audio capture, and calendar access remains required.
+
 ## Future sandbox constraint
 
 The current macOS app is not sandboxed, while the XPC helper is sandboxed, hardened, and networkless.

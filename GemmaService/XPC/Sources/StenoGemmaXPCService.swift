@@ -1017,6 +1017,11 @@ private final class GemmaXPCReplyHandle: @unchecked Sendable {
 }
 
 private enum GemmaXPCCodeIdentity {
+#if DEBUG
+    private static let buildAllowsDebugging = true
+#else
+    private static let buildAllowsDebugging = false
+#endif
     private static let strictAppValidationFlags = SecCSFlags(
         rawValue: kSecCSStrictValidate | kSecCSCheckAllArchitectures | kSecCSCheckNestedCode
     )
@@ -1029,7 +1034,8 @@ private enum GemmaXPCCodeIdentity {
         var code: SecStaticCode?
         guard SecStaticCodeCreateWithPath(expectedURL as CFURL, SecCSFlags(), &code) == errSecSuccess,
               let code,
-              SecStaticCodeCheckValidity(code, strictAppValidationFlags, nil) == errSecSuccess
+              SecStaticCodeCheckValidity(code, strictAppValidationFlags, nil) == errSecSuccess,
+              appSecurityProfileIsSafe(staticCode: code)
         else {
             throw GemmaXPCSecurityError.untrustedCode
         }
@@ -1061,7 +1067,8 @@ private enum GemmaXPCCodeIdentity {
         }
         var staticCode: SecStaticCode?
         guard SecCodeCopyStaticCode(dynamicCode, SecCSFlags(), &staticCode) == errSecSuccess,
-              let staticCode
+              let staticCode,
+              appSecurityProfileIsSafe(staticCode: staticCode)
         else {
             return false
         }
@@ -1093,14 +1100,36 @@ private enum GemmaXPCCodeIdentity {
             &information
         ) == errSecSuccess,
         let dictionary = information as? [CFString: Any],
-        let entitlements = dictionary[kSecCodeInfoEntitlementsDict] as? [String: Any],
-        (entitlements["com.apple.security.app-sandbox"] as? Bool) == true,
-        (entitlements["com.apple.security.network.client"] as? Bool) != true,
-        (entitlements["com.apple.security.network.server"] as? Bool) != true
+        let codeDirectoryFlags = dictionary[kSecCodeInfoFlags] as? NSNumber
         else {
             return false
         }
-        return true
+        return GemmaCodeSecurityProfile.isSafe(
+            entitlements: dictionary[kSecCodeInfoEntitlementsDict] as? [String: Any],
+            codeDirectoryFlags: codeDirectoryFlags.uint32Value,
+            role: .helper,
+            allowsDebugging: buildAllowsDebugging
+        )
+    }
+
+    private static func appSecurityProfileIsSafe(staticCode: SecStaticCode) -> Bool {
+        var information: CFDictionary?
+        guard SecCodeCopySigningInformation(
+            staticCode,
+            SecCSFlags(rawValue: kSecCSSigningInformation),
+            &information
+        ) == errSecSuccess,
+        let dictionary = information as? [CFString: Any],
+        let codeDirectoryFlags = dictionary[kSecCodeInfoFlags] as? NSNumber
+        else {
+            return false
+        }
+        return GemmaCodeSecurityProfile.isSafe(
+            entitlements: dictionary[kSecCodeInfoEntitlementsDict] as? [String: Any],
+            codeDirectoryFlags: codeDirectoryFlags.uint32Value,
+            role: .application,
+            allowsDebugging: buildAllowsDebugging
+        )
     }
 
     private static func canonical(_ url: URL) -> URL {
