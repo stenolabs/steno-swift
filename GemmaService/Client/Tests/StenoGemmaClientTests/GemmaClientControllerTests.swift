@@ -6,370 +6,363 @@ import Testing
 
 @Suite("Gemma client recording barrier")
 struct GemmaClientControllerTests {
-    @Test("the controller connects lazily and release never reconnects eagerly")
-    func lazyConnectionAndReleaseSemantics() async throws {
+    @Test("one high-level session shares one transport and retires it on return")
+    func sharedTransportAndAutomaticRetirement() async throws {
         let events = EventLog()
         let transport = TestTransport(events: events)
         let factory = TestTransportFactory(transport: transport, events: events)
-        let controller = try GemmaClientController(
-            maximumInFlightRequests: 2,
-            transportFactory: factory,
-            exitProver: TestExitProver(events: events),
-            deadline: ManualDeadline()
-        )
+        let controller = try makeController(factory: factory, events: events)
 
-        #expect(await controller.lifecycleState() == .idle)
-        #expect(factory.creationCount == 0)
-
-        let lease = try await controller.acquireRecordingLease(GemmaRecordingLease())
-        #expect(await controller.lifecycleState() == .recording)
-        #expect(factory.creationCount == 0)
-
-        await #expect(throws: GemmaClientControllerError.recordingActive) {
-            try await controller.send(try generationBody(prompt: "during recording"))
+        try await controller.withModelSession { session in
+            _ = try await session.send(try handshakeBody())
+            _ = try await session.send(try tokenCountBody())
+            _ = try await session.send(try generationBody(prompt: "one helper"))
+            #expect(factory.creationCount == 1)
+            #expect(await controller.lifecycleState() == .active)
+            await #expect(throws: GemmaClientControllerError.modelSessionActive) {
+                try await controller.withModelSession { _ in () }
+            }
         }
-        #expect(factory.creationCount == 0)
 
-        try await controller.releaseRecordingLease(lease)
-        #expect(await controller.lifecycleState() == .idle)
-        #expect(factory.creationCount == 0)
-
-        let response = try await controller.send(try generationBody(prompt: "after recording"))
-        #expect(response == .generate(GemmaIPCGenerateResponse(text: "generated")))
         #expect(factory.creationCount == 1)
-        #expect(await controller.lifecycleState() == .connected)
+        #expect(events.count(of: "invalidate") == 1)
+        #expect(await controller.lifecycleState() == .idle)
     }
 
-    @Test("recording closes admission before cancelling a hanging active request")
-    func teardownOrderingWithHangingActiveRequest() async throws {
+    @Test("a retained session token cannot outlive its closure")
+    func retainedTokenIsRejected() async throws {
         let events = EventLog()
-        let applicationGate = AsyncGate<GemmaIPCResponseBody>()
-        let prepareGate = AsyncGate<Void>()
-        let transport = TestTransport(
-            events: events,
-            applicationGate: applicationGate,
-            prepareGate: prepareGate
-        )
-        let reconnectTransport = TestTransport(events: events)
-        let factory = TestTransportFactory(
-            transports: [transport, reconnectTransport],
+        let controller = try makeController(
+            factory: TestTransportFactory(transport: TestTransport(events: events), events: events),
             events: events
         )
+        let retained = try await controller.withModelSession { session in session }
+        await #expect(throws: GemmaClientControllerError.modelSessionInactive) {
+            try await retained.send(try generationBody(prompt: "late"))
+        }
+    }
+
+    @Test("throwing and cancellation each retire the helper exactly once")
+    func terminalClosurePathsRetireExactlyOnce() async throws {
+        let throwingEvents = EventLog()
+        let throwingTransport = TestTransport(events: throwingEvents)
+        let throwingController = try makeController(
+            factory: TestTransportFactory(transport: throwingTransport, events: throwingEvents),
+            events: throwingEvents
+        )
+        await #expect(throws: SessionTestError.expected) {
+            try await throwingController.withModelSession { session in
+                _ = try await session.send(try generationBody(prompt: "then throw"))
+                throw SessionTestError.expected
+            }
+        }
+        #expect(throwingEvents.count(of: "invalidate") == 1)
+
+        let cancellingEvents = EventLog()
+        let applicationGate = AsyncGate<GemmaIPCResponseBody>()
+        let cancellingTransport = TestTransport(events: cancellingEvents, applicationGate: applicationGate)
+        let cancellingController = try makeController(
+            factory: TestTransportFactory(transport: cancellingTransport, events: cancellingEvents),
+            events: cancellingEvents
+        )
+        let task = Task {
+            try await cancellingController.withModelSession { session in
+                _ = try await session.send(try generationBody(prompt: "cancel"))
+            }
+        }
+        await cancellingEvents.waitUntilPresent("send:generate")
+        task.cancel()
+        await #expect(throws: GemmaClientControllerError.requestCancelled) { try await task.value }
+        #expect(cancellingEvents.count(of: "invalidate") == 1)
+        applicationGate.resolve(.generate(GemmaIPCGenerateResponse(text: "late")))
+    }
+
+    @Test("recording waits on automatic retirement without an idle admission gap")
+    func recordingWaitsForRetirementWithoutIdleGap() async throws {
+        let events = EventLog()
+        let exitGate = AsyncGate<Void>()
+        let controller = try makeController(
+            factory: TestTransportFactory(transport: TestTransport(events: events), events: events),
+            events: events,
+            exitProver: TestExitProver(events: events, exitGate: exitGate)
+        )
+        let modelTask = Task {
+            try await controller.withModelSession { session in
+                _ = try await session.send(try generationBody(prompt: "retire"))
+            }
+        }
+        await events.waitUntilPresent("waitForExit")
+        #expect(await controller.lifecycleState() == .retiring)
+        await #expect(throws: GemmaClientControllerError.modelSessionRetiring) {
+            try await controller.withModelSession { _ in () }
+        }
+
+        let leaseToken = GemmaRecordingLease()
+        let recordingTask = Task { try await controller.acquireRecordingLease(leaseToken) }
+        await Task.yield()
+        #expect(await controller.lifecycleState() == .retiring)
+        exitGate.resolve(())
+        _ = try await recordingTask.value
+        try await modelTask.value
+        #expect(await controller.lifecycleState() == .recording)
+        try await controller.releaseRecordingLease(leaseToken)
+    }
+
+    @Test("recording preempts an active session and preserves request cancellation")
+    func recordingPreemptsActiveSession() async throws {
+        let events = EventLog()
+        let applicationGate = AsyncGate<GemmaIPCResponseBody>()
+        let controller = try makeController(
+            factory: TestTransportFactory(
+                transport: TestTransport(events: events, applicationGate: applicationGate),
+                events: events
+            ),
+            events: events
+        )
+        let modelTask = Task {
+            try await controller.withModelSession { session in
+                _ = try await session.send(try generationBody(prompt: "recording wins"))
+            }
+        }
+        await events.waitUntilPresent("send:generate")
+        let lease = try await controller.acquireRecordingLease(GemmaRecordingLease())
+        await #expect(throws: GemmaClientControllerError.cancelledForRecording) {
+            try await modelTask.value
+        }
+        #expect(events.count(of: "invalidate") == 1)
+        #expect(await controller.lifecycleState() == .recording)
+        try await controller.releaseRecordingLease(lease)
+        applicationGate.resolve(.generate(GemmaIPCGenerateResponse(text: "late")))
+    }
+
+    @Test("process-gate contention is recoverable and does not start a helper")
+    func gateBusyFactoryAdmissionIsRecoverable() async throws {
+        let events = EventLog()
+        let transport = TestTransport(events: events)
+        let factory = TestTransportFactory(
+            transport: transport,
+            events: events,
+            failFirstWithExecutionGateBusy: true
+        )
+        let controller = try makeController(factory: factory, events: events)
+
+        await #expect(throws: GemmaClientControllerError.modelAdmissionBusy) {
+            try await controller.send(try generationBody(prompt: "busy"))
+        }
+        #expect(factory.creationCount == 0)
+        #expect(await controller.lifecycleState() == .idle)
+        _ = try await controller.send(try generationBody(prompt: "recovered"))
+        #expect(factory.creationCount == 1)
+    }
+
+    @Test("the in-flight limit remains strict inside one shared session")
+    func inFlightLimitRemainsStrict() async throws {
+        let events = EventLog()
+        let applicationGate = AsyncGate<GemmaIPCResponseBody>()
+        let transport = TestTransport(events: events, applicationGate: applicationGate)
         let controller = try GemmaClientController(
-            maximumInFlightRequests: 2,
-            transportFactory: factory,
+            maximumInFlightRequests: 1,
+            transportFactory: TestTransportFactory(transport: transport, events: events),
             exitProver: TestExitProver(events: events),
             deadline: ManualDeadline()
         )
 
-        let requestTask = Task {
-            try await controller.send(try generationBody(prompt: "still running"))
+        try await controller.withModelSession { session in
+            let first = Task { try await session.send(try generationBody(prompt: "first")) }
+            await events.waitUntilPresent("send:generate")
+            await #expect(throws: GemmaClientControllerError.busy(limit: 1)) {
+                try await session.send(try generationBody(prompt: "second"))
+            }
+            applicationGate.resolve(.generate(GemmaIPCGenerateResponse(text: "first")))
+            _ = try await first.value
         }
-        await events.waitUntilPresent("send:generate")
-        #expect(await controller.inFlightRequestCount() == 1)
-
-        let leaseToken = GemmaRecordingLease()
-        let leaseTask = Task { try await controller.acquireRecordingLease(leaseToken) }
-        await events.waitUntilPresent("prepareForExit")
-        applicationGate.resolve(.generate(GemmaIPCGenerateResponse(text: "late")))
-        prepareGate.resolve(())
-        await events.waitUntilPresent("waitForExit")
-
-        await #expect(throws: GemmaClientControllerError.cancelledForRecording) {
-            try await requestTask.value
-        }
-        let lease = try await leaseTask.value
-        #expect(await controller.lifecycleState() == .recording)
-
-        let orderedEvents = events.snapshot()
-        #expect(orderedEvents.firstIndex(of: "factory")! < orderedEvents.firstIndex(of: "send:generate")!)
-        #expect(orderedEvents.firstIndex(of: "send:generate")! < orderedEvents.firstIndex(of: "prepareForExit")!)
-        #expect(orderedEvents.firstIndex(of: "prepareForExit")! < orderedEvents.firstIndex(of: "registerExitObservation")!)
-        #expect(orderedEvents.firstIndex(of: "registerExitObservation")! < orderedEvents.firstIndex(of: "send:cancel")!)
-        #expect(orderedEvents.firstIndex(of: "registerExitObservation")! < orderedEvents.firstIndex(of: "send:shutdown")!)
-        #expect(orderedEvents.firstIndex(of: "send:cancel")! < orderedEvents.firstIndex(of: "armAndExit")!)
-        #expect(orderedEvents.firstIndex(of: "send:shutdown")! < orderedEvents.firstIndex(of: "armAndExit")!)
-        #expect(Array(orderedEvents.suffix(3)) == [
-            "armAndExit",
-            "waitForExit",
-            "invalidate",
-        ])
-
-        await #expect(throws: GemmaClientControllerError.recordingActive) {
-            try await controller.send(try generationBody(prompt: "blocked"))
-        }
-        #expect(factory.creationCount == 1)
-
-        try await controller.releaseRecordingLease(lease)
-        #expect(factory.creationCount == 1)
-
-        let postRecordingResponse = try await controller.send(
-            try generationBody(prompt: "explicit reconnect")
-        )
-        #expect(postRecordingResponse == .generate(GemmaIPCGenerateResponse(text: "generated")))
-        #expect(factory.creationCount == 2)
     }
 
-    @Test("a hanging shutdown still permits recording after exact process exit proof")
-    func hangingShutdownFallsBackToProvenProcessExit() async throws {
+    @Test("recording proceeds when automatic retirement faults the model side")
+    func recordingSurvivesRetirementFailure() async throws {
         let events = EventLog()
-        let shutdownGate = AsyncGate<GemmaIPCResponseBody>()
-        let deadline = ManualDeadline()
-        let transport = TestTransport(
-            events: events,
-            shutdownGate: shutdownGate
+        let controller = try makeController(
+            factory: TestTransportFactory(
+                transport: TestTransport(events: events, armReturnsMismatch: true),
+                events: events
+            ),
+            events: events
         )
-        let factory = TestTransportFactory(transport: transport, events: events)
+        let modelTask = Task {
+            try await controller.withModelSession { session in
+                _ = try await session.send(try generationBody(prompt: "fail retirement"))
+            }
+        }
+        await events.waitUntilPresent("armAndExit")
+        let lease = try await controller.acquireRecordingLease(GemmaRecordingLease())
+        await #expect(throws: GemmaClientControllerError.exitArmMismatch) {
+            try await modelTask.value
+        }
+        #expect(await controller.lifecycleState() == .recording)
+        await #expect(throws: GemmaClientControllerError.faulted) {
+            try await controller.releaseRecordingLease(lease)
+        }
+        #expect(await controller.lifecycleState() == .faulted)
+    }
+
+    @Test("a bounded hanging shutdown still retires after the exact exit proof")
+    func hangingShutdownUsesExitProof() async throws {
+        let events = EventLog()
+        let deadline = ManualDeadline()
+        let shutdownGate = AsyncGate<GemmaIPCResponseBody>()
+        let hold = AsyncGate<Void>()
         let controller = try GemmaClientController(
             maximumInFlightRequests: 2,
-            transportFactory: factory,
+            transportFactory: TestTransportFactory(
+                transport: TestTransport(events: events, shutdownGate: shutdownGate),
+                events: events
+            ),
             exitProver: TestExitProver(events: events),
             deadline: deadline
         )
-
-        _ = try await controller.send(try generationBody(prompt: "connect"))
-        let leaseToken = GemmaRecordingLease()
-        let leaseTask = Task { try await controller.acquireRecordingLease(leaseToken) }
+        let modelTask = Task {
+            try await controller.withModelSession { session in
+                _ = try await session.send(try generationBody(prompt: "connect"))
+                await hold.wait()
+            }
+        }
+        await events.waitUntilPresent("send:generate")
+        let leaseTask = Task { try await controller.acquireRecordingLease(GemmaRecordingLease()) }
         await events.waitUntilPresent("send:shutdown")
         await deadline.waitUntilRegistered(.quiescentShutdown)
         deadline.expire(.quiescentShutdown)
-
-        await events.waitUntilPresent("waitForExit")
         let lease = try await leaseTask.value
-        #expect(await controller.lifecycleState() == .recording)
-        #expect(events.snapshot().suffix(3) == [
-            "armAndExit",
-            "waitForExit",
-            "invalidate",
-        ])
-        #expect(factory.creationCount == 1)
-
+        #expect(events.count(of: "invalidate") == 1)
+        hold.resolve(())
+        try await modelTask.value
         try await controller.releaseRecordingLease(lease)
-
-        shutdownGate.resolve(
-            .acknowledgement(
-                GemmaIPCAcknowledgement(kind: .shutdown, didChangeState: true)
-            )
-        )
+        shutdownGate.resolve(.acknowledgement(.init(kind: .shutdown, didChangeState: true)))
     }
 
-    @Test("all hanging cancellations and shutdown share one bounded quiescence deadline")
-    func hangingQuiescenceUsesOneSharedDeadline() async throws {
+    @Test("all cancellation and shutdown traffic shares one quiescence deadline")
+    func quiescenceUsesOneSharedDeadline() async throws {
         let events = EventLog()
+        let deadline = ManualDeadline()
         let applicationGate = AsyncGate<GemmaIPCResponseBody>()
         let quiescenceGate = AsyncGate<Void>()
-        let deadline = ManualDeadline()
-        let transport = TestTransport(
-            events: events,
-            applicationGate: applicationGate,
-            quiescenceGate: quiescenceGate
-        )
+        let hold = AsyncGate<Void>()
         let controller = try GemmaClientController(
             maximumInFlightRequests: 2,
-            transportFactory: TestTransportFactory(transport: transport, events: events),
+            transportFactory: TestTransportFactory(
+                transport: TestTransport(
+                    events: events,
+                    applicationGate: applicationGate,
+                    quiescenceGate: quiescenceGate
+                ),
+                events: events
+            ),
             exitProver: TestExitProver(events: events),
             deadline: deadline
         )
-
-        let firstRequest = Task {
-            try await controller.send(try generationBody(prompt: "first hanging request"))
-        }
-        let secondRequest = Task {
-            try await controller.send(try generationBody(prompt: "second hanging request"))
+        let modelTask = Task {
+            try await controller.withModelSession { session in
+                let first = Task { try await session.send(try generationBody(prompt: "first")) }
+                let second = Task { try await session.send(try generationBody(prompt: "second")) }
+                await events.waitUntilCount("send:generate", reaches: 2)
+                await hold.wait()
+                _ = try await first.value
+                _ = try await second.value
+            }
         }
         await events.waitUntilCount("send:generate", reaches: 2)
-
-        let leaseTask = Task {
-            try await controller.acquireRecordingLease(GemmaRecordingLease())
-        }
+        let leaseTask = Task { try await controller.acquireRecordingLease(GemmaRecordingLease()) }
         await events.waitUntilCount("send:cancel", reaches: 2)
         await events.waitUntilPresent("send:shutdown")
         await deadline.waitUntilRegistered(.quiescentShutdown)
         #expect(deadline.waiterCount(for: .quiescentShutdown) == 1)
-
         deadline.expire(.quiescentShutdown)
-
         let lease = try await leaseTask.value
-        #expect(await controller.lifecycleState() == .recording)
+        hold.resolve(())
         await #expect(throws: GemmaClientControllerError.cancelledForRecording) {
-            try await firstRequest.value
+            try await modelTask.value
         }
-        await #expect(throws: GemmaClientControllerError.cancelledForRecording) {
-            try await secondRequest.value
-        }
-        #expect(events.snapshot().contains("armAndExit"))
-        #expect(deadline.waiterCount(for: .quiescentShutdown) == 0)
-
         try await controller.releaseRecordingLease(lease)
         quiescenceGate.resolve(())
-        applicationGate.resolve(.failure(GemmaIPCFailure(code: .cancelled)))
+        applicationGate.resolve(.generate(.init(text: "late")))
     }
 
-    @Test("an unproven helper exit faults permanently without reconnect")
-    func hangingExitProofFaultsWithoutReconnect() async throws {
+    @Test("an unproven exit faults the model side without stranding recording")
+    func unprovenExitFaultsAfterRecordingAdmission() async throws {
         let events = EventLog()
         let deadline = ManualDeadline()
         let exitGate = AsyncGate<Void>()
-        let transport = TestTransport(events: events)
-        let factory = TestTransportFactory(transport: transport, events: events)
-        let exitProver = TestExitProver(events: events, exitGate: exitGate)
+        let hold = AsyncGate<Void>()
         let controller = try GemmaClientController(
-            maximumInFlightRequests: 2,
-            transportFactory: factory,
-            exitProver: exitProver,
+            maximumInFlightRequests: 1,
+            transportFactory: TestTransportFactory(transport: TestTransport(events: events), events: events),
+            exitProver: TestExitProver(events: events, exitGate: exitGate),
             deadline: deadline
         )
-
-        _ = try await controller.send(try generationBody(prompt: "connect"))
-        let leaseToken = GemmaRecordingLease()
-        let leaseTask = Task { try await controller.acquireRecordingLease(leaseToken) }
+        let modelTask = Task {
+            try await controller.withModelSession { session in
+                _ = try await session.send(try generationBody(prompt: "connect"))
+                await hold.wait()
+            }
+        }
+        await events.waitUntilPresent("send:generate")
+        let leaseTask = Task { try await controller.acquireRecordingLease(GemmaRecordingLease()) }
         await events.waitUntilPresent("waitForExit")
         await deadline.waitUntilRegistered(.authenticatedHelperExit)
         deadline.expire(.authenticatedHelperExit)
-
+        let lease = try await leaseTask.value
+        hold.resolve(())
         await #expect(throws: GemmaClientControllerError.timedOut(.authenticatedHelperExit)) {
-            try await leaseTask.value
+            try await modelTask.value
+        }
+        await #expect(throws: GemmaClientControllerError.faulted) {
+            try await controller.releaseRecordingLease(lease)
         }
         #expect(await controller.lifecycleState() == .faulted)
-        #expect(events.snapshot().suffix(2) == ["waitForExit", "invalidate"])
-
-        await #expect(throws: GemmaClientControllerError.faulted) {
-            try await controller.send(try generationBody(prompt: "must not reconnect"))
-        }
-        await #expect(throws: GemmaClientControllerError.faulted) {
-            try await controller.acquireRecordingLease(GemmaRecordingLease())
-        }
-        #expect(factory.creationCount == 1)
-
         exitGate.resolve(())
     }
 
-    @Test("an arm-and-exit echo for another helper faults before self-exit")
-    func mismatchedArmAndExitEchoFaultsBeforeSelfExit() async throws {
-        let events = EventLog()
-        let transport = TestTransport(events: events, armReturnsMismatch: true)
-        let factory = TestTransportFactory(transport: transport, events: events)
-        let controller = try GemmaClientController(
-            maximumInFlightRequests: 1,
-            transportFactory: factory,
-            exitProver: TestExitProver(events: events),
-            deadline: ManualDeadline()
+    @Test("mismatched arm and authenticated proof fault the originating session")
+    func authenticatedRetirementIdentityMismatchesFault() async throws {
+        let armEvents = EventLog()
+        let armController = try makeController(
+            factory: TestTransportFactory(
+                transport: TestTransport(events: armEvents, armReturnsMismatch: true),
+                events: armEvents
+            ),
+            events: armEvents
         )
-
-        _ = try await controller.send(try generationBody(prompt: "connect"))
         await #expect(throws: GemmaClientControllerError.exitArmMismatch) {
-            try await controller.acquireRecordingLease(GemmaRecordingLease())
+            try await armController.send(try generationBody(prompt: "arm mismatch"))
         }
+        #expect(await armController.lifecycleState() == .faulted)
 
-        #expect(await controller.lifecycleState() == .faulted)
-        #expect(events.snapshot().suffix(2) == ["armAndExit", "invalidate"])
-    }
-
-    @Test("the in-flight limit returns busy without creating another transport")
-    func boundedInFlightRequests() async throws {
-        let events = EventLog()
-        let applicationGate = AsyncGate<GemmaIPCResponseBody>()
-        let transport = TestTransport(
-            events: events,
-            applicationGate: applicationGate
+        let proofEvents = EventLog()
+        let proofController = try makeController(
+            factory: TestTransportFactory(transport: TestTransport(events: proofEvents), events: proofEvents),
+            events: proofEvents,
+            exitProver: TestExitProver(events: proofEvents, returnMismatchedProof: true)
         )
-        let factory = TestTransportFactory(transport: transport, events: events)
-        let controller = try GemmaClientController(
-            maximumInFlightRequests: 1,
-            transportFactory: factory,
-            exitProver: TestExitProver(events: events),
-            deadline: ManualDeadline()
-        )
-
-        let firstRequest = Task {
-            try await controller.send(try generationBody(prompt: "first"))
-        }
-        await events.waitUntilPresent("send:generate")
-
-        await #expect(throws: GemmaClientControllerError.busy(limit: 1)) {
-            try await controller.send(try generationBody(prompt: "second"))
-        }
-        #expect(factory.creationCount == 1)
-
-        _ = try await controller.acquireRecordingLease(GemmaRecordingLease())
-        await #expect(throws: GemmaClientControllerError.cancelledForRecording) {
-            try await firstRequest.value
-        }
-        applicationGate.resolve(.generate(GemmaIPCGenerateResponse(text: "late")))
-    }
-
-    @Test("caller cancellation keeps a possibly running helper request tracked")
-    func callerCancellationKeepsRequestTrackedForRecordingBarrier() async throws {
-        let events = EventLog()
-        let applicationGate = AsyncGate<GemmaIPCResponseBody>()
-        let transport = TestTransport(
-            events: events,
-            applicationGate: applicationGate
-        )
-        let factory = TestTransportFactory(transport: transport, events: events)
-        let controller = try GemmaClientController(
-            maximumInFlightRequests: 1,
-            transportFactory: factory,
-            exitProver: TestExitProver(events: events),
-            deadline: ManualDeadline()
-        )
-
-        let requestTask = Task {
-            try await controller.send(try generationBody(prompt: "cancel locally"))
-        }
-        await events.waitUntilPresent("send:generate")
-        requestTask.cancel()
-
-        await #expect(throws: GemmaClientControllerError.requestCancelled) {
-            try await requestTask.value
-        }
-        #expect(await controller.inFlightRequestCount() == 1)
-
-        _ = try await controller.acquireRecordingLease(GemmaRecordingLease())
-        #expect(events.snapshot().contains("send:cancel"))
-        #expect(factory.creationCount == 1)
-        applicationGate.resolve(.generate(GemmaIPCGenerateResponse(text: "late")))
-    }
-
-    @Test("an exit proof for another helper faults the controller")
-    func mismatchedAuthenticatedExitProofFaults() async throws {
-        let events = EventLog()
-        let helper = UUID()
-        let transport = TestTransport(events: events, helperInstance: helper)
-        let factory = TestTransportFactory(transport: transport, events: events)
-        let exitProver = TestExitProver(events: events, returnMismatchedProof: true)
-        let controller = try GemmaClientController(
-            maximumInFlightRequests: 1,
-            transportFactory: factory,
-            exitProver: exitProver,
-            deadline: ManualDeadline()
-        )
-
-        _ = try await controller.send(try generationBody(prompt: "connect"))
         await #expect(throws: GemmaClientControllerError.authenticatedExitProofMismatch) {
-            try await controller.acquireRecordingLease(GemmaRecordingLease())
+            try await proofController.send(try generationBody(prompt: "proof mismatch"))
         }
-        #expect(await controller.lifecycleState() == .faulted)
-        #expect(factory.creationCount == 1)
+        #expect(await proofController.lifecycleState() == .faulted)
     }
 
-    @Test("an infrastructure failure resolves its caller before faulting permanently")
-    func infrastructureFailureDoesNotLoseCurrentCompletion() async throws {
+    @Test("an infrastructure request failure resolves its caller before faulting")
+    func infrastructureFailureResolvesCurrentCaller() async throws {
         let events = EventLog()
-        let transport = TestTransport(events: events, applicationShouldFail: true)
-        let factory = TestTransportFactory(transport: transport, events: events)
-        let controller = try GemmaClientController(
-            maximumInFlightRequests: 1,
-            transportFactory: factory,
-            exitProver: TestExitProver(events: events),
-            deadline: ManualDeadline()
+        let controller = try makeController(
+            factory: TestTransportFactory(
+                transport: TestTransport(events: events, applicationShouldFail: true),
+                events: events
+            ),
+            events: events
         )
-
         await #expect(throws: GemmaClientControllerError.operationFailed(.request)) {
-            try await controller.send(try generationBody(prompt: "transport failure"))
+            try await controller.send(try generationBody(prompt: "infrastructure"))
         }
         #expect(await controller.lifecycleState() == .faulted)
-        #expect(events.snapshot().contains("invalidate"))
+        #expect(events.count(of: "invalidate") == 1)
     }
 
     @Test("process-exit waits cancel and unblock without waiting for process death")
@@ -409,16 +402,23 @@ struct GemmaClientControllerTests {
             "com.apple.security.network.server": true,
         ]))
     }
+
+    private func makeController(
+        factory: TestTransportFactory,
+        events: EventLog,
+        exitProver: TestExitProver? = nil
+    ) throws -> GemmaClientController {
+        try GemmaClientController(
+            maximumInFlightRequests: 2,
+            transportFactory: factory,
+            exitProver: exitProver ?? TestExitProver(events: events),
+            deadline: ManualDeadline()
+        )
+    }
 }
 
 private func generationBody(prompt: String) throws -> GemmaIPCRequestBody {
-    let pin = try GemmaModelSnapshotPin(
-        modelIdentifier: "google/gemma-4-1b-it",
-        checkpointRevision: String(repeating: "a", count: 40),
-        adapterRevision: GemmaIPCBuildInfo.adapterRevision,
-        licenseIdentifier: "gemma",
-        manifestSHA256: String(repeating: "b", count: 64)
-    )
+    let pin = try modelPin()
     return .generate(
         try GemmaIPCGenerateRequest(
             model: pin,
@@ -428,20 +428,50 @@ private func generationBody(prompt: String) throws -> GemmaIPCRequestBody {
     )
 }
 
+private func handshakeBody() throws -> GemmaIPCRequestBody {
+    .handshake(.init(model: try modelPin()))
+}
+
+private func tokenCountBody() throws -> GemmaIPCRequestBody {
+    .countTokens(try .init(model: modelPin(), text: "count this"))
+}
+
+private func modelPin() throws -> GemmaModelSnapshotPin {
+    try GemmaModelSnapshotPin(
+        modelIdentifier: "google/gemma-4-1b-it",
+        checkpointRevision: String(repeating: "a", count: 40),
+        adapterRevision: GemmaIPCBuildInfo.adapterRevision,
+        licenseIdentifier: "gemma",
+        manifestSHA256: String(repeating: "b", count: 64)
+    )
+}
+
+private enum SessionTestError: Error {
+    case expected
+}
+
 private final class TestTransportFactory: GemmaClientTransportFactory, @unchecked Sendable {
     private let lock = NSLock()
     private let transports: [TestTransport]
     private let events: EventLog
+    private let failFirstWithExecutionGateBusy: Bool
     private var storedCreationCount = 0
+    private var didFailForExecutionGateBusy = false
 
-    init(transport: TestTransport, events: EventLog) {
+    init(
+        transport: TestTransport,
+        events: EventLog,
+        failFirstWithExecutionGateBusy: Bool = false
+    ) {
         self.transports = [transport]
         self.events = events
+        self.failFirstWithExecutionGateBusy = failFirstWithExecutionGateBusy
     }
 
     init(transports: [TestTransport], events: EventLog) {
         self.transports = transports
         self.events = events
+        failFirstWithExecutionGateBusy = false
     }
 
     var creationCount: Int {
@@ -450,6 +480,10 @@ private final class TestTransportFactory: GemmaClientTransportFactory, @unchecke
 
     func makeTransport() throws -> any GemmaClientTransport {
         let transport: TestTransport = try lock.withLock {
+            if failFirstWithExecutionGateBusy, !didFailForExecutionGateBusy {
+                didFailForExecutionGateBusy = true
+                throw GemmaRawXPCTransportError.executionGateBusy
+            }
             guard storedCreationCount < transports.count else {
                 throw TestTransportError.noConfiguredTransport
             }
@@ -846,5 +880,9 @@ private final class EventLog: @unchecked Sendable {
 
     func snapshot() -> [String] {
         lock.withLock { events }
+    }
+
+    func count(of event: String) -> Int {
+        lock.withLock { events.lazy.filter { $0 == event }.count }
     }
 }

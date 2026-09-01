@@ -2,8 +2,8 @@ import Foundation
 
 /// The canonical version of Steno's narrow, local-only Gemma helper protocol.
 public enum GemmaIPCProtocol {
-    /// Version 2 adds the strictly encoded helper self-exit control exchange.
-    public static let currentVersion = 2
+    /// Version 3 binds an execution-gate capability before helper work is admitted.
+    public static let currentVersion = 3
     public static let maximumEncodedMessageBytes = 256 * 1024
     public static let maximumTextBytes = 128 * 1024
     public static let maximumGenerationTokens = 4_096
@@ -575,8 +575,20 @@ public enum GemmaIPCCodec {
 /// Control requests travel inside the same bounded, strictly decoded Data frame as model work.
 /// They are intercepted by the XPC shell and never reach `GemmaServiceCore`.
 public enum GemmaXPCControlOperation: String, Codable, Sendable, Equatable {
+    case bindExecutionGate
     case prepareForExit
     case armAndExit
+}
+
+/// The path-free identity returned after one helper process binds its execution gate.
+public struct GemmaIPCBoundHelperIdentity: Codable, Sendable, Equatable {
+    public let helperInstanceID: UUID
+    public let processIdentifier: Int32
+
+    public init(helperInstanceID: UUID, processIdentifier: Int32) {
+        self.helperInstanceID = helperInstanceID
+        self.processIdentifier = processIdentifier
+    }
 }
 
 /// A helper-created identity, unique for exactly one helper process lifetime.
@@ -599,11 +611,14 @@ public struct GemmaIPCArmAndExitRequest: Codable, Sendable, Equatable {
 }
 
 public enum GemmaXPCControlRequestBody: Sendable, Equatable, Codable {
+    case bindExecutionGate
     case prepareForExit
     case armAndExit(GemmaIPCArmAndExitRequest)
 
     public var operation: GemmaXPCControlOperation {
         switch self {
+        case .bindExecutionGate:
+            .bindExecutionGate
         case .prepareForExit:
             .prepareForExit
         case .armAndExit:
@@ -619,6 +634,9 @@ public enum GemmaXPCControlRequestBody: Sendable, Equatable, Codable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         switch try container.decode(GemmaXPCControlOperation.self, forKey: .operation) {
+        case .bindExecutionGate:
+            _ = try container.decode(GemmaIPCEmptyPayload.self, forKey: .payload)
+            self = .bindExecutionGate
         case .prepareForExit:
             _ = try container.decode(GemmaIPCEmptyPayload.self, forKey: .payload)
             self = .prepareForExit
@@ -631,6 +649,8 @@ public enum GemmaXPCControlRequestBody: Sendable, Equatable, Codable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(operation, forKey: .operation)
         switch self {
+        case .bindExecutionGate:
+            try container.encode(GemmaIPCEmptyPayload(), forKey: .payload)
         case .prepareForExit:
             try container.encode(GemmaIPCEmptyPayload(), forKey: .payload)
         case .armAndExit(let request):
@@ -656,6 +676,7 @@ public struct GemmaXPCControlRequestEnvelope: Codable, Sendable, Equatable {
 }
 
 public enum GemmaXPCControlResponseBody: Sendable, Equatable, Codable {
+    case executionGateBound(GemmaIPCBoundHelperIdentity)
     case prepared(GemmaIPCPreparedHelperExit)
     case armed(GemmaIPCPreparedHelperExit)
     case failure(GemmaIPCFailure)
@@ -666,6 +687,7 @@ public enum GemmaXPCControlResponseBody: Sendable, Equatable, Codable {
     }
 
     private enum Kind: String, Codable {
+        case executionGateBound
         case prepared
         case armed
         case failure
@@ -674,6 +696,10 @@ public enum GemmaXPCControlResponseBody: Sendable, Equatable, Codable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         switch try container.decode(Kind.self, forKey: .kind) {
+        case .executionGateBound:
+            self = .executionGateBound(
+                try container.decode(GemmaIPCBoundHelperIdentity.self, forKey: .payload)
+            )
         case .prepared:
             self = .prepared(try container.decode(GemmaIPCPreparedHelperExit.self, forKey: .payload))
         case .armed:
@@ -686,6 +712,9 @@ public enum GemmaXPCControlResponseBody: Sendable, Equatable, Codable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
+        case .executionGateBound(let identity):
+            try container.encode(Kind.executionGateBound, forKey: .kind)
+            try container.encode(identity, forKey: .payload)
         case .prepared(let prepared):
             try container.encode(Kind.prepared, forKey: .kind)
             try container.encode(prepared, forKey: .payload)
@@ -756,7 +785,10 @@ public enum GemmaXPCControlCodec {
                 throw GemmaIPCCodecError.malformedMessage
             }
             switch (expectedOperation, response.body) {
-            case (.prepareForExit, .prepared), (.armAndExit, .armed), (_, .failure):
+            case (.bindExecutionGate, .executionGateBound),
+                 (.prepareForExit, .prepared),
+                 (.armAndExit, .armed),
+                 (_, .failure):
                 return response
             default:
                 throw GemmaIPCCodecError.malformedMessage
@@ -1028,7 +1060,7 @@ private enum GemmaXPCControlJSONSchema {
     private static let envelopeKeys: Set<String> = ["protocolVersion", "requestID", "body"]
     private static let requestBodyKeys: Set<String> = ["operation", "payload"]
     private static let responseBodyKeys: Set<String> = ["kind", "payload"]
-    private static let preparedKeys: Set<String> = ["helperInstanceID", "processIdentifier"]
+    private static let helperIdentityKeys: Set<String> = ["helperInstanceID", "processIdentifier"]
 
     static func validateRequest(_ data: Data) throws {
         let envelope = try rootObject(data, keys: envelopeKeys)
@@ -1037,11 +1069,13 @@ private enum GemmaXPCControlJSONSchema {
             throw GemmaIPCCodecError.malformedMessage
         }
         switch operation {
+        case GemmaXPCControlOperation.bindExecutionGate.rawValue:
+            _ = try object(body["payload"], keys: [])
         case GemmaXPCControlOperation.prepareForExit.rawValue:
             _ = try object(body["payload"], keys: [])
         case GemmaXPCControlOperation.armAndExit.rawValue:
             let payload = try object(body["payload"], keys: ["preparedHelper"])
-            _ = try object(payload["preparedHelper"], keys: preparedKeys)
+            _ = try object(payload["preparedHelper"], keys: helperIdentityKeys)
         default:
             throw GemmaIPCCodecError.malformedMessage
         }
@@ -1054,8 +1088,8 @@ private enum GemmaXPCControlJSONSchema {
             throw GemmaIPCCodecError.malformedMessage
         }
         switch kind {
-        case "prepared", "armed":
-            _ = try object(body["payload"], keys: preparedKeys)
+        case "executionGateBound", "prepared", "armed":
+            _ = try object(body["payload"], keys: helperIdentityKeys)
         case "failure":
             _ = try object(body["payload"], keys: ["code"])
         default:

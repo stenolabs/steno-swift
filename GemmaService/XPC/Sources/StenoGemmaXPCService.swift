@@ -3,6 +3,7 @@ import Dispatch
 import Foundation
 import Security
 import StenoGemmaIPC
+import StenoGemmaProcessGate
 import StenoGemmaServiceCore
 import XPC
 
@@ -15,13 +16,23 @@ final class StenoGemmaXPCService: @unchecked Sendable {
         case terminal
     }
 
+    private enum ExecutionGateState: Equatable {
+        case awaitingBind
+        case binding
+        case bound
+        case terminal
+    }
+
     private let connection: xpc_connection_t
     private let expectedAppURL: URL
     private let expectedAppRequirement: String
     private let lifetimeID = UUID()
     private let lock = NSLock()
     private var authenticationState: AuthenticationState = .unbound
+    private var executionGateState: ExecutionGateState = .awaitingBind
     private var authenticationTimeout: DispatchWorkItem?
+    private var helperExecutionLease: GemmaModelExecutionLease?
+    private var executionGateMonitor: GemmaHelperExecutionGateMonitor?
 
     init?(connection: xpc_connection_t) {
         guard let configuration = StenoGemmaXPCProcessConfiguration.current else { return nil }
@@ -35,8 +46,7 @@ final class StenoGemmaXPCService: @unchecked Sendable {
             connection,
             expectedAppRequirement
         ) == 0 else {
-            xpc_connection_cancel(connection)
-            return
+            _exit(EXIT_FAILURE)
         }
         StenoGemmaXPCServiceLifetime.retain(self, for: lifetimeID)
         xpc_connection_set_event_handler(connection) { [weak self] event in
@@ -57,43 +67,129 @@ final class StenoGemmaXPCService: @unchecked Sendable {
 
     private func receive(_ event: xpc_object_t) {
         if xpc_get_type(event) == XPC_TYPE_ERROR {
-            let wasBound = finishConnection()
+            let wasExecutionBound = finishConnection()
             StenoGemmaXPCServiceLifetime.release(lifetimeID)
-            if wasBound {
+            if wasExecutionBound {
                 _exit(StenoGemmaXPCProcessLifecycle.boundPeerDisconnected(lifetimeID))
             }
-            return
+            _exit(EXIT_FAILURE)
         }
         guard xpc_get_type(event) == XPC_TYPE_DICTIONARY else {
-            return
+            terminateInvalidPeer()
         }
         guard authenticatePeerIfNeeded(message: event) else {
-            return
+            terminateInvalidPeer()
         }
         guard let outer = GemmaXPCOuterFrame.decode(event) else {
-            xpc_connection_cancel(connection)
-            return
+            terminateInvalidPeer()
         }
+
+        routeAuthenticated(outer, replyTo: event)
+    }
+
+    private func routeAuthenticated(
+        _ outer: GemmaXPCOuterFrame,
+        replyTo event: xpc_object_t
+    ) {
+        let state = lock.withLock { executionGateState }
+        switch state {
+        case .awaitingBind:
+            handleInitialBind(outer, replyTo: event)
+        case .binding, .terminal:
+            terminateInvalidPeer()
+        case .bound:
+            guard outer.executionGateDescriptor == nil else {
+                terminateInvalidPeer()
+            }
+            handleBoundFrame(outer, replyTo: event)
+        }
+    }
+
+    private func handleBoundFrame(
+        _ outer: GemmaXPCOuterFrame,
+        replyTo event: xpc_object_t
+    ) {
 
         switch outer.channel {
         case .control:
             let control: GemmaXPCControlRequestEnvelope
             do {
                 control = try GemmaXPCControlCodec.decodeRequest(outer.frame)
-            } catch let error as GemmaIPCCodecError {
-                sendControlFailure(Self.failureCode(for: error), for: outer.requestID, replyTo: event)
-                return
             } catch {
-                sendControlFailure(.invalidRequest, for: outer.requestID, replyTo: event)
-                return
+                terminateInvalidPeer()
             }
             guard control.requestID == outer.requestID else {
-                sendControlFailure(.invalidRequest, for: outer.requestID, replyTo: event)
-                return
+                terminateInvalidPeer()
+            }
+            if case .bindExecutionGate = control.body {
+                terminateInvalidPeer()
             }
             handle(control: control, outerRequestID: outer.requestID, replyTo: event)
         case .model:
             handleModelFrame(outer, replyTo: event)
+        }
+    }
+
+    private func handleInitialBind(
+        _ outer: GemmaXPCOuterFrame,
+        replyTo message: xpc_object_t
+    ) {
+        guard outer.channel == .control,
+              let descriptorObject = outer.executionGateDescriptor,
+              let control = try? GemmaXPCControlCodec.decodeRequest(outer.frame),
+              control.requestID == outer.requestID,
+              control.body == .bindExecutionGate
+        else {
+            terminateInvalidPeer()
+        }
+        let admitted = lock.withLock {
+            guard executionGateState == .awaitingBind else { return false }
+            executionGateState = .binding
+            return true
+        }
+        guard admitted else {
+            terminateInvalidPeer()
+        }
+
+        let duplicate = xpc_fd_dup(descriptorObject)
+        guard duplicate >= 0 else {
+            terminateInvalidPeer()
+        }
+        let lease: GemmaModelExecutionLease
+        do {
+            lease = try GemmaProcessGate.adoptHelperExecutionDescriptor(duplicate)
+        } catch {
+            terminateInvalidPeer()
+        }
+        do {
+            if try GemmaProcessGate.helperObservesRecordingIntent(for: lease) {
+                terminateForRecordingIntent()
+            }
+        } catch {
+            terminateInvalidPeer()
+        }
+
+        let monitor = GemmaHelperExecutionGateMonitor(lease: lease)
+        guard monitor.start() else {
+            terminateInvalidPeer()
+        }
+        let identity = StenoGemmaXPCProcessRuntime.boundHelperIdentity
+        let didBind = lock.withLock {
+            guard executionGateState == .binding else { return false }
+            helperExecutionLease = lease
+            executionGateMonitor = monitor
+            executionGateState = .bound
+            return true
+        }
+        guard didBind else {
+            terminateInvalidPeer()
+        }
+        guard sendControl(
+            .executionGateBound(identity),
+            for: outer.requestID,
+            replyTo: message
+        ) else {
+            terminateInvalidPeer()
         }
     }
 
@@ -120,12 +216,10 @@ final class StenoGemmaXPCService: @unchecked Sendable {
             expectedBundleURL: expectedAppURL
         ) else {
             lock.withLock { authenticationState = .terminal }
-            xpc_connection_cancel(connection)
             return false
         }
         guard StenoGemmaXPCProcessLifecycle.claimPeer(lifetimeID) else {
             lock.withLock { authenticationState = .terminal }
-            xpc_connection_cancel(connection)
             return false
         }
         lock.withLock { authenticationState = .bound }
@@ -140,7 +234,7 @@ final class StenoGemmaXPCService: @unchecked Sendable {
             return true
         }
         if shouldCancel {
-            xpc_connection_cancel(connection)
+            _exit(EXIT_FAILURE)
         }
     }
 
@@ -148,10 +242,31 @@ final class StenoGemmaXPCService: @unchecked Sendable {
         lock.withLock {
             authenticationTimeout?.cancel()
             authenticationTimeout = nil
-            let wasBound = authenticationState == .bound
+            let wasBound = executionGateState == .bound
             authenticationState = .terminal
+            executionGateState = .terminal
             return wasBound
         }
+    }
+
+    private func terminateInvalidPeer() -> Never {
+        lock.withLock {
+            authenticationTimeout?.cancel()
+            authenticationTimeout = nil
+            authenticationState = .terminal
+            executionGateState = .terminal
+        }
+        StenoGemmaXPCProcessRuntime.closeAdmissionIfCreated()
+        _exit(EXIT_FAILURE)
+    }
+
+    private func terminateForRecordingIntent() -> Never {
+        lock.withLock {
+            authenticationState = .terminal
+            executionGateState = .terminal
+        }
+        StenoGemmaXPCProcessRuntime.closeAdmissionIfCreated()
+        _exit(EXIT_SUCCESS)
     }
 
     private func handleModelFrame(_ outer: GemmaXPCOuterFrame, replyTo message: xpc_object_t) {
@@ -335,6 +450,9 @@ final class StenoGemmaXPCService: @unchecked Sendable {
         ) else { return }
 
         switch control.body {
+        case .bindExecutionGate:
+            terminateInvalidPeer()
+
         case .prepareForExit:
             guard case .accepted = StenoGemmaXPCProcessRuntime.registry.beginPrepareForExit() else {
                 completeControl(
@@ -468,31 +586,25 @@ final class StenoGemmaXPCService: @unchecked Sendable {
         send(data, requestID: requestID, channel: .model, replyTo: message)
     }
 
-    private func sendControlFailure(
-        _ code: GemmaIPCErrorCode,
-        for requestID: UUID,
-        replyTo message: xpc_object_t
-    ) {
-        sendControl(.failure(.init(code: code)), for: requestID, replyTo: message)
-    }
-
+    @discardableResult
     private func sendControl(
         _ body: GemmaXPCControlResponseBody,
         for requestID: UUID,
         replyTo message: xpc_object_t
-    ) {
+    ) -> Bool {
         let response = GemmaXPCControlResponseEnvelope(requestID: requestID, body: body)
-        guard let data = try? GemmaXPCControlCodec.encode(response) else { return }
-        send(data, requestID: requestID, channel: .control, replyTo: message)
+        guard let data = try? GemmaXPCControlCodec.encode(response) else { return false }
+        return send(data, requestID: requestID, channel: .control, replyTo: message)
     }
 
+    @discardableResult
     private func send(
         _ data: Data,
         requestID: UUID,
         channel: GemmaXPCChannel,
         replyTo message: xpc_object_t
-    ) {
-        guard let reply = xpc_dictionary_create_reply(message) else { return }
+    ) -> Bool {
+        guard let reply = xpc_dictionary_create_reply(message) else { return false }
         GemmaXPCOuterFrame.write(
             data,
             requestID: requestID,
@@ -500,6 +612,7 @@ final class StenoGemmaXPCService: @unchecked Sendable {
             to: reply
         )
         xpc_connection_send_message(connection, reply)
+        return true
     }
 }
 
@@ -528,21 +641,68 @@ private enum StenoGemmaXPCProcessLifecycle {
         guard wasActivePeer else { return EXIT_FAILURE }
         // Keep the peer claimed until the caller immediately exits the process. Clearing it here
         // would leave a small window in which a new connection could bind after termination began.
-        return StenoGemmaXPCProcessRuntime.registry.markTerminatingAndReturnWasArmed()
+        return StenoGemmaXPCProcessRuntime.markTerminatingAndReturnWasArmedIfCreated()
             ? EXIT_SUCCESS
             : EXIT_FAILURE
     }
 }
 
-/// The model execution actor is created only after an authenticated peer submits model work.
+/// Model state is created lazily only after an authenticated peer has bound its execution gate.
 private enum StenoGemmaXPCProcessRuntime {
-    static let registry = GemmaServiceRequestRegistry(
-        helperIdentity: GemmaIPCPreparedHelperExit(
-            helperInstanceID: UUID(),
-            processIdentifier: getpid()
-        )
+    final class Runtime: @unchecked Sendable {
+        let registry: GemmaServiceRequestRegistry
+        let core: GemmaServiceCore
+
+        init(identity: GemmaIPCBoundHelperIdentity) {
+            registry = GemmaServiceRequestRegistry(
+                helperIdentity: GemmaIPCPreparedHelperExit(
+                    helperInstanceID: identity.helperInstanceID,
+                    processIdentifier: identity.processIdentifier
+                )
+            )
+            core = GemmaServiceCore(buildInfo: .current)
+        }
+    }
+
+    private final class Storage: @unchecked Sendable {
+        let lock = NSLock()
+        var runtime: Runtime?
+    }
+
+    static let boundHelperIdentity = GemmaIPCBoundHelperIdentity(
+        helperInstanceID: UUID(),
+        processIdentifier: getpid()
     )
-    static let core = GemmaServiceCore(buildInfo: .current)
+    private static let storage = Storage()
+
+    static var registry: GemmaServiceRequestRegistry {
+        runtime().registry
+    }
+
+    static var core: GemmaServiceCore {
+        runtime().core
+    }
+
+    static func closeAdmissionIfCreated() {
+        let runtime = storage.lock.withLock { storage.runtime }
+        _ = runtime?.registry.closeForShutdown()
+    }
+
+    static func markTerminatingAndReturnWasArmedIfCreated() -> Bool {
+        let runtime = storage.lock.withLock { storage.runtime }
+        return runtime?.registry.markTerminatingAndReturnWasArmed() ?? false
+    }
+
+    private static func runtime() -> Runtime {
+        storage.lock.withLock {
+            if let runtime = storage.runtime {
+                return runtime
+            }
+            let runtime = Runtime(identity: boundHelperIdentity)
+            storage.runtime = runtime
+            return runtime
+        }
+    }
 }
 
 /// Expensive static-code validation is performed at most once per helper process.
@@ -596,14 +756,16 @@ private struct GemmaXPCOuterFrame {
     let channel: GemmaXPCChannel
     let frame: Data
     let requestID: UUID
+    let executionGateDescriptor: xpc_object_t?
 
     private static let channelKey = "channel"
     private static let frameKey = "frame"
     private static let requestIDKey = "requestID"
+    private static let executionGateFDKey = "executionGateFD"
 
     static func decode(_ message: xpc_object_t) -> GemmaXPCOuterFrame? {
         guard xpc_get_type(message) == XPC_TYPE_DICTIONARY,
-              hasExactKeys(message),
+              let executionGateDescriptor = validatedExecutionGateDescriptor(message),
               let channelValue = xpc_dictionary_get_string(message, channelKey),
               let channel = GemmaXPCChannel(rawValue: String(cString: channelValue)),
               let requestIDBytes = xpc_dictionary_get_uuid(message, requestIDKey)
@@ -622,7 +784,8 @@ private struct GemmaXPCOuterFrame {
         return GemmaXPCOuterFrame(
             channel: channel,
             frame: Data(bytes: dataBytes, count: length),
-            requestID: UUID(uuid: uuid)
+            requestID: UUID(uuid: uuid),
+            executionGateDescriptor: executionGateDescriptor.value
         )
     }
 
@@ -642,13 +805,76 @@ private struct GemmaXPCOuterFrame {
         }
     }
 
-    private static func hasExactKeys(_ dictionary: xpc_object_t) -> Bool {
+    private struct OptionalDescriptor {
+        let value: xpc_object_t?
+    }
+
+    private static func validatedExecutionGateDescriptor(
+        _ dictionary: xpc_object_t
+    ) -> OptionalDescriptor? {
         var keys = Set<String>()
         let accepted = xpc_dictionary_apply(dictionary) { key, _ in
             keys.insert(String(cString: key))
             return true
         }
-        return accepted && keys == Set([channelKey, frameKey, requestIDKey])
+        guard accepted else { return nil }
+        let ordinaryKeys = Set([channelKey, frameKey, requestIDKey])
+        if keys == ordinaryKeys {
+            return OptionalDescriptor(value: nil)
+        }
+        guard keys == ordinaryKeys.union([executionGateFDKey]),
+              let descriptor = xpc_dictionary_get_value(dictionary, executionGateFDKey),
+              xpc_get_type(descriptor) == XPC_TYPE_FD
+        else {
+            return nil
+        }
+        return OptionalDescriptor(value: descriptor)
+    }
+}
+
+/// Polls admission byte 0 every 20 ms on a dedicated lightweight queue.
+///
+/// Registration and one synchronous intent check both complete before the bind acknowledgement.
+/// The request registry remains the authority for closing admission and cancelling active work.
+private final class GemmaHelperExecutionGateMonitor: @unchecked Sendable {
+    private static let pollInterval = DispatchTimeInterval.milliseconds(20)
+
+    private let lease: GemmaModelExecutionLease
+    private let source: any DispatchSourceTimer
+    private let registration = DispatchSemaphore(value: 0)
+
+    init(lease: GemmaModelExecutionLease) {
+        self.lease = lease
+        let queue = DispatchQueue(
+            label: "org.stenolabs.steno.gemma-xpc-gate-monitor",
+            qos: .userInitiated
+        )
+        source = DispatchSource.makeTimerSource(queue: queue)
+        source.setRegistrationHandler { [registration] in
+            registration.signal()
+        }
+        source.setEventHandler { [lease] in
+            do {
+                guard try GemmaProcessGate.helperObservesRecordingIntent(for: lease) else {
+                    return
+                }
+                StenoGemmaXPCProcessRuntime.closeAdmissionIfCreated()
+                _exit(EXIT_SUCCESS)
+            } catch {
+                StenoGemmaXPCProcessRuntime.closeAdmissionIfCreated()
+                _exit(EXIT_FAILURE)
+            }
+        }
+        source.schedule(
+            deadline: .now(),
+            repeating: Self.pollInterval,
+            leeway: .milliseconds(2)
+        )
+    }
+
+    func start() -> Bool {
+        source.activate()
+        return registration.wait(timeout: .now() + .seconds(1)) == .success
     }
 }
 

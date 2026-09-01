@@ -1,6 +1,7 @@
 import Foundation
 import StenoGemmaClient
 import StenoGemmaIPC
+import StenoGemmaProcessGate
 import XCTest
 
 final class StenoGemmaXPCIntegrationTests: XCTestCase {
@@ -9,12 +10,20 @@ final class StenoGemmaXPCIntegrationTests: XCTestCase {
             .appendingPathComponent("Contents", isDirectory: true)
             .appendingPathComponent("XPCServices", isDirectory: true)
             .appendingPathComponent("StenoGemmaXPC.xpc", isDirectory: true)
+        let gateDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("steno-gemma-xpc-gate-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: gateDirectory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: gateDirectory) }
+        let processGate = GemmaProcessGate(
+            configuration: try GemmaProcessGateConfiguration(directoryURL: gateDirectory)
+        )
 
         let results: XPCProtocolResults
         do {
             results = try await Task.detached {
                 try await Self.exerciseProtocol(
-                    helperBundleURL: helperBundleURL
+                    helperBundleURL: helperBundleURL,
+                    processGate: processGate
                 )
             }.value
         } catch {
@@ -43,11 +52,15 @@ final class StenoGemmaXPCIntegrationTests: XCTestCase {
     }
 
     private static func exerciseProtocol(
-        helperBundleURL: URL
+        helperBundleURL: URL,
+        processGate: GemmaProcessGate
     ) async throws -> XPCProtocolResults {
         let controller = try GemmaClientController(
             maximumInFlightRequests: 2,
-            transportFactory: try GemmaRawXPCTransportFactory(helperBundleURL: helperBundleURL),
+            transportFactory: try GemmaRawXPCTransportFactory(
+                helperBundleURL: helperBundleURL,
+                processGate: processGate
+            ),
             exitProver: GemmaDispatchSourceExitProver(),
             deadline: GemmaContinuousClockDeadline(timeout: .seconds(20))
         )
@@ -59,17 +72,24 @@ final class StenoGemmaXPCIntegrationTests: XCTestCase {
             manifestSHA256: String(repeating: "a", count: 64)
         )
 
-        let handshake = try await controller.send(.handshake(.init(model: pin)))
-        let countTokens = try await controller.send(
-            .countTokens(try .init(model: pin, text: "Harmless fixture."))
-        )
-        let generate = try await controller.send(
-            .generate(try .init(
-                model: pin,
-                prompt: "Do not run a model.",
-                maximumTokens: 16
-            ))
-        )
+        let modelResults = try await controller.withModelSession { session in
+            let handshake = try await session.send(.handshake(.init(model: pin)))
+            let countTokens = try await session.send(
+                .countTokens(try .init(model: pin, text: "Harmless fixture."))
+            )
+            let generate = try await session.send(
+                .generate(try .init(
+                    model: pin,
+                    prompt: "Do not run a model.",
+                    maximumTokens: 16
+                ))
+            )
+            return XPCModelResults(
+                handshake: handshake,
+                countTokens: countTokens,
+                generate: generate
+            )
+        }
 
         let leaseToken = GemmaRecordingLease()
         let lease = try await controller.acquireRecordingLease(leaseToken)
@@ -81,14 +101,20 @@ final class StenoGemmaXPCIntegrationTests: XCTestCase {
         let handshakeAfterRelease = try await controller.send(.handshake(.init(model: pin)))
 
         return XPCProtocolResults(
-            handshake: handshake,
-            countTokens: countTokens,
-            generate: generate,
+            handshake: modelResults.handshake,
+            countTokens: modelResults.countTokens,
+            generate: modelResults.generate,
             stateDuringLease: stateDuringLease,
             stateAfterRelease: stateAfterRelease,
             handshakeAfterRelease: handshakeAfterRelease
         )
     }
+}
+
+private struct XPCModelResults: Sendable {
+    let handshake: GemmaIPCResponseBody
+    let countTokens: GemmaIPCResponseBody
+    let generate: GemmaIPCResponseBody
 }
 
 private struct XPCProtocolResults: Sendable {

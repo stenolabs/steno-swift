@@ -1,6 +1,7 @@
 import Foundation
 import StenoLibrary
 import StenoMacAudio
+import StenoGemmaProcessGate
 import Testing
 @testable import steno_macos
 
@@ -70,6 +71,81 @@ struct NativeGemmaRecordingBarrierTests {
         fixture.cleanUp()
     }
 
+    @Test("a denied microphone request releases the real process gate")
+    func permissionDenialReleasesProcessGate() async throws {
+        let fixture = try NativeGemmaRecordingFixture()
+        let events = NativeGemmaRecordingEventLog()
+        let processGate = try fixture.processGate()
+        let barrier = NativeGemmaRecordingBarrierFactory.testing(processGate: processGate)
+        var model: AppModel? = AppModel(
+            recordingPermissionClient: permissionClient(
+                status: .denied,
+                events: events
+            ),
+            nativeGemmaRecordingBarrier: barrier,
+            libraryURL: fixture.libraryURL
+        )
+        await model?.bootstrap()
+
+        await model?.startRecording()
+
+        #expect(model?.isRecording == false)
+        let modelLease = try processGate.acquireModelExecution()
+        modelLease.close()
+        await model?.runtime?.coordinator.stop()
+        await model?.stopBackgroundLibraryTasksForTesting()
+        model = nil
+        fixture.cleanUp()
+    }
+
+    @Test("gate-only recording lease excludes model admission until release")
+    func gateOnlyRecordingLeaseExcludesModelAdmissionUntilRelease() async throws {
+        let fixture = try NativeGemmaRecordingFixture()
+        defer { fixture.cleanUp() }
+        let processGate = try fixture.processGate()
+        let coordinator = NativeGemmaRecordingBarrierFactory.testing(processGate: processGate)
+
+        try await coordinator.acquire()
+        #expect(throws: GemmaProcessGateError.busy) {
+            _ = try processGate.acquireModelExecution()
+        }
+        try await coordinator.release()
+
+        let modelLease = try processGate.acquireModelExecution()
+        modelLease.close()
+        await #expect(throws: NativeGemmaCoordinatorError.self) {
+            try await coordinator.release()
+        }
+    }
+
+    @Test("gate-only acquisition cancellation leaves the gate reusable")
+    func gateOnlyAcquisitionCancellationLeavesGateReusable() async throws {
+        let fixture = try NativeGemmaRecordingFixture()
+        defer { fixture.cleanUp() }
+        let processGate = try fixture.processGate()
+        let modelLease = try processGate.acquireModelExecution()
+        let coordinator = NativeGemmaRecordingBarrierFactory.testing(
+            processGate: processGate,
+            recordingGateTimeout: .seconds(10)
+        )
+
+        let acquisition = Task {
+            do {
+                try await coordinator.acquire()
+                return false
+            } catch {
+                return true
+            }
+        }
+        await Task.yield()
+        acquisition.cancel()
+        #expect(await acquisition.value)
+        modelLease.close()
+
+        try await coordinator.acquire()
+        try await coordinator.release()
+    }
+
     #if canImport(StenoGemmaClient)
     @Test("the live factory returns one process-wide coordinator")
     func liveFactoryReturnsProcessWideCoordinator() {
@@ -81,9 +157,12 @@ struct NativeGemmaRecordingBarrierTests {
 
     @Test("concurrent first use shares one controller and cannot overwrite a held barrier")
     func concurrentFirstSendAndAcquireShareInitialization() async throws {
+        let fixture = try NativeGemmaRecordingFixture()
+        defer { fixture.cleanUp() }
         let client = NativeGemmaClientProbe()
         let initializer = NativeGemmaClientInitializationProbe(client: client)
         let coordinator = NativeGemmaRecordingBarrierFactory.testing(
+            processGate: try fixture.processGate(),
             controllerInitializer: {
                 try await initializer.initialize()
             }
@@ -119,7 +198,6 @@ struct NativeGemmaRecordingBarrierTests {
         try await acquireTask.value
 
         #expect(await initializer.initializationCount() == 1)
-        #expect(await client.acquireCount() == 1)
         #expect(
             initialSendOutcome == .admitted(expectedResponse)
                 || initialSendOutcome == .blocked
@@ -132,8 +210,104 @@ struct NativeGemmaRecordingBarrierTests {
         }
 
         try await coordinator.release()
-        #expect(await client.releaseCount() == 1)
+        let acquisitionCount = await client.acquireCount()
+        let releaseCount = await client.releaseCount()
+        #expect(acquisitionCount == releaseCount)
         #expect(try await coordinator.send(request) == expectedResponse)
+    }
+
+    @Test("disabled model initialization still acquires the process recording gate")
+    func disabledModelStillAcquiresProcessGate() async throws {
+        let fixture = try NativeGemmaRecordingFixture()
+        defer { fixture.cleanUp() }
+        let processGate = try fixture.processGate()
+        let coordinator = NativeGemmaRecordingBarrierFactory.testing(
+            processGate: processGate,
+            controllerInitializer: {
+                throw NativeGemmaRecordingTestError.expectedFailure
+            }
+        )
+        let request = GemmaIPCRequestBody.handshake(.init(model: try testModelPin()))
+
+        await #expect(throws: NativeGemmaCoordinatorError.self) {
+            _ = try await coordinator.send(request)
+        }
+        try await coordinator.acquire()
+        #expect(throws: GemmaProcessGateError.busy) {
+            _ = try processGate.acquireModelExecution()
+        }
+        try await coordinator.release()
+
+        let modelLease = try processGate.acquireModelExecution()
+        modelLease.close()
+    }
+
+    @Test("a failed cooperative retirement cannot bypass the gate or poison later model use")
+    func failedLocalRetirementStillAcquiresProcessGate() async throws {
+        let fixture = try NativeGemmaRecordingFixture()
+        defer { fixture.cleanUp() }
+        let processGate = try fixture.processGate()
+        let client = NativeGemmaClientProbe(
+            acquireError: NativeGemmaRecordingTestError.expectedFailure
+        )
+        let coordinator = NativeGemmaRecordingBarrierFactory.testing(
+            processGate: processGate,
+            controllerInitializer: { client }
+        )
+        let request = GemmaIPCRequestBody.handshake(.init(model: try testModelPin()))
+
+        _ = try await coordinator.send(request)
+        try await coordinator.acquire()
+        #expect(await client.acquireCount() == 1)
+        #expect(throws: GemmaProcessGateError.busy) {
+            _ = try processGate.acquireModelExecution()
+        }
+        try await coordinator.release()
+
+        #expect(try await coordinator.send(request) == .handshake(.init(
+            serviceIdentifier: GemmaIPCBuildInfo.serviceIdentifier,
+            adapterRevision: GemmaIPCBuildInfo.adapterRevision,
+            supportedOperations: [.handshake, .cancel, .shutdown]
+        )))
+        let modelLease = try processGate.acquireModelExecution()
+        modelLease.close()
+    }
+
+    @Test("a release fault is discarded before the next model request")
+    func releaseFaultCreatesFreshControllerBeforeNextModelRequest() async throws {
+        let fixture = try NativeGemmaRecordingFixture()
+        defer { fixture.cleanUp() }
+        let firstClient = NativeGemmaClientProbe(
+            releaseError: NativeGemmaRecordingTestError.expectedFailure
+        )
+        let replacementClient = NativeGemmaClientProbe()
+        let initializer = NativeGemmaClientSequenceProbe(
+            clients: [firstClient, replacementClient]
+        )
+        let coordinator = NativeGemmaRecordingBarrierFactory.testing(
+            processGate: try fixture.processGate(),
+            controllerInitializer: {
+                try await initializer.initialize()
+            }
+        )
+        let request = GemmaIPCRequestBody.handshake(.init(model: try testModelPin()))
+        let expectedResponse = GemmaIPCResponseBody.handshake(
+            .init(
+                serviceIdentifier: GemmaIPCBuildInfo.serviceIdentifier,
+                adapterRevision: GemmaIPCBuildInfo.adapterRevision,
+                supportedOperations: [.handshake, .cancel, .shutdown]
+            )
+        )
+
+        #expect(try await coordinator.send(request) == expectedResponse)
+        try await coordinator.acquire()
+        try await coordinator.release()
+
+        #expect(await firstClient.acquireCount() == 1)
+        #expect(await firstClient.releaseCount() == 1)
+        #expect(try await coordinator.send(request) == expectedResponse)
+        #expect(await initializer.initializationCount() == 2)
+        #expect(await replacementClient.acquireCount() == 0)
     }
 
     private func testModelPin() throws -> GemmaModelSnapshotPin {
@@ -170,6 +344,7 @@ struct NativeGemmaRecordingBarrierTests {
 private struct NativeGemmaRecordingFixture {
     let root: URL
     let libraryURL: URL
+    let gateDirectoryURL: URL
 
     init() throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -177,11 +352,23 @@ private struct NativeGemmaRecordingFixture {
             isDirectory: true
         )
         libraryURL = root.appendingPathComponent("Library", isDirectory: true)
+        gateDirectoryURL = root.appendingPathComponent("NativeGemmaGate", isDirectory: true)
         try FileManager.default.createDirectory(
             at: root,
             withIntermediateDirectories: true
         )
+        try FileManager.default.createDirectory(
+            at: gateDirectoryURL,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
         _ = try Library.open(at: libraryURL)
+    }
+
+    func processGate() throws -> GemmaProcessGate {
+        GemmaProcessGate(configuration: try GemmaProcessGateConfiguration(
+            directoryURL: gateDirectoryURL
+        ))
     }
 
     func cleanUp() {
@@ -289,15 +476,28 @@ private actor NativeGemmaClientInitializationProbe {
 }
 
 private actor NativeGemmaClientProbe: NativeGemmaClientControlling {
+    private let acquireError: (any Error)?
+    private let releaseError: (any Error)?
     private var activeLease: GemmaRecordingLease?
     private var acquisitions = 0
     private var releases = 0
 
+    init(
+        acquireError: (any Error)? = nil,
+        releaseError: (any Error)? = nil
+    ) {
+        self.acquireError = acquireError
+        self.releaseError = releaseError
+    }
+
     func acquireRecordingLease(
         _ lease: GemmaRecordingLease
-    ) -> GemmaRecordingLease {
-        activeLease = lease
+    ) throws -> GemmaRecordingLease {
         acquisitions += 1
+        if let acquireError {
+            throw acquireError
+        }
+        activeLease = lease
         return lease
     }
 
@@ -307,6 +507,9 @@ private actor NativeGemmaClientProbe: NativeGemmaClientControlling {
         }
         activeLease = nil
         releases += 1
+        if let releaseError {
+            throw releaseError
+        }
     }
 
     func send(_ body: GemmaIPCRequestBody) throws -> GemmaIPCResponseBody {
@@ -331,6 +534,27 @@ private actor NativeGemmaClientProbe: NativeGemmaClientControlling {
 
     func releaseCount() -> Int {
         releases
+    }
+}
+
+private actor NativeGemmaClientSequenceProbe {
+    private let clients: [any NativeGemmaClientControlling]
+    private var nextIndex = 0
+
+    init(clients: [any NativeGemmaClientControlling]) {
+        self.clients = clients
+    }
+
+    func initialize() throws -> any NativeGemmaClientControlling {
+        guard nextIndex < clients.count else {
+            throw NativeGemmaRecordingTestError.expectedFailure
+        }
+        defer { nextIndex += 1 }
+        return clients[nextIndex]
+    }
+
+    func initializationCount() -> Int {
+        nextIndex
     }
 }
 #endif
