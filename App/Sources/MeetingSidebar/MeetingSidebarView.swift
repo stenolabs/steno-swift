@@ -163,12 +163,15 @@ struct MeetingSidebarView: View {
                     systemImage: "tray",
                     description: Text("Recordings and imports appear here.")
                 )
+                .allowsHitTesting(false)
             } else if showsContentResults,
                       renderableContentHits.isEmpty {
                 ContentUnavailableView.search(text: query)
+                    .allowsHitTesting(false)
             } else if !showsContentResults,
                       allTreeMeetingIDs.isEmpty, isSearching {
                 ContentUnavailableView.search(text: query)
+                    .allowsHitTesting(false)
             }
         }
         .onChange(of: query) { _, _ in
@@ -196,21 +199,32 @@ struct MeetingSidebarView: View {
     }
 
     private var folderHeading: some View {
-        HStack {
-            Text("Folders")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(
-                    isFolderHeadingTargeted
-                        ? Color(nsColor: .selectedControlTextColor)
-                        : Color.secondary
-                )
-            Spacer()
+        Button {
+            beginCreatingFolder(parentFolderID: nil)
+        } label: {
+            HStack {
+                Text("Folders")
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                Image(systemName: "plus")
+                    .font(.caption.weight(.semibold))
+                    .frame(width: 20, height: 20)
+            }
+            .contentShape(Rectangle())
+            .foregroundStyle(
+                isFolderHeadingTargeted
+                    ? Color(nsColor: .selectedControlTextColor)
+                    : Color.secondary
+            )
         }
+        .buttonStyle(.plain)
+        .disabled(model.runtime == nil)
+        .help("New folder")
+        .accessibilityLabel("New folder")
+        .accessibilityHint("Create a folder")
         .padding(.top, Steno.Space.s)
         .listRowSeparator(.hidden)
         .selectionDisabled()
-        .accessibilityLabel("Folders")
-        .accessibilityHint("Drop a nested folder here to move it to the top level.")
         .dropDestination(for: SidebarDragPayload.self) { payloads, _ in
             guard payloads.count == 1,
                   case let .folder(folderID) = payloads[0],
