@@ -34,9 +34,9 @@ The speaker-identity logic from `speaker_suggestions.py` is reshaped as a Swift 
 6. **Protecting originals conflicts with the current default.**
    [Fact] `keep_recordings: false` deletes audio after processing (`config.py:693-763`).
    In the new app, originals are immutable and are never deleted automatically.
-7. **The largest current recovery gap is the lack of a persistent job queue.**
-   [Fact] `processingQueue` is in memory; after a crash between stopping and processing, the recording remains orphaned (`app/main.js`, `live-snapshot-sweep.js:12-20`).
-   The new app persists processing runs as part of its data model.
+7. **The new app has a persistent processing job queue with crash recovery.**
+   [Fact] Processing jobs are persisted under `jobs/`, and startup resets interrupted `running` jobs to `queued` before resuming them.
+   The legacy app's in-memory `processingQueue` remains the comparison point for this parity improvement (`app/main.js`, `live-snapshot-sweep.js:12-20`).
 8. **Further alignment tuning is not worthwhile on the measured conference material.**
    [Fact] Earlier measurements found that overlap voting, island smoothing, and A-B-A collapse affected between 0 and 0.3 percent of the evaluated material.
    Only the word-level split of long sentences starting at five seconds (`transcriber.py:570`), overlap clamping, and the distance limit for nearest fallback are retained.
@@ -310,5 +310,6 @@ The order follows the handoff with one correction: milestone 1 already needs min
    One shared mutual code-identity policy rejects Release peers without the runtime flag, with `get-task-allow`, or with a Hardened Runtime exception entitlement.
    A local arm64 Release build passed strict nested-signature validation, with the helper carrying only its App Sandbox entitlement and no network entitlement.
    Whole-shard `Data` has caller-provided bounds, and checkpoint fit remains unknown until an exact reviewed checkpoint is selected.
-   A reviewed production checkpoint and resource profile in all three catalogs, user-facing import and provider-selection flows, explicit recovery for retained corrupt installs or crash-orphaned staging, end-to-end Release recording and calendar validation under Hardened Runtime, negative signed abuse coverage, and a measured real offline run remain unresolved.
+   Explicit descriptor-bound recovery for v2 crash-orphaned staging is implemented as a manually invoked engine, while legacy or suspicious artifacts remain retained and reported.
+   A reviewed production checkpoint and resource profile in all three catalogs, user-facing import and provider-selection flows, an explicit user-authorized repair flow for retained corrupt targets, end-to-end Release recording and calendar validation under Hardened Runtime, negative signed abuse coverage, and a measured real offline run remain unresolved.
 9. Whether a speaker-count field should ever exist. If it does, ask "how many people spoke?", not "how many people attended?".

@@ -2,6 +2,9 @@
 
 Status: the model store and app-side text-model provider are implemented as inactive MLX-free app boundaries, and the byte-backed runtime is connected only inside the helper, as of 31 August 2026.
 
+The accepted recovery design is an explicit, manually invoked Native Gemma crash-recovery engine.
+Recovery is not automatic publication, startup wiring, UI wiring, or model execution.
+
 The independent production checkpoint, app-provider, and helper-activation catalogs are empty, no import or provider UI is exposed, no model is downloaded, and no imported model is activated.
 This document defines the boundary that must remain intact when a reviewed checkpoint and UI are added later.
 
@@ -80,7 +83,25 @@ It does not report a cancellation that would falsely imply that the installed mo
 If the staging name, inode, or contents differ from the importer's records, cleanup stops and reports an orphan instead of recursively deleting an uncertain tree.
 A cleanup failure deliberately supersedes the original import error because the retained uncertain tree is the immediate recovery condition that must be surfaced.
 A crash can also leave a uniquely named staging directory because no process remains to run cleanup.
-Automatic orphan sweeping is intentionally deferred until it has its own ownership, lock, age, capacity, and user-recovery contract.
+The recovery engine uses monotone v2 owner, bound, and prepared documents, and each document is write-once after its initial durable record.
+The owner document is durable before staging begins.
+The bound document records the exact root identity before any staging contents are created.
+The complete manifest is durable in staging before any other model path is created.
+All manifest-listed model files are pre-created as empty regular files before payload bytes are written.
+The prepared document then records the canonical inode ledger durably before any payload is written.
+The owner, bound, and prepared documents advance monotonically and never permit a later record to reinterpret an earlier state.
+
+Recovery uses the same mutation lease as import and native Gemma execution, with byte 1 as the exclusive mutation lease and byte 0 as recording intent.
+Every recovery mutation is descriptor-based and uses no-follow operations, exact owner and mode checks, and inode-aware cleanup.
+Recovery never follows a symlink or deletes a published target while classifying an entry.
+Cleanup first performs a deterministic no-replace rename of the owned staging root to its cleanup name and synchronizes the parent directory.
+Only the resulting descriptor-bound cleanup tree is removed, and the parent directory is synchronized again after removal.
+
+Recovery retains and reports old v1 entries, malformed v2 documents, and suspicious ownership, identity, or inode state instead of deleting or repairing them.
+Published targets whose names are exactly 64 lowercase hexadecimal characters are never deleted by recovery.
+A valid committed target is only synchronized and verified against its manifest and root identity.
+A corrupt published target is retained, reported as corrupt, and kept separate from any future user-authorized repair flow.
+Recovery does not auto-publish a staged tree, select a model, repair a corrupt target, or activate a model.
 
 Before the namespace commit, every failure path removes only the importer's own staging tree.
 After a successful no-replace publish, the destination is retained and the importer completes synchronization and verification even if cancellation was requested.
@@ -161,4 +182,4 @@ The app-side native `TextModelProvider` requires the same snapshot in an indepen
 Every token count and generation request uses the same shared prompt assembly, generated output must decode as the exact strict JSON contract, and the session is retired before the render returns or throws.
 This provider has no Ollama, network, or `SystemLanguageModel` fallback.
 The exact MLX dependency snapshot builds with Xcode 27 Beta 6 and its matching Metal Toolchain component without loading a model.
-Provider activation remains unavailable until one reviewed production checkpoint and matching limits are present in all three independent catalogs, user-facing consent and import flow, explicit recovery for retained corrupt installs or crash-orphaned staging, end-to-end Release recording and calendar validation under Hardened Runtime, app-facing provider selection, and a real offline model run are accepted.
+Provider activation remains unavailable until one reviewed production checkpoint and matching limits are present in all three independent catalogs, user-facing consent and import flow, an explicit user-authorized repair flow for retained corrupt targets, end-to-end Release recording and calendar validation under Hardened Runtime, app-facing provider selection, and a real offline model run are accepted.
