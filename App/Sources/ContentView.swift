@@ -21,7 +21,10 @@ struct ContentView: View {
                 .safeAreaInset(edge: .top, spacing: 0) {
                     HomeStatusHeader(model: model)
                 }
-                .navigationSplitViewColumnWidth(min: 220, ideal: 280)
+                .navigationSplitViewColumnWidth(
+                    min: 220,
+                    ideal: Steno.Layout.sidebarIdealWidth
+                )
         } detail: {
             WindowStableDetail {
                 // Aufnahme ist ein Zustand des Meetings, kein Modus der App.
@@ -87,20 +90,35 @@ struct ContentView: View {
                 )
 
                 ToolbarItem(
-                    id: MacToolbarItemID.recording.rawValue,
+                    id: MacToolbarItemID.importMeeting.rawValue,
                     placement: .primaryAction
                 ) {
-                    Button {
-                        Task { await model.startRecording() }
+                    Menu {
+                        Button {
+                            Task { await model.createDraftMeeting() }
+                        } label: {
+                            Label("New meeting draft", systemImage: "square.and.pencil")
+                        }
+                        .disabled(model.runtime == nil)
+                        Divider()
+                        Button("Import Audio File…") {
+                            model.requestAudioImport()
+                        }
+                        Button("Import Meeting Package…") {
+                            model.requestMeetingTransferImport()
+                        }
+                        Button("Import from Legacy Steno App…") {
+                            openWindow(id: "legacy-import")
+                        }
                     } label: {
-                        Label("Start recording", systemImage: "record.circle")
+                        Label("Note options", systemImage: "ellipsis.circle")
                     }
-                    .help("Start a new recording")
-                    .disabled(!model.canStartRecording)
+                    .help("Create a draft or import an existing recording")
+                    .disabled(model.runtime == nil)
                 }
                 .defaultCustomization(
                     MacToolbarPresentation.defaultCustomization(
-                        for: .recording,
+                        for: .importMeeting,
                         in: .main
                     )
                 )
@@ -112,9 +130,8 @@ struct ContentView: View {
                     Button {
                         Task { await model.createDraftMeeting() }
                     } label: {
-                        Label("New meeting", systemImage: "square.and.pencil")
+                        Label("New meeting draft", systemImage: "square.and.pencil")
                     }
-                    .help("Create a meeting without a recording, to take notes beforehand")
                     .disabled(model.runtime == nil)
                 }
                 .defaultCustomization(
@@ -125,28 +142,21 @@ struct ContentView: View {
                 )
 
                 ToolbarItem(
-                    id: MacToolbarItemID.importMeeting.rawValue,
+                    id: MacToolbarItemID.recording.rawValue,
                     placement: .primaryAction
                 ) {
-                    Menu {
-                        Button("Import Audio File…") {
-                            model.requestAudioImport()
-                        }
-                        Button("Import Meeting Package…") {
-                            model.requestMeetingTransferImport()
-                        }
-                        Button("Import from Legacy Steno App…") {
-                            openWindow(id: "legacy-import")
-                        }
+                    Button {
+                        Task { await model.startRecording() }
                     } label: {
-                        Label("Import", systemImage: "square.and.arrow.down")
+                        Label("New note", systemImage: "plus")
                     }
-                    .help("Import an audio file, meeting package, or legacy library")
-                    .disabled(model.runtime == nil)
+                    .buttonStyle(.borderedProminent)
+                    .help("Start a new recording")
+                    .disabled(!model.canStartRecording)
                 }
                 .defaultCustomization(
                     MacToolbarPresentation.defaultCustomization(
-                        for: .importMeeting,
+                        for: .recording,
                         in: .main
                     )
                 )
@@ -390,13 +400,7 @@ extension ContentView {
             )
             .navigationTitle(MacWindowPresentation.meetingsTitle)
         } else {
-            ContentUnavailableView(
-                "No meeting selected",
-                systemImage: "waveform",
-                description: Text("Start a recording or import an audio file.")
-            )
-            // Ohne Titel zeigt das Fenster den Bundle-Namen "steno-macos".
-            .navigationTitle(MacWindowPresentation.meetingsTitle)
+            LegacyHomeView()
         }
     }
 

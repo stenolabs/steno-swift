@@ -43,6 +43,8 @@ enum MeetingDetailObservationPolicy {
 struct MeetingDetailView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.openWindow) private var openWindow
     let meetingID: MeetingID
 
     @State private var revision: TranscriptRevision?
@@ -116,6 +118,11 @@ struct MeetingDetailView: View {
                 findBar
             }
             .animation(statusAnimation, value: pipelineStatus.state)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if let meeting, meeting.status != .recording {
+                meetingAskDock
+            }
         }
         .navigationTitle(meeting?.title ?? "")
         .navigationSubtitle(subtitle)
@@ -639,6 +646,12 @@ struct MeetingDetailView: View {
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: Steno.Space.m) {
+                    if let meeting {
+                        MeetingEditorialHeader(
+                            meeting: meeting,
+                            duration: duration
+                        )
+                    }
                     originNote(revision.origin)
                     if let meeting {
                         TitleSuggestionSection(
@@ -681,15 +694,57 @@ struct MeetingDetailView: View {
                         .id(index)
                     }
                 }
-                .padding()
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 36)
+                .padding(.vertical, 28)
+                .frame(maxWidth: Steno.Layout.readingWidth, alignment: .leading)
+                .frame(maxWidth: .infinity)
             }
+            .background(Steno.Surfaces.paper(colorScheme))
             // The jump target exists only after a citation button fires.
             .onChange(of: citedTurnIndex) { _, newIndex in
                 guard let newIndex else { return }
                 proxy.scrollTo(newIndex, anchor: .top)
             }
         }
+    }
+
+    private var meetingAskDock: some View {
+        HStack {
+            Spacer()
+            Button {
+                LibraryChatModel.queueIntent(LibraryChatModel.Intent(
+                    presetDraft: nil,
+                    meetingIDs: [meetingID]
+                ))
+                openWindow(id: "library-chat")
+            } label: {
+                HStack(spacing: Steno.Space.s) {
+                    Image(systemName: "sparkle.magnifyingglass")
+                    Text("Ask this meeting")
+                    Image(systemName: "arrow.up.right")
+                        .font(.caption2)
+                        .foregroundStyle(Steno.Surfaces.quietInk(colorScheme))
+                }
+                .font(.callout.weight(.medium))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 9)
+                .background(
+                    Steno.Surfaces.paper(colorScheme),
+                    in: Capsule()
+                )
+                .overlay {
+                    Capsule()
+                        .strokeBorder(Steno.Surfaces.border(colorScheme))
+                }
+            }
+            .buttonStyle(.plain)
+            .help("Open Library Chat scoped to this meeting")
+            Spacer()
+        }
+        .padding(.horizontal, Steno.Space.l)
+        .padding(.vertical, Steno.Space.s)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider() }
     }
 
     /// Eigene Leiste statt `.searchable`: Die Seitenleiste belegt den
@@ -1143,6 +1198,66 @@ struct MeetingDetailView: View {
         return hours > 0
             ? String(format: "%d:%02d:%02d", hours, minutes, secs)
             : String(format: "%02d:%02d", minutes, secs)
+    }
+}
+
+private struct MeetingEditorialHeader: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    let meeting: Meeting
+    let duration: TimeInterval?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Steno.Space.m) {
+            Text(meeting.title)
+                .font(Steno.Typography.meetingTitle)
+                .foregroundStyle(Steno.Surfaces.ink(colorScheme))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: Steno.Space.s) {
+                metadataChip(
+                    meeting.createdAt.formatted(
+                        .dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute()
+                    ),
+                    systemImage: "calendar"
+                )
+                if let duration {
+                    metadataChip(
+                        MeetingDetailView.durationText(duration),
+                        systemImage: "clock"
+                    )
+                }
+                if meeting.status != .ready {
+                    metadataChip(statusLabel, systemImage: "circle.dotted")
+                }
+                if meeting.isDemo {
+                    DemoBadge()
+                }
+            }
+        }
+        .padding(.bottom, Steno.Space.s)
+    }
+
+    private func metadataChip(_ title: String, systemImage: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(Steno.Surfaces.quietInk(colorScheme))
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(
+                Steno.Surfaces.sunkenPaper(colorScheme),
+                in: Capsule()
+            )
+    }
+
+    private var statusLabel: String {
+        switch meeting.status {
+        case .draft: String(localized: "Draft")
+        case .recording: String(localized: "Recording")
+        case .interrupted: String(localized: "Interrupted")
+        case .processing: String(localized: "Processing")
+        case .ready: String(localized: "Ready")
+        }
     }
 }
 

@@ -1,3 +1,4 @@
+import AppKit
 import StenoDomain
 import StenoIdentity
 import StenoPipeline
@@ -77,6 +78,9 @@ enum HomeStatusReviewPolicy {
 struct HomeStatusHeader: View {
     let model: AppModel
 
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.openWindow) private var openWindow
+
     @State private var activeJobCount = 0
     @State private var processingMeetingIDs: [MeetingID] = []
     @State private var reviewMeetingIDs: [MeetingID] = []
@@ -84,11 +88,10 @@ struct HomeStatusHeader: View {
     var body: some View {
         let state = projectedState
         VStack(alignment: .leading, spacing: 0) {
-            statusRow(state)
+            brandRow
+            navigationRow
             Divider()
-            // Pre-meeting brief: upcoming event / manual control plus the
-            // streaming region; collapses cancel the in-flight generation.
-            // Reads AppModel/TextModelSettings from the environment.
+            statusRow(state)
             PreMeetingBriefCard()
             if !reviewMeetingIDs.isEmpty {
                 Divider()
@@ -96,8 +99,77 @@ struct HomeStatusHeader: View {
             }
             Divider()
         }
-        .background(.bar)
+        .background(Steno.Surfaces.sunkenPaper(colorScheme))
         .task { await refreshLoop() }
+    }
+
+    private var brandRow: some View {
+        HStack(spacing: 9) {
+            Image(nsImage: NSApplication.shared.applicationIconImage)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 28, height: 28)
+                .accessibilityHidden(true)
+            Text("Steno")
+                .font(Steno.Typography.wordmark)
+                .foregroundStyle(Steno.Surfaces.ink(colorScheme))
+            Spacer()
+            SettingsLink {
+                Image(systemName: "gearshape")
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Steno.Surfaces.quietInk(colorScheme))
+            .help("Settings")
+        }
+        .padding(.horizontal, Steno.Space.m)
+        .padding(.top, Steno.Space.m)
+        .padding(.bottom, Steno.Space.s)
+    }
+
+    private var navigationRow: some View {
+        HStack(spacing: Steno.Space.xs) {
+            navigationButton(
+                title: "Home",
+                systemImage: "house",
+                isSelected: model.selectedMeetingIDs.isEmpty
+            ) {
+                model.selectedMeetingID = nil
+            }
+            navigationButton(
+                title: "Chat",
+                systemImage: "bubble.left.and.text.bubble.right",
+                isSelected: false
+            ) {
+                openWindow(id: "library-chat")
+            }
+        }
+        .padding(.horizontal, Steno.Space.s)
+        .padding(.bottom, Steno.Space.s)
+    }
+
+    private func navigationButton(
+        title: LocalizedStringKey,
+        systemImage: String,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(.callout.weight(isSelected ? .semibold : .regular))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
+                .background(
+                    isSelected
+                        ? Steno.Surfaces.paper(colorScheme)
+                        : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 7)
+                )
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Steno.Surfaces.ink(colorScheme))
     }
 
     private var projectedState: HomeStatusHeaderState {
