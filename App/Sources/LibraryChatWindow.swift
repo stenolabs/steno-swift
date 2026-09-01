@@ -5,6 +5,12 @@ import StenoLibrary
 import StenoPipeline
 import SwiftUI
 
+extension Notification.Name {
+    static let libraryChatIntentQueued = Notification.Name(
+        "org.steno.library-chat.intent-queued"
+    )
+}
+
 /// One persisted chat turn in a library chat session.
 struct LibraryChatMessage: Codable, Equatable, Identifiable, Sendable {
     enum Role: String, Codable, Sendable {
@@ -310,7 +316,19 @@ final class LibraryChatModel {
         var meetingIDs: [MeetingID]
     }
 
-    @MainActor static var pendingIntent: Intent?
+    @MainActor private static var pendingIntent: Intent?
+
+    @MainActor
+    static func queueIntent(_ intent: Intent) {
+        pendingIntent = intent
+        NotificationCenter.default.post(name: .libraryChatIntentQueued, object: nil)
+    }
+
+    @MainActor
+    static func takePendingIntent() -> Intent? {
+        defer { pendingIntent = nil }
+        return pendingIntent
+    }
 
     init(
         store: LibraryChatSessionStore = LibraryChatSessionStore(),
@@ -408,6 +426,9 @@ final class LibraryChatModel {
     /// given meetings and persists it.
     func applyIntent(_ intent: Intent, appModel: AppModel? = nil) {
         guard !intent.meetingIDs.isEmpty else { return }
+        if selectedSessionID == nil {
+            createSession()
+        }
         if let appModel {
             setScope(.meetings(intent.meetingIDs), appModel: appModel)
         } else if let index = sessions.firstIndex(where: { $0.id == selectedSessionID }) {
@@ -492,19 +513,24 @@ struct LibraryChatWindow: View {
         .task {
             if chat == nil {
                 chat = LibraryChatModel(makeAnswerer: makeAnswerer)
-                // Consume a pending cross-surface handoff (People Directory
-                // "Ask about <name>"): preset draft plus a meeting scope.
-                if let intent = LibraryChatModel.pendingIntent {
-                    LibraryChatModel.pendingIntent = nil
-                    draft = intent.presetDraft ?? ""
-                    chat?.applyIntent(intent, appModel: model)
-                }
             }
+            consumePendingIntent()
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .libraryChatIntentQueued)
+        ) { _ in
+            consumePendingIntent()
         }
         .onDisappear {
             // Owner-bound cancellation on window close.
             chat?.cancel()
         }
+    }
+
+    private func consumePendingIntent() {
+        guard let chat, let intent = LibraryChatModel.takePendingIntent() else { return }
+        draft = intent.presetDraft ?? ""
+        chat.applyIntent(intent, appModel: model)
     }
 
     private func content(_ chat: LibraryChatModel) -> some View {

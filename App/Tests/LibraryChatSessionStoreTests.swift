@@ -1,4 +1,6 @@
 import Foundation
+import StenoDomain
+import StenoIntelligence
 import Testing
 @testable import steno_macos
 
@@ -51,5 +53,30 @@ struct LibraryChatSessionStoreTests {
             forKey: LibraryChatSessionStore.defaultsKey
         )
         #expect(store.load().isEmpty)
+    }
+}
+
+@Suite("Library chat handoff")
+@MainActor
+struct LibraryChatHandoffTests {
+    @Test("a scoped handoff creates the first session")
+    func scopedHandoffCreatesFirstSession() {
+        let suiteName = "LibraryChatHandoffTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let meetingID = MeetingID()
+        let model = LibraryChatModel(
+            store: LibraryChatSessionStore(defaults: defaults),
+            makeAnswerer: { FoundationModelsLiveQueryStreamer() }
+        )
+
+        model.applyIntent(LibraryChatModel.Intent(
+            presetDraft: nil,
+            meetingIDs: [meetingID]
+        ))
+
+        #expect(model.sessions.count == 1)
+        #expect(model.selectedSession?.scope == .meetings([meetingID]))
     }
 }

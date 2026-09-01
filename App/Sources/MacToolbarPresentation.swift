@@ -38,11 +38,11 @@ enum MacToolbarPresentation {
     ) -> Bool {
         switch (item, context) {
         case (.recording, .main),
-             (.newMeeting, .main),
              (.importMeeting, .main),
              (.inspector, .meetingDetail):
             true
         case (.microphoneSelection, .main),
+             (.newMeeting, .main),
              (.recordingNotes, .recording),
              (.newFolder, .sidebar),
              (.findTranscript, .meetingDetail),

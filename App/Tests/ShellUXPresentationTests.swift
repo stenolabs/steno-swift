@@ -4,6 +4,36 @@ import StenoIdentity
 import Testing
 @testable import steno_macos
 
+@Suite("Legacy home presentation")
+struct LegacyHomePresentationTests {
+    @Test("recent meetings are newest first and bounded")
+    func recentMeetingsAreNewestFirstAndBounded() {
+        let meetings = (0..<12).map { offset in
+            Meeting(
+                title: "Meeting \(offset)",
+                createdAt: Date(timeIntervalSinceReferenceDate: Double(offset)),
+                status: .ready
+            )
+        }
+
+        let recent = LegacyHomePresentation.recentMeetings(meetings)
+
+        #expect(recent.count == LegacyHomePresentation.recentLimit)
+        #expect(recent.map(\.title) == (4..<12).reversed().map { "Meeting \($0)" })
+    }
+
+    @Test("greeting hour follows the supplied calendar")
+    func greetingHourUsesCalendar() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let date = calendar.date(
+            from: DateComponents(year: 2026, month: 9, day: 1, hour: 14)
+        )!
+
+        #expect(LegacyHomePresentation.greetingHour(date, calendar: calendar) == 14)
+    }
+}
+
 @Suite("Command palette filtering")
 struct CommandPaletteFilterTests {
     private func item(

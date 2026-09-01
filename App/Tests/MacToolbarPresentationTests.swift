@@ -20,9 +20,9 @@ struct MacToolbarPresentationTests {
     @Test("essential actions are visible by default in their context")
     func exposesEssentialDefaults() {
         #expect(MacToolbarPresentation.showsByDefault(.recording, in: .main))
-        #expect(MacToolbarPresentation.showsByDefault(.newMeeting, in: .main))
         #expect(MacToolbarPresentation.showsByDefault(.importMeeting, in: .main))
         #expect(MacToolbarPresentation.showsByDefault(.inspector, in: .meetingDetail))
+        #expect(!MacToolbarPresentation.showsByDefault(.newMeeting, in: .main))
         #expect(!MacToolbarPresentation.showsByDefault(.microphoneSelection, in: .main))
         #expect(!MacToolbarPresentation.showsByDefault(.recordingNotes, in: .recording))
     }

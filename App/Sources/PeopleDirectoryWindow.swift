@@ -116,10 +116,10 @@ struct PeopleDirectoryWindow: View {
     /// scoped to the person's meetings through the chat scoping seam; the
     /// window consumes and clears the pending intent on its next creation.
     private func askAbout(_ person: PersonDirectoryEntry) {
-        LibraryChatModel.pendingIntent = LibraryChatModel.Intent(
+        LibraryChatModel.queueIntent(LibraryChatModel.Intent(
             presetDraft: "Ask about \(person.displayName)",
             meetingIDs: person.meetingIDs
-        )
+        ))
         NSApp.activate(ignoringOtherApps: true)
         openWindow(id: "library-chat")
     }
