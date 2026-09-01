@@ -43,6 +43,51 @@ struct NativeGemmaModelImporterTests {
         #expect(try fixture.storeListing() == originalListing)
     }
 
+    @Test("installed resolver returns a descriptor capability without changing the store")
+    func installedResolverReturnsVerifiedDescriptorCapability() async throws {
+        let fixture = try ImportFixture.make()
+        _ = try await fixture.run(try fixture.importer())
+        let listing = try fixture.storeListing()
+        let targetIdentity = try fixture.identity(of: fixture.targetURL)
+
+        let directory = try fixture.resolver().resolve(
+            requirements: fixture.requirements
+        )
+        defer { directory.close() }
+
+        #expect(directory.modelIdentifier == ImportFixture.modelIdentifier)
+        #expect(directory.manifestSHA256 == fixture.requirements.expectedManifestSHA256)
+        #expect(directory.rootIdentity.deviceID == targetIdentity.deviceID)
+        #expect(directory.rootIdentity.fileID == targetIdentity.inode)
+        #expect(try fixture.storeListing() == listing)
+    }
+
+    @Test("installed resolver does not create a missing model hierarchy")
+    func installedResolverMissingIsReadOnly() throws {
+        let fixture = try ImportFixture.make()
+
+        #expect(throws: NativeGemmaModelImportError.installedSnapshotMissing) {
+            _ = try fixture.resolver().resolve(requirements: fixture.requirements)
+        }
+
+        #expect(!FileManager.default.fileExists(atPath: fixture.modelsURL.path))
+    }
+
+    @Test("installed resolver retains and rejects a corrupt snapshot")
+    func installedResolverRejectsCorruptSnapshot() async throws {
+        let fixture = try ImportFixture.make()
+        _ = try await fixture.run(try fixture.importer())
+        let identity = try fixture.identity(of: fixture.targetURL)
+        try fixture.overwriteFirstByte(of: fixture.targetWeightsURL, with: 0x7f)
+
+        #expect(throws: NativeGemmaModelImportError.installedSnapshotCorrupt) {
+            _ = try fixture.resolver().resolve(requirements: fixture.requirements)
+        }
+
+        #expect(try fixture.identity(of: fixture.targetURL) == identity)
+        #expect(FileManager.default.fileExists(atPath: fixture.targetURL.path))
+    }
+
     @Test("a corrupt existing target is retained and never replaced")
     func corruptTargetFailsClosed() async throws {
         let fixture = try ImportFixture.make()
@@ -530,6 +575,14 @@ private final class ImportFixture: @unchecked Sendable {
                 availableByteCountOverride: availableByteCount
             ),
             checkpoint: checkpoint
+        )
+    }
+
+    func resolver() throws -> NativeGemmaInstalledModelResolver {
+        NativeGemmaInstalledModelResolver(
+            configuration: try NativeGemmaModelStoreConfiguration(
+                testRootDirectory: storeRootURL
+            )
         )
     }
 

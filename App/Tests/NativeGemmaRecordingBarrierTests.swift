@@ -531,6 +531,48 @@ struct NativeGemmaRecordingBarrierTests {
         #expect(await initializer.initializationCount() == 2)
     }
 
+    @Test("a session activation fault trips the same relaunch breaker")
+    func sessionActivationFaultRequiresRecordingCycleBeforeRetry() async throws {
+        let fixture = try NativeGemmaRecordingFixture()
+        defer { fixture.cleanUp() }
+        let firstClient = NativeGemmaClientProbe(
+            sendError: GemmaClientControllerError.operationFailed(.sessionActivation)
+        )
+        let replacementClient = NativeGemmaClientProbe()
+        let initializer = NativeGemmaClientSequenceProbe(
+            clients: [firstClient, replacementClient]
+        )
+        let coordinator = NativeGemmaRecordingBarrierFactory.testing(
+            processGate: try fixture.processGate(),
+            controllerInitializer: {
+                try await initializer.initialize()
+            }
+        )
+        let model = try testModelPin()
+        let request = GemmaIPCRequestBody.handshake(.init(model: model))
+
+        await #expect(throws: GemmaClientControllerError.operationFailed(.sessionActivation)) {
+            _ = try await coordinator.withNativeModelSession(model: model) { session in
+                try await session.send(request)
+            }
+        }
+        await #expect(throws: NativeGemmaCoordinatorError.unavailable) {
+            _ = try await coordinator.withNativeModelSession(model: model) { session in
+                try await session.send(request)
+            }
+        }
+        #expect(await initializer.initializationCount() == 1)
+        #expect(await firstClient.sendCount() == 1)
+
+        try await coordinator.acquire()
+        try await coordinator.release()
+
+        _ = try await coordinator.withNativeModelSession(model: model) { session in
+            try await session.send(request)
+        }
+        #expect(await initializer.initializationCount() == 2)
+    }
+
     @Test("a release fault is discarded before the next model request")
     func releaseFaultCreatesFreshControllerBeforeNextModelRequest() async throws {
         let fixture = try NativeGemmaRecordingFixture()

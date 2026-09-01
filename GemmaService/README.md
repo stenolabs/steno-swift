@@ -35,14 +35,16 @@ This first slice provides:
 - a consent chokepoint with one-shot, pin-bound, source-inode-bound confirmations and an empty production checkpoint catalog;
 - an MLX-free importer that copies only a fully pinned local manifest into a content-addressed Steno-controlled store, publishes without replacement, and returns path-free provenance;
 - descriptor-bound source and installed-tree verification with exact ownership, mode, hard-link, entry, size, checksum, and root-inode checks; and
+- an app-side resolver that opens only one exact app-approved installed digest as a verified descriptor-owned capability, without discovery, hierarchy creation, repair, or path return;
 - helper-side exact-profile activation with fixed memory and prompt limits, byte-backed MLX materialization, one shared tokenizer and input processor for counting and generation, and a fresh `LanguageModelSession` for every generation request; and
+- an inactive app-side native `TextModelProvider` that keeps one exact helper session across a complete template render and uses one strict JSON prompt contract for both counting and generation; and
 - signed positive XPC integration and app tests that verify fail-closed inference, exact helper absence within the owning app process before a recording lease, failure before permission UI, permission-denial release, and concurrent first-use initialization.
 
 It does not yet provide:
 
 - an app setting, an approved production checkpoint catalog, or a user-facing import flow;
 - automatic checkpoint downloads;
-- report generation from the Steno app;
+- user-selectable or production-approved native Gemma report generation from the Steno app;
 - Hardened Runtime validation for the production app and a Release-specific entitlement policy;
 - negative signed abuse and multiprocess XPC integration coverage;
 - an approved production activation profile and app-facing provider selection;
@@ -52,7 +54,7 @@ It does not yet provide:
 The standalone SwiftPM package contains the verified local model-loading path, and the Xcode 27 variant links that runtime only into the XPC helper.
 The helper has no incoming or outgoing network entitlement in that project variant, while the application process remains MLX-free.
 The pinned tokenizer and MLX dependency graph still contributes dormant Hub and URL-session code to the helper binary, but Steno's activation path never calls it and App Sandbox denies network access because the helper has no network entitlement.
-The production helper activation catalog is deliberately empty, so no checkpoint can currently create an executor and the app-facing provider remains unavailable.
+The independent production checkpoint, app-provider, and helper-activation catalogs are deliberately empty, so no checkpoint can currently create an executor and native Gemma remains unavailable for user selection.
 A standalone SwiftPM executable has no operating-system network sandbox, so source-level absence of a download path must not be described as a hard network guarantee.
 
 The standalone command-line factory is isolated in a package-only prototype target that is not linked into the XPC helper.
@@ -146,7 +148,7 @@ It must not be read from the same untrusted checkpoint directory it is meant to 
 
 ## Remaining production work
 
-The remaining production work is to review and add one exact checkpoint and matching resource profile to the currently empty production catalogs, expose the consented import and provider-selection flows, define explicit orphan and corrupt-install recovery, validate Hardened Runtime and the Release entitlement policy, and complete a resource-measured real offline model run.
+The remaining production work is to review and add one exact checkpoint and matching resource profile to all three currently empty production catalogs, expose the consented import and provider-selection flows, define explicit orphan and corrupt-install recovery, validate Hardened Runtime and the Release entitlement policy, and complete a resource-measured real offline model run.
 Negative signed abuse and multiprocess XPC coverage must be complete before native Gemma is activated.
 The normative design for that boundary is [Native Gemma cross-process gate](../docs/NATIVE-GEMMA-GATE.md).
 Approved manifests and expected digests must live in Steno-controlled metadata, and installation must route through `ModelInstallationCoordinator` with explicit consent.

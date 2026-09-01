@@ -295,11 +295,15 @@ The order follows the handoff with one correction: milestone 1 already needs min
    The crash-releasing cross-process gate and protocol-v4 atomic gate-and-model-directory descriptor bind are implemented and documented in `docs/NATIVE-GEMMA-GATE.md`.
    The helper performs descriptor-rooted verification at bind time, retains the root capability, and binds every model request to the exact session model pin.
    The consented local importer, app import facade, and content-addressed model store are implemented as an MLX-free boundary and documented in `docs/NATIVE-GEMMA-MODEL-STORE.md`; the production checkpoint catalog remains empty.
+   The app can resolve only one exact app-approved manifest digest from an already existing store hierarchy, verifies that installed tree through an adopted descriptor, and neither discovers models nor creates or repairs storage during resolution.
    The exact MLX dependency snapshot builds with Xcode 27 Beta 6 and its matching Metal Toolchain component without loading a model.
    The stored adapter seam accepts a prebuilt `ModelContainer` with an immutable `ModelDescriptor`, while the path-backed factory is isolated in a CLI-only prototype target that is not linked into the helper.
    A one-shot child-file activation boundary retains exact shard descriptors and immutable non-shard bytes, strictly parses every verified shard before the trusted callback, and rejects duplicate raw tensor names across shards.
    The helper now materializes MLX only from those verified bytes for an exact helper-controlled activation profile, atomically binds the executor before acknowledgement, uses one processor for prompt counting and generation preparation, and creates a fresh Foundation Models session per generation.
-   The production activation catalog remains empty, so no installed checkpoint can currently create an executor and the app-facing provider remains unavailable.
+   The app-side `TextModelProvider` path now keeps one exact helper model session for an entire template render, including every count, map, and reduce operation, and retires it before returning or throwing.
+   Prompt counting and generation use the same shared strict JSON prompt contract, and native output is rejected unless it is exactly the expected JSON shape.
+   Import approval, app provider profiles, and helper activation are independent exact-pin allowlists.
+   All three production catalogs remain empty, so no installed checkpoint can currently create an executor and native Gemma remains unavailable for user selection.
    Whole-shard `Data` has caller-provided bounds, and checkpoint fit remains unknown until an exact reviewed checkpoint is selected.
-   A reviewed production checkpoint and resource profile, user-facing import and provider-selection flows, explicit recovery for retained corrupt installs or crash-orphaned staging, production Hardened Runtime validation, negative signed abuse coverage, and a measured real offline run remain unresolved.
+   A reviewed production checkpoint and resource profile in all three catalogs, user-facing import and provider-selection flows, explicit recovery for retained corrupt installs or crash-orphaned staging, production Hardened Runtime validation, negative signed abuse coverage, and a measured real offline run remain unresolved.
 9. Whether a speaker-count field should ever exist. If it does, ask "how many people spoke?", not "how many people attended?".

@@ -21,6 +21,23 @@ struct NativeGemmaModelStoreAdapterTests {
         }
     }
 
+    @Test("the empty production catalog rejects activation before store resolution")
+    func productionCatalogRejectsUnapprovedActivation() throws {
+        let approvedPin = try pin(adapterRevision: GemmaIPCBuildInfo.adapterRevision)
+        let model = try GemmaModelSnapshotPin(
+            modelIdentifier: approvedPin.modelIdentifier,
+            checkpointRevision: approvedPin.checkpointRevision,
+            adapterRevision: approvedPin.adapterRevision,
+            licenseIdentifier: approvedPin.licenseIdentifier,
+            manifestSHA256: approvedPin.manifestSHA256
+        )
+
+        #expect(throws: NativeGemmaModelStoreAdapterError.modelNotApproved) {
+            _ = try NativeGemmaModelStoreAdapter
+                .productionInstalledModelDirectory(for: model)
+        }
+    }
+
     private func pin(adapterRevision: String) throws -> ApprovedNativeGemmaModelPin {
         try ApprovedNativeGemmaModelPin(
             modelIdentifier: "google/gemma-4-test",

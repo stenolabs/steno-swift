@@ -48,6 +48,9 @@ actor NativeGemmaModelExecutor: GemmaModelExecuting {
     typealias TokenCounter = @Sendable (String) async throws -> Int
     typealias Generator = @Sendable (String, Int) async throws -> String
 
+    static let responseCompletionMarker =
+        "<|STENO_RESPONSE_COMPLETE_7F42D6B1|>"
+
     private let maximumPromptTokens: Int
     private let countPreparedTokens: TokenCounter
     private let generateResponse: Generator
@@ -93,7 +96,7 @@ actor NativeGemmaModelExecutor: GemmaModelExecuting {
 
     func countTokens(in text: String) async throws -> Int {
         try Task.checkCancellation()
-        let count = try await countPreparedTokens(text)
+        let count = try await countPreparedTokens(Self.completionMarkedPrompt(text))
         try Task.checkCancellation()
         guard count >= 0 else {
             throw GemmaModelExecutionError.internalFailure
@@ -107,10 +110,40 @@ actor NativeGemmaModelExecutor: GemmaModelExecuting {
             throw GemmaModelExecutionError.contextWindowExceeded
         }
         do {
-            return try await generateResponse(prompt, maximumTokens)
+            let response = try await generateResponse(
+                Self.completionMarkedPrompt(prompt),
+                maximumTokens
+            )
+            guard let completed = Self.completedResponse(from: response) else {
+                throw GemmaModelExecutionError.responseTruncated
+            }
+            return completed
         } catch {
             throw Self.mapGenerationError(error)
         }
+    }
+
+    static func completionMarkedPrompt(_ prompt: String) -> String {
+        """
+        \(prompt)
+
+        Completion protocol:
+        After the complete JSON object, append this exact marker on a new line:
+        \(responseCompletionMarker)
+        Do not emit the marker until the JSON object is complete.
+        Do not emit any text after the marker.
+        """
+    }
+
+    static func completedResponse(from response: String) -> String? {
+        let trimmed = response.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasSuffix(responseCompletionMarker) else { return nil }
+        let markerStart = trimmed.index(
+            trimmed.endIndex,
+            offsetBy: -responseCompletionMarker.count
+        )
+        return String(trimmed[..<markerStart])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     static func mapGenerationError(_ error: any Error) -> any Error {

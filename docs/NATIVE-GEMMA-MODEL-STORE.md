@@ -1,8 +1,8 @@
 # Native Gemma model store
 
-Status: the model store is implemented as an inactive MLX-free app boundary, and its byte-backed runtime is connected only inside the helper behind an empty production activation catalog, as of 31 August 2026.
+Status: the model store and app-side text-model provider are implemented as inactive MLX-free app boundaries, and the byte-backed runtime is connected only inside the helper, as of 31 August 2026.
 
-The production checkpoint catalog is empty, no import UI is exposed, no model is downloaded, and no imported model is activated.
+The independent production checkpoint, app-provider, and helper-activation catalogs are empty, no import or provider UI is exposed, no model is downloaded, and no imported model is activated.
 This document defines the boundary that must remain intact when a reviewed checkpoint and UI are added later.
 
 ## Authorization boundary
@@ -43,6 +43,9 @@ The production root is shared with the native Gemma process gate and is derived 
 Calling `NativeGemmaModelStoreConfiguration.production` performs no filesystem action.
 The shared root may already exist because the native Gemma process gate uses it independently of model consent.
 The `Models/v1` descendants are opened or created only after the coordinator has consumed a valid confirmation.
+Installed-model resolution is separate from import and never creates that hierarchy.
+It accepts one complete app-approved pin, opens only the exact digest leaf with no-follow descriptor operations, rechecks the store-parent identity, and transfers descriptor ownership directly into complete verification.
+A missing hierarchy or digest and a corrupt installed snapshot are distinct fail-closed outcomes; resolution performs no discovery, repair, deletion, or path return.
 
 The final model location is content-addressed by the pinned manifest digest:
 
@@ -126,6 +129,7 @@ The production helper remains model-free in practice because its activation cata
 The Xcode 27 app links the MLX-free store adapter, while the normal Xcode 26 application remains unchanged.
 The adapter maps only a coordinator-approved pin and source identity into store requirements and maps only verified fields back into `NativeGemmaModelSnapshot`.
 One app facade now acquires import admission from the same process-wide coordinator used by recording before it mints and consumes the coordinator confirmation or invokes the adapter.
+The app's installed-model resolver separately requires the exact pin in the fixed app checkpoint catalog before it opens the existing digest leaf as a verified descriptor-owned capability.
 
 Neither the coordinator, adapter, nor store can download a model, launch the helper, create an MLX runtime, select Ollama, select `SystemLanguageModel`, or fall back to another provider.
 Model import now joins the app-wide recording coordination.
@@ -143,5 +147,8 @@ For an exact helper-approved profile, the loader performs complete byte-backed M
 The helper binds that executor atomically before acknowledging the session, checks recording intent around activation, and closes an unapproved model capability without publishing an executor.
 The app completes the authenticated helper bind under a distinct 600-second activation deadline before it starts the first ordinary request deadline.
 An activation or pre-bind connection failure faults model use until a later recording cycle independently proves helper absence through the process gate, rather than immediately relaunching the helper.
+The app-side native `TextModelProvider` requires the same snapshot in an independent fixed resource-profile catalog and keeps one closure-scoped helper model session across a complete template render.
+Every token count and generation request uses the same shared prompt assembly, generated output must decode as the exact strict JSON contract, and the session is retired before the render returns or throws.
+This provider has no Ollama, network, or `SystemLanguageModel` fallback.
 The exact MLX dependency snapshot builds with Xcode 27 Beta 6 and its matching Metal Toolchain component without loading a model.
-Provider activation remains unavailable until a reviewed production checkpoint and matching limits, user-facing consent and import flow, explicit recovery for retained corrupt installs or crash-orphaned staging, production Hardened Runtime validation, app-facing provider selection, and a real offline model run are accepted.
+Provider activation remains unavailable until one reviewed production checkpoint and matching limits are present in all three independent catalogs, user-facing consent and import flow, explicit recovery for retained corrupt installs or crash-orphaned staging, production Hardened Runtime validation, app-facing provider selection, and a real offline model run are accepted.

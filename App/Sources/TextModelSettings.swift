@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import Security
+import StenoDomain
 import StenoIntelligence
 import StenoPipeline
 
@@ -452,11 +453,23 @@ extension TextModelSettings {
         registry: any TextModelEndpointRegistryStoring,
         providerFactory: TextModelProviderBuilding
     ) throws -> any TextModelProvider {
-        if selection.nativeGemmaModelSnapshot != nil {
+        if let nativeSnapshot = selection.nativeGemmaModelSnapshot {
+            guard selection.endpointID
+                    == NativeGemmaModelSnapshot.reservedTextModelEndpointID,
+                  selection.endpointSnapshot == nil else {
+                throw PipelineError.nativeGemmaModelPinsInvalid
+            }
+            #if STENO_NATIVE_GEMMA_MODEL_STORE && canImport(StenoGemmaClient)
+            return try NativeGemmaTextModelProvider(snapshot: nativeSnapshot)
+            #else
             throw PipelineError.nativeGemmaProviderUnavailable
+            #endif
         }
         guard let endpointID = selection.endpointID else {
             return FoundationModelsProvider()
+        }
+        guard endpointID != NativeGemmaModelSnapshot.reservedTextModelEndpointID else {
+            throw PipelineError.nativeGemmaModelPinsInvalid
         }
         return try TextModelSettingsResolutionLock.withLock {
             let state = try TextModelEndpointRegistryRecovery.recover(
