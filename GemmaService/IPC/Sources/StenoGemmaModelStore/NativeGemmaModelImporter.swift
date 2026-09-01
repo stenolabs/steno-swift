@@ -2,6 +2,7 @@ import CryptoKit
 import Darwin
 import Dispatch
 import Foundation
+import StenoGemmaProcessGate
 
 /// The stable identity of the source directory approved by the application layer.
 ///
@@ -27,6 +28,8 @@ public enum NativeGemmaModelImportError: Error, Equatable, LocalizedError, Senda
     case installedSnapshotMissing
     case installedSnapshotCorrupt
     case storeParentChanged
+    case storeMutationUnavailable
+    case preemptedByRecording
     case importAlreadyInProgress
     case publishConflict
     case orphanedStaging
@@ -52,6 +55,10 @@ public enum NativeGemmaModelImportError: Error, Equatable, LocalizedError, Senda
             "An installed native Gemma snapshot exists but does not match its pinned manifest."
         case .storeParentChanged:
             "Steno's native Gemma model store changed during import."
+        case .storeMutationUnavailable:
+            "Steno's native Gemma model store is currently in use."
+        case .preemptedByRecording:
+            "The native Gemma import stopped because a recording is starting."
         case .importAlreadyInProgress:
             "A native Gemma model import is already in progress."
         case .publishConflict:
@@ -67,8 +74,8 @@ public enum NativeGemmaModelImportError: Error, Equatable, LocalizedError, Senda
 /// Selects the production store without touching it, or an already-created private root in tests.
 public struct NativeGemmaModelStoreConfiguration: Sendable {
     fileprivate enum Location: Sendable {
-        case production(@Sendable () throws -> URL)
-        case existingRoot(URL)
+        case production(@Sendable () throws -> GemmaProcessGateConfiguration)
+        case existingRoot(URL, GemmaProcessGateConfiguration)
     }
 
     fileprivate let location: Location
@@ -79,13 +86,14 @@ public struct NativeGemmaModelStoreConfiguration: Sendable {
         self.availableByteCountOverride = availableByteCountOverride
     }
 
-    /// The provider is retained without being called. It resolves and prepares the production
-    /// root only after an already-authorized import enters `importModel`.
+    /// The provider is retained without being called. One configuration remains the source of
+    /// truth for both the production store root and its cross-process safety gate.
     @_spi(StenoApp)
     public static func production(
-        rootProvider: @escaping @Sendable () throws -> URL
+        processGateConfigurationProvider: @escaping @Sendable () throws
+            -> GemmaProcessGateConfiguration
     ) -> Self {
-        Self(location: .production(rootProvider))
+        Self(location: .production(processGateConfigurationProvider))
     }
 
     init(
@@ -96,22 +104,50 @@ public struct NativeGemmaModelStoreConfiguration: Sendable {
         guard root.isFileURL, root.path != "/" else {
             throw NativeGemmaModelImportError.invalidConfiguration
         }
-        location = .existingRoot(root)
+        location = .existingRoot(
+            root,
+            try GemmaProcessGateConfiguration(directoryURL: root)
+        )
         self.availableByteCountOverride = availableByteCountOverride
     }
 
     fileprivate func prepareRoot() throws -> URL {
         switch location {
-        case .production(let rootProvider):
+        case .production(let processGateConfigurationProvider):
             do {
-                return try rootProvider()
+                return try processGateConfigurationProvider().directoryURL
             } catch {
                 throw NativeGemmaModelImportError.unsafeStore
             }
-        case .existingRoot(let root):
+        case .existingRoot(let root, _):
             return root
         }
     }
+
+    fileprivate func prepareImportAccess() throws -> NativeGemmaModelStoreImportAccess {
+        switch location {
+        case .production(let processGateConfigurationProvider):
+            do {
+                let gateConfiguration = try processGateConfigurationProvider()
+                return NativeGemmaModelStoreImportAccess(
+                    rootURL: gateConfiguration.directoryURL,
+                    processGate: GemmaProcessGate(configuration: gateConfiguration)
+                )
+            } catch {
+                throw NativeGemmaModelImportError.unsafeStore
+            }
+        case .existingRoot(let root, let gateConfiguration):
+            return NativeGemmaModelStoreImportAccess(
+                rootURL: root,
+                processGate: GemmaProcessGate(configuration: gateConfiguration)
+            )
+        }
+    }
+}
+
+private struct NativeGemmaModelStoreImportAccess: Sendable {
+    let rootURL: URL
+    let processGate: GemmaProcessGate
 }
 
 enum NativeGemmaModelImportCheckpoint: Sendable, Equatable {
@@ -121,6 +157,7 @@ enum NativeGemmaModelImportCheckpoint: Sendable, Equatable {
     case stagingFinalized
     case beforePublish
     case afterPublish
+    case existingSnapshotSynchronized
 }
 
 typealias NativeGemmaModelImportAction = @Sendable (NativeGemmaModelImportCheckpoint) throws -> Void
@@ -237,8 +274,22 @@ public actor NativeGemmaModelImporter {
         try checkpoint(.sourceReady)
         try cancellation.check()
 
-        let storeRoot = try configuration.prepareRoot()
-        let store = try ModelStoreParent.open(rootURL: storeRoot)
+        let storeAccess = try configuration.prepareImportAccess()
+        let mutationLease = try Self.acquireMutationLease(
+            processGate: storeAccess.processGate
+        )
+        cancellation.observeRecordingIntent {
+            try mutationLease.recordingIntentIsPending()
+        }
+        defer {
+            Self.releaseMutationLease(
+                mutationLease,
+                cancellation: cancellation
+            )
+        }
+        try cancellation.check()
+
+        let store = try ModelStoreParent.open(rootURL: storeAccess.rootURL)
         defer { store.close() }
 
         if let installed = try existingInstalledModel(
@@ -247,6 +298,14 @@ public actor NativeGemmaModelImporter {
             cancellation: cancellation
         ) {
             try source.validateSnapshot()
+            try store.validatePathIdentity()
+            try cancellation.check()
+            try store.synchronizeAfterPublish()
+            Self.releaseMutationLease(
+                mutationLease,
+                cancellation: cancellation
+            )
+            try checkpoint(.existingSnapshotSynchronized)
             return installed
         }
 
@@ -326,10 +385,19 @@ public actor NativeGemmaModelImporter {
                     throw NativeGemmaModelImportError.installedSnapshotCorrupt
                 }
                 try staging.removeOwnedTree()
+                try store.synchronizeAfterPublish()
+                Self.releaseMutationLease(
+                    mutationLease,
+                    cancellation: cancellation
+                )
                 return winner
             }
 
             try store.synchronizeAfterPublish()
+            Self.releaseMutationLease(
+                mutationLease,
+                cancellation: cancellation
+            )
             // Publication is the commit point. Cancellation is honored through the final check
             // immediately before the no-replace rename. Once committed, finish verification and
             // report the installed snapshot instead of claiming that an installed model vanished.
@@ -392,6 +460,11 @@ public actor NativeGemmaModelImporter {
             )
         } catch is CancellationError {
             throw CancellationError()
+        } catch let error as NativeGemmaModelImportError
+            where error == .preemptedByRecording
+                || error == .storeMutationUnavailable
+                || error == .unsafeStore {
+            throw error
         } catch {
             throw NativeGemmaModelImportError.installedSnapshotCorrupt
         }
@@ -420,6 +493,26 @@ public actor NativeGemmaModelImporter {
             throw NativeGemmaModelImportError.invalidConfiguration
         }
         return withMargin
+    }
+
+    private static func acquireMutationLease(
+        processGate: GemmaProcessGate
+    ) throws -> GemmaStoreMutationLease {
+        do {
+            return try processGate.acquireStoreMutation()
+        } catch GemmaProcessGateError.busy {
+            throw NativeGemmaModelImportError.storeMutationUnavailable
+        } catch {
+            throw NativeGemmaModelImportError.unsafeStore
+        }
+    }
+
+    private static func releaseMutationLease(
+        _ lease: GemmaStoreMutationLease,
+        cancellation: NativeGemmaModelImportCancellation
+    ) {
+        cancellation.stopObservingRecordingIntent()
+        lease.close()
     }
 
     private static func pathDepthOrder(_ lhs: String, _ rhs: String) -> Bool {
@@ -503,6 +596,7 @@ private struct ActiveNativeGemmaModelImport: Sendable {
 private final class NativeGemmaModelImportCancellation: @unchecked Sendable {
     private let lock = NSLock()
     private var isCancelled = false
+    private var recordingIntentObserver: (@Sendable () throws -> Bool)?
 
     func cancel() {
         lock.lock()
@@ -510,12 +604,38 @@ private final class NativeGemmaModelImportCancellation: @unchecked Sendable {
         lock.unlock()
     }
 
+    func observeRecordingIntent(
+        _ observer: @escaping @Sendable () throws -> Bool
+    ) {
+        lock.lock()
+        recordingIntentObserver = observer
+        lock.unlock()
+    }
+
+    func stopObservingRecordingIntent() {
+        lock.lock()
+        recordingIntentObserver = nil
+        lock.unlock()
+    }
+
     func check() throws {
         lock.lock()
         let cancelled = isCancelled
+        let observer = recordingIntentObserver
         lock.unlock()
         if cancelled {
             throw CancellationError()
+        }
+        if let observer {
+            do {
+                if try observer() {
+                    throw NativeGemmaModelImportError.preemptedByRecording
+                }
+            } catch let error as NativeGemmaModelImportError {
+                throw error
+            } catch {
+                throw NativeGemmaModelImportError.unsafeStore
+            }
         }
     }
 }
@@ -992,6 +1112,12 @@ private final class ModelStoreParent {
                 guard createResult == 0 || errno == EEXIST else {
                     throw NativeGemmaModelImportError.unsafeStore
                 }
+                // Synchronize every parent even when the child already existed. This makes an
+                // idempotent retry complete a namespace sync that an earlier crash may have missed.
+                try synchronizeDirectory(
+                    current,
+                    operation: "model store hierarchy"
+                )
             }
             let next = component.withCString {
                 Darwin.openat(current, $0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
@@ -1060,9 +1186,16 @@ private final class ModelStoreParent {
     }
 
     func synchronizeAfterPublish() throws {
+        try Self.synchronizeDirectory(descriptor, operation: "model store")
+    }
+
+    private static func synchronizeDirectory(
+        _ descriptor: Int32,
+        operation: String
+    ) throws {
         guard Darwin.fsync(descriptor) == 0 else {
             throw NativeGemmaModelImportError.filesystemFailure(
-                operation: "fsync model store",
+                operation: "fsync \(operation)",
                 code: errno
             )
         }
@@ -1070,7 +1203,7 @@ private final class ModelStoreParent {
            errno != EINVAL,
            errno != ENOTSUP {
             throw NativeGemmaModelImportError.filesystemFailure(
-                operation: "full fsync model store",
+                operation: "full fsync \(operation)",
                 code: errno
             )
         }

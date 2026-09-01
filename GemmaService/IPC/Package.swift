@@ -51,6 +51,7 @@ let package = Package(
         ),
         .target(
             name: "StenoGemmaModelStore",
+            dependencies: ["StenoGemmaProcessGate"],
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency"),
             ]

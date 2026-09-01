@@ -42,6 +42,7 @@ The production root is shared with the native Gemma process gate and is derived 
 
 Calling `NativeGemmaModelStoreConfiguration.production` performs no filesystem action.
 The shared root may already exist because the native Gemma process gate uses it independently of model consent.
+The same gate configuration is the source of truth for both this store root and the stable gate file, so store mutation and model execution coordinate through the exact same byte ranges.
 The `Models/v1` descendants are opened or created only after the coordinator has consumed a valid confirmation.
 Installed-model resolution is separate from import and never creates that hierarchy.
 It accepts one complete app-approved pin, opens only the exact digest leaf with no-follow descriptor operations, rechecks the store-parent identity, and transfers descriptor ownership directly into complete verification.
@@ -56,12 +57,15 @@ The final model location is content-addressed by the pinned manifest digest:
 The importer performs blocking filesystem work on a dedicated utility queue, creates a private `0700` sibling staging directory, copies only the manifest and its listed regular files in bounded chunks, verifies each chunk stream against the pinned size and SHA-256 digest, and checks an explicit cancellation signal throughout pre-publication copying and verification.
 Each destination file is created exclusively as `0600`, synchronized, and changed to `0400` before close.
 Directories are synchronized bottom-up, changed to `0500`, and synchronized again.
+The store root and `Models` directory are synchronized while opening each hierarchy component, even when that component already exists, so an idempotent retry can complete namespace durability missed by an earlier crash.
 
 The complete staging tree is then verified through retained descriptors and bound to its device and inode.
+Only after source verification does the importer acquire a mutation lease that holds byte 1 exclusively, while observing the recording-intent lock on byte 0 at bounded checkpoints.
 The importer rechecks the store-parent identity and publishes with `renameatx_np` using `RENAME_EXCL`, `RENAME_NOFOLLOW_ANY`, and `RENAME_RESOLVE_BENEATH`.
-It synchronizes the parent and performs a final full verification bound to the same root inode before returning path-free provenance.
+It synchronizes the parent namespace after publication, closes the mutation lease, and then performs the final full verification bound to the same root inode without honoring further cancellation.
 
 An existing valid destination is idempotent and is never replaced.
+That retry revalidates the approved source and installed snapshot, rechecks the store-parent identity, synchronizes the installed destination's parent namespace, and releases the mutation lease before returning the existing inode-bound capability.
 An existing invalid destination produces a distinct fail-closed error and is retained unchanged for a future explicitly authorized repair flow.
 
 ## Failure and cleanup contract
@@ -77,6 +81,9 @@ If the staging name, inode, or contents differ from the importer's records, clea
 A cleanup failure deliberately supersedes the original import error because the retained uncertain tree is the immediate recovery condition that must be surfaced.
 A crash can also leave a uniquely named staging directory because no process remains to run cleanup.
 Automatic orphan sweeping is intentionally deferred until it has its own ownership, lock, age, capacity, and user-recovery contract.
+
+Before the namespace commit, every failure path removes only the importer's own staging tree.
+After a successful no-replace publish, the destination is retained and the importer completes synchronization and verification even if cancellation was requested.
 
 Crash durability remains unconfirmed until parent synchronization succeeds.
 If parent synchronization or final verification fails after that rename, the import returns an error even though the destination may exist.
@@ -132,8 +139,11 @@ One app facade now acquires import admission from the same process-wide coordina
 The app's installed-model resolver separately requires the exact pin in the fixed app checkpoint catalog before it opens the existing digest leaf as a verified descriptor-owned capability.
 
 Neither the coordinator, adapter, nor store can download a model, launch the helper, create an MLX runtime, select Ollama, select `SystemLanguageModel`, or fall back to another provider.
-Model import now joins the app-wide recording coordination.
-Publishing recording intent atomically excludes new imports, requests cancellation of the exact active import, and awaits that task's full quiescence, including uncancellable post-publication synchronization and verification, before the existing helper gate is acquired and before recording permission or capture is requested.
+Model import now joins both the app-process recording coordinator and the global crash-releasing process gate.
+Publishing recording intent in the same app process atomically excludes new imports, requests cancellation of the exact active import, and awaits that task's full quiescence, including uncancellable post-publication synchronization and verification, before the existing helper gate is acquired and before recording permission or capture is requested.
+Across app processes, store mutation and model execution hold byte 1 exclusively, while recording holds it shared only after its byte 0 transition has excluded new exclusive admission.
+An import that observes remote recording intent before publication reports explicit preemption and completes owned staging cleanup before releasing the mutation lease.
+If intent arrives after the final pre-publication check, the recorder waits for the no-replace commit and parent synchronization to release byte 1, while the importer's final read-only verification may continue without blocking that remote recording lease.
 Ordinary import failure is intentionally ignored by recording admission after the task is quiescent, because a model-store failure must not endanger audio capture.
 The safe availability trade-off is explicit: an operating-system I/O operation that never returns also prevents recording admission because proceeding without proof of import quiescence would violate the exclusion contract.
 That condition lasts for the remaining app-process lifetime, keeps the recording start state occupied, and currently requires restarting Steno before recording can be attempted again.

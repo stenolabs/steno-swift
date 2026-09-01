@@ -21,9 +21,9 @@ struct NativeGemmaModelStoreAdapter: NativeGemmaModelImporting, Sendable {
 
     init(importer: NativeGemmaModelImporter? = nil) {
         self.importer = importer ?? NativeGemmaModelImporter(
-            configuration: .production {
-                try GemmaProcessGateConfiguration.production().directoryURL
-            }
+            configuration: .production(
+                processGateConfigurationProvider: GemmaProcessGateConfiguration.production
+            )
         )
     }
 
@@ -77,9 +77,9 @@ struct NativeGemmaModelStoreAdapter: NativeGemmaModelImporting, Sendable {
     static func productionInstalledModelDirectory(
         for model: GemmaModelSnapshotPin
     ) throws -> VerifiedGemmaModelDirectory {
-        let configuration = NativeGemmaModelStoreConfiguration.production {
-            try GemmaProcessGateConfiguration.production().directoryURL
-        }
+        let configuration = NativeGemmaModelStoreConfiguration.production(
+            processGateConfigurationProvider: GemmaProcessGateConfiguration.production
+        )
         return try resolveInstalledModelDirectory(
             for: model,
             resolver: NativeGemmaInstalledModelResolver(configuration: configuration),
