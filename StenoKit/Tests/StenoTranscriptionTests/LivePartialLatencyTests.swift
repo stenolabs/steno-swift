@@ -14,8 +14,8 @@ import StenoDomain
 ///
 /// Budgets (see docs/PERF-BUDGETS.md):
 /// - every burst < 150 ms,
-/// - projection must not scale superlinearly: the 1500-final burst < 4x the
-///   250-final burst.
+/// - projection must not approach quadratic growth: the 1500-final burst < 3x
+///   the 750-final burst (linear growth is 2x, quadratic growth is 4x).
 ///
 /// The suite prints one machine-readable line
 /// `LIVE_PARTIAL_LATENCY_JSON: {...}` for `scripts/benchmark/perf_budgets.py`.
@@ -52,7 +52,7 @@ struct LivePartialLatencyTests {
             )
         }
 
-        guard let base = results.first(where: { $0.size == 250 }),
+        guard let base = results.first(where: { $0.size == 750 }),
               let heavy = results.first(where: { $0.size == 1500 }) else {
             // Heavy case skipped via STENO_PERF_FULL=0; scaling check needs it.
             if !Self.isSizeEnabled(1500) {
@@ -61,11 +61,14 @@ struct LivePartialLatencyTests {
             Self.emitSummary(results)
             return
         }
-        // Generous ratio on best-of-3 numbers: this guards against accidental
-        // quadratic behavior, not millisecond-level scheduling variance.
+        // Use the larger adjacent sample as the baseline. Comparing against
+        // the much faster 250-final burst lets millisecond-level runner noise
+        // dominate the ratio. Doubling from 750 to 1500 should cost about 2x;
+        // a 3x ceiling retains headroom while still rejecting quadratic 4x
+        // growth.
         #expect(
-            heavy.ms < 6 * base.ms,
-            "superlinear scaling: 1500-final burst \(heavy.ms) ms >= 6x the 250-final burst \(base.ms) ms"
+            heavy.ms < 3 * base.ms,
+            "near-quadratic scaling: 1500-final burst \(heavy.ms) ms >= 3x the 750-final burst \(base.ms) ms"
         )
 
         Self.emitSummary(results)
