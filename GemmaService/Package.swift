@@ -14,6 +14,7 @@ let package = Package(
         ),
     ],
     dependencies: [
+        .package(path: "IPC"),
         .package(
             url: "https://github.com/ml-explore/mlx-swift-lm.git",
             revision: "37688d2cf7d3906e08c74479c9d9949ce6b81136"
@@ -27,6 +28,7 @@ let package = Package(
         .target(
             name: "StenoGemmaRuntime",
             dependencies: [
+                .product(name: "StenoGemmaIPC", package: "ipc"),
                 .product(name: "MLXFoundationModels", package: "mlx-swift-lm"),
                 .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),

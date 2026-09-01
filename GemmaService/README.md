@@ -6,8 +6,9 @@ Apple's Foundation Models framework does not load external Gemma checkpoints.
 The `MLXFoundationModels` adapter provides API compatibility with `LanguageModelSession`; it does not turn Gemma into Apple's `SystemLanguageModel` or make Apple responsible for the model runtime.
 
 It is intentionally a separate Swift package.
-The package is not a dependency of `StenoKit`, the macOS app target, or the iOS app target.
-This keeps the experimental MLX and Metal runtime out of the process that owns an irreplaceable recording and leaves the supported Xcode 26 build unchanged.
+The MLX runtime package is not a dependency of `StenoKit`, either supported Xcode 26 application target, or the model-free Xcode 27 application target.
+The Xcode 27 application target links only the dependency-free IPC client and embeds the model-free helper.
+This keeps MLX and Metal out of the process that owns an irreplaceable recording and leaves the supported Xcode 26 build unchanged.
 
 ## Current status
 
@@ -18,18 +19,30 @@ This first slice provides:
 - complete manifest verification of a local checkpoint at each verification instant;
 - a model-free self-check;
 - construction of an `MLXLanguageModel` backed only by the verified local directory; and
-- tests that do not download or execute model weights.
+- tests that do not download or execute model weights;
+- a dependency-free strict-concurrency IPC module with a closed, size-bounded request and response schema;
+- a model-free, fail-closed XPC service core that handles handshake while rejecting token counting and generation as unavailable, with lifecycle operations owned by the process-wide registry;
+- a separate Xcode 27 project variant that embeds and code-signs the XPC helper with App Sandbox enabled and incoming and outgoing network access disabled; and
+- mutual designated-requirement, dynamic-code, canonical-path, request-ID, and channel validation between the signed app and helper;
+- a bounded client request lifecycle with cancellable deadlines and no eager helper launch or reconnect;
+- a process-wide server request registry with unique active request IDs, targeted cancellation outside the model actor, one inference-like task at a time, and prepare/arm quiescence only after tasks return and replies finish;
+- one app-process-wide recording coordinator that closes native Gemma admission before the first recording permission await and retains the lease through capture cleanup;
+- an exact-process exit protocol in which the authenticated helper arms itself, the client closes that exact connection without another message, and recording proceeds only after the observed helper PID exits; and
+- real signed XPC integration and app tests that verify fail-closed inference, exact helper absence within the owning app process before a recording lease, failure before permission UI, permission-denial release, and concurrent first-use initialization.
 
 It does not yet provide:
 
-- an app setting or model installer;
+- an app setting or production model installer or importer;
 - automatic checkpoint downloads;
 - report generation from the Steno app;
-- a signed and embedded App Sandbox helper; or
+- a crash-releasing cross-process gate shared by recording and native Gemma admission, with a two-process integration test;
+- Hardened Runtime validation for the production app and a Release-specific entitlement policy;
+- activation of the verified model runtime through the XPC helper; or
 - a production support commitment for any specific converted checkpoint.
 
-The executable currently proves the local loading path and rejects unmanifested model input.
-Production app integration must embed it as a signed helper without outgoing or incoming network entitlements before Steno sends meeting text to it.
+The standalone SwiftPM package contains the verified local model-loading path, while the Xcode 27 variant currently exercises only the model-free XPC boundary.
+The helper has no incoming or outgoing network entitlement in that project variant, and the app-facing provider remains deliberately unavailable.
+The verified model runtime is not yet activated through the helper, and the app does not expose this provider.
 A standalone SwiftPM executable has no operating-system network sandbox, so source-level absence of a download path must not be described as a hard network guarantee.
 
 ## Model boundary
@@ -56,11 +69,34 @@ Do not add a checkpoint to a Steno installation catalog until its exact source, 
 
 Use Xcode 27 or later and install its Metal Toolchain component.
 
+The current exact `mlx-swift-lm` source pin still resolves a transitive MLX Metal header that Xcode 27 Beta 6 rejects.
+Therefore the full runtime package is not currently a green Xcode 27 build.
+Do not activate the runtime or replace the pin with a floating dependency.
+A matched and reviewed MLX, MLX-C, and `mlx-swift-lm` snapshot is required first.
+
 ```bash
 swift test --package-path GemmaService
 ```
 
+The model-free IPC and client packages are independently buildable and testable with Xcode 27:
+
+```bash
+swift test --package-path GemmaService/IPC
+swift test --package-path GemmaService/Client
+```
+
 If Xcode 27 is not the active developer directory, prefix the command with `DEVELOPER_DIR` pointing to that installation.
+
+Generate the separate Xcode 27 project variant and run the model-free XPC integration test with:
+
+```bash
+xcodegen generate --spec project-xcode27.yml
+xcodebuild -project Steno27.xcodeproj -scheme Steno27 \
+  -destination 'platform=macOS,arch=arm64' \
+  -only-testing:StenoTests/StenoGemmaXPCIntegrationTests test
+```
+
+The generated `Steno27.xcodeproj` is ignored and must not be committed.
 
 The package pins `mlx-swift-lm` to commit `37688d2cf7d3906e08c74479c9d9949ce6b81136` because the required Foundation Models adapter is not consumed through a released version here.
 Do not replace the revision with a branch or floating version.
@@ -86,14 +122,9 @@ swift run --package-path GemmaService steno-gemma-service \
 The expected manifest digest belongs in a reviewed model catalog or another trusted caller-owned configuration.
 It must not be read from the same untrusted checkpoint directory it is meant to authenticate.
 
-## Next production slice
+## Remaining production work
 
-App integration requires all of the following together:
-
-1. Ship the executable as a signed App Sandbox helper with no network client or server entitlement.
-2. Define a narrow request and response protocol that contains report text but never audio, library paths, API keys, or unrelated meeting data.
-3. Store approved manifests and expected digests in Steno-controlled metadata, copy verified snapshots into an immutable Steno-controlled location, and route installation through `ModelInstallationCoordinator` with explicit consent.
-4. Stop or unload the helper before a recording starts, and treat helper failure as a report failure that cannot affect capture.
-5. Add the provider to persisted selection and provenance only after compatibility, checkpoint licensing, and recovery behavior are accepted.
-
-Until those conditions are met, this package remains an isolated integration boundary and is not exposed in the app.
+The remaining production work is to add a crash-releasing cross-process recording and helper gate, validate Hardened Runtime and the Release entitlement policy, implement the consented immutable model importer, select a buildable matched MLX dependency snapshot, and connect the verified model runtime to the helper.
+Cross-process exclusion requires a two-process integration test and must be complete before native Gemma is activated.
+Approved manifests and expected digests must live in Steno-controlled metadata, and installation must route through `ModelInstallationCoordinator` with explicit consent.
+The provider must remain unavailable in the app until those conditions, the exact checkpoint licensing, and the associated recovery behavior are accepted.

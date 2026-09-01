@@ -5,11 +5,14 @@ import MLXHuggingFace
 import MLXLLM
 import MLXLMCommon
 import MLXVLM
+import StenoGemmaIPC
 import Tokenizers
 
 public enum GemmaServiceBuildInfo {
-    public static let protocolVersion = 1
-    public static let adapterRevision = "37688d2cf7d3906e08c74479c9d9949ce6b81136"
+    /// Compatibility alias for command-line self-check output.
+    /// The IPC module owns the canonical service protocol version.
+    public static let protocolVersion = GemmaIPCProtocol.currentVersion
+    public static let adapterRevision = GemmaIPCBuildInfo.adapterRevision
 }
 
 public enum GemmaLanguageModelFactoryError: Error, Equatable, LocalizedError, Sendable {

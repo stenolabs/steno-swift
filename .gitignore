@@ -31,6 +31,7 @@ xcuserdata/
 # Both Xcode projects are generated from project.yml and are never maintained
 # manually. A committed generated project would become stale immediately.
 Steno.xcodeproj/
+Steno27.xcodeproj/
 iOS/StenoiOS.xcodeproj/
 iOS/build/
 # The same applies to Info.plist files. XcodeGen writes them completely from
